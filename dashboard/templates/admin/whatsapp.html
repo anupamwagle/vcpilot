@@ -4,6 +4,24 @@
 
 {% block content %}
 
+{# ── Org setup notice ─────────────────────────────────────────────────── #}
+{% if wa_status != 'WORKING' %}
+<div class="alert-info mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+  <div style="flex:1">
+    <strong>WhatsApp setup for this organisation:</strong>
+    <ol style="margin:.5rem 0 0 1rem;font-size:.75rem;line-height:1.7;color:var(--text)">
+      <li>Go to <a href="/admin/config" style="text-decoration:underline;color:var(--t-accent)">Admin Config</a> → <em>whatsapp</em> group → set <strong>WhatsApp Admin Number</strong> (digits only, e.g. <code>61450325233</code>)</li>
+      <li>The session <code>{{ wa_session }}</code> is shared across all organisations (WAHA Core). Click <strong>Restart Session</strong> below if not connected, then scan the QR code.</li>
+      <li>Incoming messages are routed to the correct org automatically by matching the sender's phone number to each org's configured admin number.</li>
+    </ol>
+    <p style="font-size:.7rem;margin-top:.5rem;color:var(--text-subtle)">
+      The WhatsApp API Key is pre-configured. To give each org its own dedicated session, upgrade to <strong>WAHA Plus</strong> (<code>devlikeapro/waha-plus</code>).
+    </p>
+  </div>
+</div>
+{% endif %}
+
 {# ── Flash messages ───────────────────────────────────────────────────── #}
 {% if msg == 'test_ok' %}
 <div class="alert-success mb-4">
@@ -18,7 +36,17 @@
 {% elif msg == 'started' %}
 <div class="alert-info mb-4">
   <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
-  Session start requested — refresh in a few seconds.
+  Session starting — refresh in a few seconds to see the QR code.
+</div>
+{% elif msg == 'scan_qr' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Session restarted — scan the QR code below with your phone now.
+</div>
+{% elif msg == 'already_working' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Session already connected and working!
 </div>
 {% endif %}
 
@@ -64,7 +92,10 @@
       <p class="code" style="font-size:.7rem;margin-top:.25rem">{{ admin_jid }}</p>
     {% else %}
       <p style="font-size:.875rem;color:var(--neg)">Not configured</p>
-      <p style="font-size:.75rem;color:var(--text-subtle);margin-top:.25rem">Set WHATSAPP_ADMIN_NUMBER in .env</p>
+      <p style="font-size:.75rem;color:var(--text-subtle);margin-top:.25rem">
+        Set <strong>WhatsApp Admin Number</strong> in
+        <a href="/admin/config" style="color:var(--t-accent)">Admin Config</a>
+      </p>
     {% endif %}
   </div>
 
@@ -76,14 +107,14 @@
       <p class="code" style="font-size:.65rem;margin-top:.25rem;word-break:break-all">{{ hook_url }}</p>
     {% else %}
       <p style="font-size:.875rem;color:var(--warn)">⚠ Not set</p>
-      <p style="font-size:.75rem;color:var(--text-subtle);margin-top:.25rem">Set WAHA_HOOK_URL in .env</p>
+      <p style="font-size:.75rem;color:var(--text-subtle);margin-top:.25rem">Set <code>WAHA_HOOK_URL</code> in <code>.env</code></p>
     {% endif %}
   </div>
 
 </div>
 
-{# ── QR Code (shown when session needs pairing) ───────────────────────── #}
-{% if wa_status == 'SCAN_QR_CODE' %}
+{# ── QR Code (shown when session needs pairing or just restarted) ─────── #}
+{% if wa_status in ('SCAN_QR_CODE', 'STARTING') or msg == 'scan_qr' %}
 <div class="card p-6 mb-6 text-center">
   <p class="section-title mb-1">📱 Scan to Connect WhatsApp</p>
   <p style="font-size:.8125rem;color:var(--text-muted);margin-bottom:1.5rem">
@@ -93,14 +124,19 @@
     <img src="data:image/png;base64,{{ qr_b64 }}"
          alt="WhatsApp QR Code"
          style="width:220px;height:220px;margin:0 auto;display:block;border-radius:.5rem;border:4px solid var(--border)"/>
-    <p style="font-size:.75rem;color:var(--text-subtle);margin-top:.75rem">QR expires in ~60 seconds — refresh page if it stops working</p>
+    <p style="font-size:.75rem;color:var(--text-subtle);margin-top:.75rem">QR expires in ~60 seconds — refresh the page if it stops working</p>
   {% else %}
-    <p style="color:var(--text-muted)">QR not available yet — refresh in a few seconds</p>
+    <div style="padding:2rem;background:var(--surface-alt);border-radius:.5rem;margin:.5rem auto;max-width:260px">
+      <p style="color:var(--text-muted);font-size:.875rem">⏳ QR generating…</p>
+      <p style="font-size:.75rem;color:var(--text-subtle);margin-top:.5rem">Refresh in 3–5 seconds</p>
+    </div>
+    {# Auto-refresh after 4 seconds if QR isn't ready yet #}
+    <script>setTimeout(()=>location.reload(), 4000)</script>
   {% endif %}
   <div style="margin-top:1rem;display:flex;gap:.5rem;justify-content:center">
     <a href="/admin/whatsapp" class="btn-ghost text-xs py-1.5">🔄 Refresh QR</a>
     <form method="post" action="/admin/whatsapp/start-session">
-      <button class="btn-admin text-xs py-1.5">↺ Restart Session</button>
+      <button class="btn-admin text-xs py-1.5">↺ Force Restart Session</button>
     </form>
   </div>
 </div>
@@ -165,6 +201,10 @@
       <p style="font-size:.725rem;color:var(--text-subtle);margin-top:.125rem">Cancel today's signal for the ticker (e.g. <code>SKIP BHP</code>).</p>
     </div>
     <div style="border:1px solid var(--border);padding:.5rem;border-radius:.375rem;background:var(--surface-alt)">
+      <p class="code" style="font-weight:700;color:var(--t-accent)">UNSKIP &lt;TICKER&gt;</p>
+      <p style="font-size:.725rem;color:var(--text-subtle);margin-top:.125rem">Restore a previously skipped signal back to PENDING (e.g. <code>UNSKIP BHP</code>).</p>
+    </div>
+    <div style="border:1px solid var(--border);padding:.5rem;border-radius:.375rem;background:var(--surface-alt)">
       <p class="code" style="font-weight:700;color:var(--t-accent)">EXIT &lt;TICKER&gt;</p>
       <p style="font-size:.725rem;color:var(--text-subtle);margin-top:.125rem">Trigger emergency exit of a position on next market open (e.g. <code>EXIT FMG</code>).</p>
     </div>
@@ -190,8 +230,8 @@
     {% for ok, label in [
       (wa_status != 'UNKNOWN', 'WAHA container running'),
       (wa_status == 'WORKING', 'WhatsApp session connected (QR scanned)'),
-      (admin_number != '', 'Admin phone number configured'),
-      (hook_url != '', 'Incoming webhook URL configured'),
+      (admin_number != '', 'Admin phone number configured (set in Admin Config → whatsapp group)'),
+      (hook_url != '', 'Incoming webhook URL configured (WAHA_HOOK_URL in .env)'),
       (wa_status == 'WORKING' and admin_number != '', 'Ready to send notifications'),
     ] %}
     <div style="display:flex;align-items:center;gap:.625rem;font-size:.8125rem">

@@ -19,24 +19,39 @@
   </div>
 </div>
 
+<!-- Close position flash -->
+{% if request.query_params.get('msg') == 'closed' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Position closed and recorded. P&L updated.
+</div>
+{% elif request.query_params.get('msg') == 'not_found' %}
+<div class="alert-danger mb-4">Position not found or already closed.</div>
+{% endif %}
+
 <!-- Open Positions -->
 <div class="card overflow-hidden mb-6">
   <div class="section-head">
     <p class="section-title">Open Positions ({{ positions|length }})</p>
+    <p class="text-xs" style="color:var(--text-subtle)">Close = mark as closed, record trade, notify WhatsApp</p>
   </div>
   {% if positions %}
-  <div class="overflow-x-auto">
+  <div class="table-responsive">
     <table class="tbl">
       <thead><tr>
         <th>Ticker</th><th class="text-right">Qty</th><th class="text-right">Entry</th>
         <th class="text-right">Current</th><th class="text-right">Stop</th>
         <th class="text-right">Target</th><th class="text-right">P&L %</th>
         <th class="text-right">P&L $</th><th class="text-right">Days</th><th>Mode</th>
+        <th class="text-center">Exit</th>
       </tr></thead>
       <tbody>
         {% for p in positions %}
         <tr>
-          <td class="mono font-bold">{{ p.ticker }}</td>
+          <td>
+            <span class="mono font-bold" style="color:var(--text)">{{ p.ticker }}</span>
+            {% if p.company_name %}<br><span style="font-size:.68rem;color:var(--text-subtle)">{{ p.company_name }}</span>{% endif %}
+          </td>
           <td class="text-right">{{ p.qty }}</td>
           <td class="text-right mono">${{ "%.3f"|format(p.entry) }}</td>
           <td class="text-right mono font-semibold">${{ "%.3f"|format(p.current) }}</td>
@@ -46,7 +61,76 @@
           <td class="text-right {% if p.pnl_aud >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}">${{ "{:+.0f}".format(p.pnl_aud) }}</td>
           <td class="text-right" style="color:var(--text-muted)">{{ p.days }}d</td>
           <td><span class="{% if p.is_paper %}badge badge-paper{% else %}badge badge-live{% endif %}">{% if p.is_paper %}PAPER{% else %}LIVE{% endif %}</span></td>
+          <td class="text-center">
+            <button onclick="document.getElementById('close-modal-{{ p.id }}').style.display='flex'"
+                    class="btn-ghost text-xs py-0.5 px-2" style="color:var(--neg);border-color:var(--neg)">
+              Close
+            </button>
+          </td>
         </tr>
+
+        {# ── Close position modal ──────────────────────────────────────── #}
+        <tr id="close-modal-{{ p.id }}"
+            style="display:none;background:var(--surface-alt)">
+          <td colspan="11" style="padding:1rem 1.25rem">
+            <form method="post" action="/positions/{{ p.id }}/close"
+                  onsubmit="return confirm('Close {{ p.ticker }}? This records the trade and cannot be undone.')"
+                  style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:.75rem">
+
+              {# Exit reason #}
+              <div>
+                <label class="field-label" style="display:block;margin-bottom:.25rem">Exit Reason</label>
+                <select name="exit_reason" class="input text-xs py-1" style="min-width:11rem">
+                  <optgroup label="Defensive (Minervini)">
+                    <option value="STOP_LOSS">🛑 Stop Loss Hit</option>
+                    <option value="TRAILING_STOP">📉 Break Below 50MA</option>
+                    <option value="TIME_STOP">⏱ Time Stop (no progress)</option>
+                    <option value="EARNINGS_AVOID">📅 Earnings Avoidance</option>
+                    <option value="MARKET_REGIME">🌡️ Market Regime (BEAR)</option>
+                  </optgroup>
+                  <optgroup label="Offensive (Minervini)">
+                    <option value="PROFIT_TARGET_1">💰 Profit Target 1 (20%)</option>
+                    <option value="PROFIT_TARGET_2">💰 Profit Target 2 (40%)</option>
+                    <option value="CLIMAX_TOP">🚀 Climax Top / Parabolic</option>
+                    <option value="THREE_WEEKS_TIGHT">📏 3-Weeks-Tight Exit</option>
+                  </optgroup>
+                  <option value="MANUAL">✍ Manual Override</option>
+                </select>
+              </div>
+
+              {# Override exit price #}
+              <div>
+                <label class="field-label" style="display:block;margin-bottom:.25rem">
+                  Exit Price <span style="font-weight:400;color:var(--text-subtle)">(leave blank = use current {{ "$%.3f"|format(p.current) }})</span>
+                </label>
+                <input type="number" name="exit_price" step="0.001" min="0"
+                       placeholder="{{ "%.3f"|format(p.current) }}"
+                       class="input text-xs py-1" style="width:9rem" />
+              </div>
+
+              <div style="display:flex;gap:.5rem">
+                <button type="submit" class="btn-primary text-xs py-1.5">✓ Confirm Close</button>
+                <button type="button"
+                        onclick="document.getElementById('close-modal-{{ p.id }}').style.display='none'"
+                        class="btn-ghost text-xs py-1.5">Cancel</button>
+              </div>
+
+            </form>
+
+            {# Minervini exit guidance #}
+            <div style="margin-top:.75rem;padding:.625rem;background:var(--surface);border-radius:.375rem;border:1px solid var(--border)">
+              <p style="font-size:.7rem;font-weight:600;color:var(--text-muted);margin-bottom:.25rem">📖 Minervini Exit Framework</p>
+              <p style="font-size:.7rem;color:var(--text-subtle);line-height:1.5">
+                <strong>Defensive:</strong> Hard stop mandatory (never override). Time stop if &lt;10% gain after 3 weeks. Exit before earnings.
+                Break below 50MA on volume = trend break.<br>
+                <strong>Offensive:</strong> Take 50% off at +20% (Target 1). Full exit at +40% (Target 2).
+                Climax top = exhaustion gap-up on extreme volume after a 50%+ run. Parabolic = 3+ consecutive weeks up &gt;5%.
+                3-Weeks-Tight = hold (coiling for next leg — only exit if another signal triggers).
+              </p>
+            </div>
+          </td>
+        </tr>
+
         {% endfor %}
       </tbody>
     </table>
@@ -63,7 +147,7 @@
     {% if trades %}<span class="tag">{{ trade_count }} total</span>{% endif %}
   </div>
   {% if trades %}
-  <div class="overflow-x-auto">
+  <div class="table-responsive">
     <table class="tbl">
       <thead><tr>
         <th>Ticker</th><th>Entry Date</th><th>Exit Date</th><th class="text-right">Days</th>
@@ -74,7 +158,10 @@
       <tbody>
         {% for t in trades %}
         <tr>
-          <td class="mono font-bold">{{ t.ticker }}</td>
+          <td>
+            <span class="mono font-bold" style="color:var(--text)">{{ t.ticker }}</span>
+            {% if t.company_name %}<br><span style="font-size:.68rem;color:var(--text-subtle)">{{ t.company_name }}</span>{% endif %}
+          </td>
           <td style="color:var(--text-muted);font-size:.75rem">{{ t.entry_date }}</td>
           <td style="color:var(--text-muted);font-size:.75rem">{{ t.exit_date }}</td>
           <td class="text-right" style="color:var(--text-muted)">{{ t.days }}</td>

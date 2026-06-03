@@ -79,6 +79,30 @@
   - **Admin phone configured:** `+61450325233` → `61450325233@c.us`
   - **Status:** Fully functional, waiting for user QR code scan.
 
+- **Bug fixes + improvements (3 Jun 2026 — Session 4):**
+  - **WhatsApp org-level setup UX fixed:** `whatsapp.html` no longer tells org admins to set `.env` variables they can't access — now links directly to `/admin/config` with clear instructions. Added a prominent setup notice when admin phone is not yet configured. Updated checklist item labels to match their actual config source.
+  - **`admin_tasks_poll` superadmin bug fixed:** The live task log poll endpoint was incorrectly returning HTTP 403 for Super Admin sessions (inverted guard — `== "superadmin"` instead of `!= "superadmin"`). Now all authenticated users can poll, and the org scope is correctly applied.
+  - **Per-org worker heartbeat:** `health_check` Celery task now writes both a global `last_heartbeat` (backward compatible) AND a per-org `last_heartbeat` row for every active organisation. The `_global()` function in `main.py` now prefers the per-org heartbeat row, falling back to global for old deployments. This means each org's Health page accurately reflects whether the shared worker is alive.
+  - **Global rules → org rules sync:** Added `POST /superadmin/rules/sync-all` endpoint that propagates global template rule settings (`enabled_globally`, `threshold`, `tier_overrides`) to all org-level copies. Added *Soft Sync* (skips org-customised rows) and *Force Sync* (overwrites all) buttons to the superadmin/rules page. `synced` and `skipped` counts shown in the success banner.
+  - **Minervini-style position close:** Added `POST /positions/{pos_id}/close` route. Open positions table now has a **Close** button per row. Clicking reveals an inline form with all Minervini exit reasons grouped into *Defensive* (stop loss, time stop, earnings, 50MA break, market regime) and *Offensive* (target 1/2, climax top, parabolic, 3-weeks-tight) categories, plus a Manual option. An optional exit price field overrides the last known price. Confirming marks the position CLOSED, creates a Trade record, writes audit log, and sends WhatsApp alert. Inline Minervini exit framework guidance shown in form for reference.
+  - **Unskip signal:** Added `POST /signals/{signal_id}/unskip` route and `↩ Unskip` button in `signals.html` for SKIPPED signals. Added `UNSKIP <TICKER>` WhatsApp command to `AgentCommandHandler`. Signal is restored to `PENDING` so it can be triggered in the intraday entry check.
+  - **`promoted` flash message:** `signals.html` now shows a success banner when redirected from watchlist promote (`?msg=promoted`).
+
+- **Bug fixes + improvements (4 Jun 2026 — Session 5):**
+  - **Manual triggers now org-scoped:** `_run_screen_force` and `send_daily_report` Celery tasks now accept an optional `organization_id` parameter. When triggered manually from the dashboard, they pass the current user's org so only that org's data is processed. Scheduled Beat tasks still loop all active orgs (no org_id passed). `evaluate_market_regime_task` and `refresh_price_data` remain global (shared data). `force-screen`, `run-screener`, and `send-report` action routes now all pass `org_id`.
+  - **`user_id` added to AuditLog:** New `user_id` FK column (nullable, `ON DELETE SET NULL`) on `audit_logs` table. Added via `migrate_saas.py`. All manual dashboard actions (pause, resume, skip, unskip, close position, promote watchlist) now write `user_id` and the user's email as `actor` instead of the generic `"dashboard"` string.
+  - **Audit Log actor/user filter:** New `actor` filter field on `/admin/audit` — filter by email, `system`, `agent`, etc. Result limit raised to 200.
+  - **Full mobile-first UI rebuild:** `base.html` completely rewritten:
+    - Sidebar is now always a **slide-in drawer** with dark overlay, close button inside the nav, and `Escape` key support. Opens on all screen sizes via hamburger button.
+    - On large screens (≥1024px), the drawer auto-opens and the main content margin adjusts via JS — no CSS-only layout dependence.
+    - All nav links call `closeSidebar()` on tap — drawer closes cleanly after navigation on mobile.
+    - Viewport uses `100dvh` for iOS browser chrome safety.
+    - Navbar trimmed: pause/resume shows icon-only on small screens. Regime badge hidden on mobile if Caution (saves space). Org selector width capped at 140px.
+    - Mobile CSS additions: min-height 2.5rem tap targets for buttons, 16px input font-size (prevents iOS auto-zoom), `table-responsive` class for horizontal scroll on all tables, `actor-cell` truncation class.
+    - iOS scroll locking when drawer is open (`overflow:hidden` on body).
+  - **Company name pipeline fixed:** `get_fundamentals()` now returns `company_name`, `sector`, `industry` from yfinance `info.longName` (zero extra API calls). Both `_run_screen_force` and `run_daily_screen` persist these to `Stock.name`/`.sector`/`.industry` for every stock that passes trend template. Home, positions, signals, and watchlist pages all show the company name below the ticker code.
+  - **WAHA Plus + per-org sessions:** Switched to `devlikeapro/waha-plus:latest` so each org uses its own session (`org_1`, `org_2`, …). Session names seeded as `org_{id}` on org creation and migration. App startup no longer auto-starts any session — each org admin triggers their own QR scan via `/admin/whatsapp`.
+
 ### 🔄 In Progress / Next Steps
 
 1. **Scan WhatsApp QR Code** — Go to `/admin/whatsapp` in the VCPilot dashboard. You will now see the QR code image. Scan it with your phone using WhatsApp → Linked Devices. Once scanned, the status will show **Connected** and the checklist will turn green.
@@ -141,7 +165,7 @@
 | Old Streamlit files in `dashboard/` | Low | Delete manually from WSL |
 | `sync_stop_orders` is a placeholder | Medium | Implement IBKR modify order API |
 | Entry triggers use last EOD close, not live price | Medium | Add intraday price check in Phase 2 |
-| WhatsApp webhook not wired | High | Build `POST /webhook/whatsapp` in FastAPI |
+| ~~WhatsApp webhook not wired~~ | ~~High~~ | ✅ Fixed |
 | `evaluate_market_regime_task` needs price bars in DB | Medium | Documented on health page; run Full Setup first |
 | ~~Screener button silently did nothing on non-trading days~~ | ~~High~~ | ✅ Fixed — now uses `_run_screen_force` |
 | ~~`screening.py` duplicate functions caused SyntaxError on import~~ | ~~Critical~~ | ✅ Fixed — file rewritten clean |

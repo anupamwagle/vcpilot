@@ -18,8 +18,14 @@
     <label class="field-label">Ticker</label>
     <input type="text" name="ticker" value="{{ filter_ticker }}" placeholder="BHP" class="input" style="text-transform:uppercase"/>
   </div>
-  <button type="submit" class="btn-admin" style="padding:.5rem 1.25rem">Filter</button>
-  <a href="/admin/audit" class="btn-ghost" style="padding:.5rem 1rem">Clear</a>
+  <div style="flex:0 0 12rem">
+    <label class="field-label">Actor / User</label>
+    <input type="text" name="actor" value="{{ filter_actor }}" placeholder="dashboard, agent, system…" class="input"/>
+  </div>
+  <div style="display:flex;gap:.5rem;align-items:flex-end">
+    <button type="submit" class="btn-admin" style="padding:.5rem 1.25rem">Filter</button>
+    <a href="/admin/audit" class="btn-ghost" style="padding:.5rem 1rem">Clear</a>
+  </div>
 </form>
 
 <!-- Log table -->
@@ -29,7 +35,7 @@
     <span class="tag">{{ logs|length }} records shown · append-only</span>
   </div>
   {% if logs %}
-  <div class="overflow-x-auto">
+  <div class="table-responsive">
     <table class="tbl">
       <thead><tr>
         <th style="width:7rem">Time</th>
@@ -45,7 +51,7 @@
         <tr>
           <td class="mono" style="font-size:.7rem;color:var(--text-subtle)">{{ log.time }}</td>
           <td><span class="tag-admin" style="font-size:.7rem">{{ log.action }}</span></td>
-          <td style="font-size:.75rem;color:var(--text-muted)">{{ log.actor }}</td>
+          <td class="actor-cell" style="font-size:.75rem;color:var(--text-muted)" title="{{ log.actor }}">{{ log.actor }}</td>
           <td class="mono" style="font-size:.75rem">{{ log.ticker }}</td>
           <td style="font-size:.75rem;color:var(--text-muted);max-width:20rem" class="truncate">{{ log.message }}</td>
           <td class="mono" style="font-size:.7rem;color:var(--text-subtle)">{{ log.before }}</td>

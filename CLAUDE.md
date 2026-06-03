@@ -224,7 +224,29 @@ Dashboard screener buttons (`/action/run-screener`, `/action/force-screen`) both
 `_run_screen_force` bypasses the gate and is the correct target for any manual trigger.  
 Both routes wrap `.delay()` in a `try/except` so a Redis/worker outage doesn't crash the HTTP response — the task will queue when the worker comes online.
 
-### 10. Old Streamlit files still exist
+### 10. WhatsApp — org-level setup vs .env
+Each org configures its own WhatsApp phone number via `/admin/config` (key: `whatsapp_admin_number`, value: digits-only e.g. `61450325233`). The `whatsapp_api_key` and `whatsapp_session_name` are pre-seeded at org creation from `.env` defaults — org admins do NOT need to touch `.env`. For WAHA Core (single Docker instance) all orgs share session `"default"`. For WAHA Plus, set a unique `whatsapp_session_name` per org.
+
+### 11. Worker heartbeat — global + per-org
+`health_check` writes `last_heartbeat` with `organization_id=NULL` (global, legacy) AND `last_heartbeat` per-org for every active org. `_global()` in `main.py` reads the per-org row first, falls back to global. This means each org's Health page shows the correct worker status independently.
+
+### 12. Global rules → org rules inheritance
+Global rules (`organization_id IS NULL`) are the master templates. Org rules are **cloned** from globals on org creation. They are independent after that. To push global changes to all orgs, use `POST /superadmin/rules/sync-all` (soft) or `/superadmin/rules/sync-all?force=1` (hard). The superadmin rules page has dedicated buttons.
+
+### 15. Manual triggers are org-scoped
+`_run_screen_force(organization_id=None)` and `send_daily_report(organization_id=None)` accept an optional org_id. When called from the dashboard action routes, they always pass the current user's org_id. When called by Celery Beat (scheduled), no org_id is passed → both tasks loop all active orgs. `refresh_price_data` and `evaluate_market_regime_task` are always global (shared data, no org scoping). Never call `_run_screen_force.delay()` without `organization_id` from dashboard routes — it would run for all orgs unnecessarily.
+
+### 16. AuditLog includes user_id
+`AuditLog.user_id` (FK → users.id, nullable, SET NULL on delete) captures the logged-in user for every manual action. `AuditLog.actor` now stores the user's email (e.g. `admin@astradigital.com.au`) instead of the generic string `"dashboard"`. Automated tasks still use `"system"`, `"agent"`, etc. The audit log page (`/admin/audit`) has an actor/user filter field.
+
+### 17. Mobile UI — sidebar as a drawer
+The sidebar is always a slide-in drawer (never fixed to the left of the viewport). JS function `openSidebar()`/`closeSidebar()` handles transform, overlay visibility, and body scroll-lock. On ≥1024px, `checkBreakpoint()` auto-opens the drawer and sets `margin-left: 16rem` on `#main-content`. On mobile, the drawer starts closed. All nav links call `closeSidebar()` on click. The overlay div `#sidebar-overlay` catches outside taps. Do NOT use `lg:ml-64` Tailwind class for main content margin — the JS controls this dynamically.
+
+### 13. Position exit — Minervini SEPA
+`POST /positions/{pos_id}/close` accepts `exit_reason` (ExitReason enum key) and optional `exit_price`. The positions page renders an inline close form per row with all Minervini exit reasons grouped as Defensive / Offensive. Confirming: marks Position CLOSED, creates Trade record, writes audit, sends WhatsApp exit alert.
+Exit reasons: `STOP_LOSS`, `TRAILING_STOP`, `TIME_STOP`, `EARNINGS_AVOID`, `MARKET_REGIME`, `PROFIT_TARGET_1`, `PROFIT_TARGET_2`, `CLIMAX_TOP`, `THREE_WEEKS_TIGHT`, `MANUAL`.
+
+### 14. Old Streamlit files still exist
 `dashboard/Home.py` and `dashboard/pages/` still exist (can't delete via sandbox — Windows/WSL permission issue). They are ignored because the Dockerfile runs `uvicorn dashboard.main:app`, not streamlit. Delete them manually from WSL: `rm -rf /mnt/c/vcpilot/dashboard/Home.py /mnt/c/vcpilot/dashboard/pages/`
 
 ---
@@ -325,11 +347,15 @@ All rules have `enabled_globally=True` by default. Admin can toggle any non-mand
 
 **Action endpoints (POST → redirect):**
 - `/action/pause`, `/action/resume` — Toggle trading (scoped to organization)
-- `/action/run-screener` — Queue `run_daily_screen.delay()`
+- `/action/run-screener` — Queue `_run_screen_force.delay()` (bypasses trading-day gate)
 - `/action/evaluate-regime` — Queue `evaluate_market_regime_task.delay()`
 - `/action/ping-worker` — Queue `health_check.delay()`
 - `/action/refresh-data` — Queue `refresh_price_data.delay()`
 - `/action/send-report` — Queue `send_daily_report.delay()`
+- `POST /positions/{pos_id}/close` — Manually close position with Minervini exit reason
+- `POST /signals/{signal_id}/skip` — Skip a PENDING signal
+- `POST /signals/{signal_id}/unskip` — Restore a SKIPPED signal to PENDING
+- `POST /superadmin/rules/sync-all` — Push global template rules to all orgs (`?force=1` to overwrite org-customised rows)
 
 ---
 

@@ -1,5 +1,3 @@
-version: "3.9"
-
 # =============================================================================
 # VCPilot — Docker Compose
 # Services: database, redis, app, worker, beat, api, whatsapp, ibkr
@@ -119,6 +117,8 @@ services:
 
   # ---------------------------------------------------------------------------
   # Beat — Celery Beat Scheduler
+  # Schedule file is written to /tmp (always writable by any user).
+  # Using --max-interval 30 keeps the loop responsive.
   # ---------------------------------------------------------------------------
   beat:
     build:
@@ -138,7 +138,12 @@ services:
       - ./app:/app/app
     networks:
       - vcpilot-net
-    command: celery -A app.tasks.celery_app beat --loglevel=info --scheduler celery.beat.PersistentScheduler
+    command: >
+      celery -A app.tasks.celery_app beat
+      --loglevel=info
+      --schedule=/tmp/celerybeat-schedule
+      --pidfile=/tmp/celerybeat.pid
+      --max-interval=30
 
   # ---------------------------------------------------------------------------
   # API — FastAPI & Streamlit Admin/Client UI
@@ -167,7 +172,11 @@ services:
     command: uvicorn dashboard.main:app --host 0.0.0.0 --port 8501 --reload --reload-dir /app/dashboard
 
   # ---------------------------------------------------------------------------
-  # WhatsApp — WAHA WhatsApp HTTP API
+  # WhatsApp — WAHA Core (free, single "default" session)
+  # All orgs share one bot phone number. Orgs are distinguished by each org's
+  # configured whatsapp_admin_number — the webhook routes incoming messages to
+  # the correct org by matching the sender's phone number.
+  # For fully separate sessions per org, upgrade to devlikeapro/waha-plus:latest
   # ---------------------------------------------------------------------------
   whatsapp:
     image: devlikeapro/waha:latest
@@ -176,12 +185,11 @@ services:
     environment:
       WHATSAPP_API_KEY: ${WAHA_API_KEY}
       WHATSAPP_DEFAULT_ENGINE: WEBJS
-      # Static credentials for the WAHA dashboard
       WAHA_DASHBOARD_USERNAME: admin
       WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:-vcpilot_2026}
       # Auto-start the default session on container boot
       WHATSAPP_START_SESSION: default
-      # Push all incoming messages to the API webhook
+      # Webhook: all incoming messages forwarded here; VCPilot routes by sender phone
       WHATSAPP_HOOK_URL: ${WAHA_HOOK_URL:-http://api:8501/webhook/whatsapp}
       WHATSAPP_HOOK_EVENTS: message,session.status
     ports:

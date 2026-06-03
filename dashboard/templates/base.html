@@ -237,6 +237,27 @@
     select.input { color-scheme: light; }
     html.dark select.input { color-scheme: dark; background:var(--surface-alt); color:var(--text); }
     html.dark select.input option { background:var(--surface-alt); color:var(--text); }
+    /* =====================================================================
+       MOBILE RESPONSIVE OVERRIDES
+    ===================================================================== */
+    /* Wider tap targets on touch devices */
+    @media (max-width: 1023px) {
+      .nav-link { padding: .625rem .75rem; min-height: 2.75rem; }
+      .btn-primary, .btn-ghost, .btn-admin, .btn-danger { min-height: 2.5rem; }
+      .tbl th, .tbl td { padding: .5rem .75rem; }
+      main { padding: .75rem !important; }
+      /* Make stat grids always 2-col on mobile */
+      .grid.grid-cols-3 { grid-template-columns: repeat(2, 1fr); }
+    }
+    /* Tables — horizontal scroll on all screen sizes */
+    .table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    /* Full-width forms on mobile */
+    @media (max-width: 640px) {
+      .input { font-size: 16px !important; } /* prevent iOS zoom */
+      .grid.grid-cols-2 { grid-template-columns: repeat(2, 1fr); }
+    }
+    /* Audit log actor truncate */
+    .actor-cell { max-width: 8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   </style>
 </head>
 
@@ -254,90 +275,93 @@
 </script>
 
 <!-- =====================================================================
+     MOBILE SIDEBAR OVERLAY (tap outside to close)
+===================================================================== -->
+<div id="sidebar-overlay"
+     onclick="closeIfMobile()"
+     style="display:none;position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.45)"></div>
+
+<!-- =====================================================================
      SIDEBAR
 ===================================================================== -->
 <aside id="vcpilot-sidebar"
-  class="fixed top-0 left-0 z-40 w-64 h-screen
-         transition-transform duration-300 -translate-x-full lg:translate-x-0
-         flex flex-col">
+  style="position:fixed;top:0;left:0;z-index:40;width:16rem;height:100dvh;
+         display:flex;flex-direction:column;transform:translateX(-100%);
+         transition:transform .25s ease;background:var(--sidebar);
+         border-right:1px solid var(--border)">
 
-  <!-- Logo -->
-  <div class="flex items-center gap-3 px-5 py-4 flex-shrink-0" style="border-bottom:1px solid var(--border)">
-    <div class="w-8 h-8 rounded-lg flex items-center justify-center text-white flex-shrink-0"
-         style="background:var(--bg); border: 1.5px solid var(--border)">
-      <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" style="color: var(--t-accent)">
+  <!-- Logo + mobile close -->
+  <div class="flex items-center gap-3 px-4 py-4 flex-shrink-0" style="border-bottom:1px solid var(--border)">
+    <div class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+         style="background:var(--t-accent)">
+      <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2.5">
         <path d="M3 17c1.5-1 2.5-3 4-3s2.5 1.5 4 1.5 2-2 3.5-2 1.5.5 2.5.5L21 9M21 9h-4M21 9v4" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </div>
     <div class="flex-1 min-w-0">
-      <p class="font-bold text-sm leading-none" style="color:var(--text)">
-        {% if user_role == 'superadmin' %}Super Admin{% else %}{{ org_name or 'VCPilot' }}{% endif %}
-      </p>
+      <p class="font-bold text-sm leading-none" style="color:var(--text)">VCPilot</p>
       <p class="text-xs mt-0.5" style="color:var(--text-subtle)">ASX · Minervini SEPA</p>
     </div>
     {% if user_role != 'superadmin' %}
       {% if is_paper %}<span class="badge badge-paper">PAPER</span>
       {% else %}<span class="badge badge-live">LIVE</span>{% endif %}
     {% endif %}
+    <!-- Close button — mobile only -->
+    <button onclick="closeIfMobile()" class="lg:hidden ml-auto p-1.5 rounded-lg"
+            style="color:var(--text-muted)" aria-label="Close menu">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+      </svg>
+    </button>
   </div>
 
   <!-- Nav -->
-  <nav class="flex-1 px-3 py-3 space-y-0.5 overflow-y-auto">
-    <!-- Scoped Org Workspace -->
+  <nav class="flex-1 px-3 py-3 overflow-y-auto" style="display:flex;flex-direction:column;gap:.125rem">
     <span class="sidebar-section-label">Trading</span>
 
-    <a href="/" class="nav-link {% if path == '/' %}active-t{% endif %}">
+    <a href="/" onclick="closeIfMobile()" class="nav-link {% if path == '/' %}active-t{% endif %}">
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
       Dashboard
     </a>
-
-    <a href="/positions" class="nav-link {% if path == '/positions' %}active-t{% endif %}">
+    <a href="/positions" onclick="closeIfMobile()" class="nav-link {% if path == '/positions' %}active-t{% endif %}">
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
       Positions
       {% if open_count > 0 %}<span class="nav-badge">{{ open_count }}</span>{% endif %}
     </a>
-
-    <a href="/signals" class="nav-link {% if path == '/signals' %}active-t{% endif %}">
+    <a href="/signals" onclick="closeIfMobile()" class="nav-link {% if path == '/signals' %}active-t{% endif %}">
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
       Signals
       {% if signal_count > 0 %}<span class="nav-badge">{{ signal_count }}</span>{% endif %}
     </a>
-
-    <a href="/watchlist" class="nav-link {% if path == '/watchlist' %}active-t{% endif %}">
+    <a href="/watchlist" onclick="closeIfMobile()" class="nav-link {% if path == '/watchlist' %}active-t{% endif %}">
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
       Watchlist
     </a>
 
     <span class="sidebar-section-label" style="margin-top:.75rem">Admin</span>
-
-    <a href="/admin/health" class="nav-link {% if path == '/admin/health' %}active-a{% endif %}">
+    <a href="/admin/health" onclick="closeIfMobile()" class="nav-link {% if path == '/admin/health' %}active-a{% endif %}">
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
       System Health
     </a>
-
-    <a href="/admin/rules" class="nav-link {% if path == '/admin/rules' %}active-a{% endif %}">
+    <a href="/admin/rules" onclick="closeIfMobile()" class="nav-link {% if path == '/admin/rules' %}active-a{% endif %}">
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
       Rules Config
     </a>
-
-    <a href="/admin/config" class="nav-link {% if path == '/admin/config' %}active-a{% endif %}">
+    <a href="/admin/config" onclick="closeIfMobile()" class="nav-link {% if path == '/admin/config' %}active-a{% endif %}">
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
       System Config
     </a>
-
-    <a href="/admin/audit" class="nav-link {% if path == '/admin/audit' %}active-a{% endif %}">
+    <a href="/admin/audit" onclick="closeIfMobile()" class="nav-link {% if path == '/admin/audit' %}active-a{% endif %}">
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
       Audit Log
     </a>
-
-    <a href="/admin/tasks" class="nav-link {% if path == '/admin/tasks' %}active-a{% endif %}">
+    <a href="/admin/tasks" onclick="closeIfMobile()" class="nav-link {% if path == '/admin/tasks' %}active-a{% endif %}">
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
       Task Log
       <span class="nav-badge" style="background:var(--pos-bg);color:var(--pos)">Live</span>
     </a>
-
     {% if whatsapp_enabled %}
-    <a href="/admin/whatsapp" class="nav-link {% if path == '/admin/whatsapp' %}active-a{% endif %}">
+    <a href="/admin/whatsapp" onclick="closeIfMobile()" class="nav-link {% if path == '/admin/whatsapp' %}active-a{% endif %}">
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
       WhatsApp
     </a>
@@ -345,37 +369,51 @@
 
     {% if user_role == 'superadmin' %}
     <span class="sidebar-section-label" style="margin-top:.75rem">SaaS Management</span>
-
-    <a href="/superadmin/organizations" class="nav-link {% if path.startswith('/superadmin/organization') %}active-t{% endif %}">
+    <a href="/superadmin/organizations" onclick="closeIfMobile()" class="nav-link {% if path.startswith('/superadmin/organization') %}active-t{% endif %}">
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
       Organisations
     </a>
-
-    <a href="/superadmin/rules" class="nav-link {% if path == '/superadmin/rules' %}active-a{% endif %}">
+    <a href="/superadmin/rules" onclick="closeIfMobile()" class="nav-link {% if path == '/superadmin/rules' %}active-a{% endif %}">
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
-      Global Rules (Tiers)
+      Global Rules
     </a>
-
-    <a href="/superadmin/users" class="nav-link {% if path == '/superadmin/users' %}active-a{% endif %}">
+    <a href="/superadmin/users" onclick="closeIfMobile()" class="nav-link {% if path == '/superadmin/users' %}active-a{% endif %}">
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
       Global Users
     </a>
     {% endif %}
   </nav>
 
-  <!-- Sidebar footer -->
-  <div id="sidebar-footer" class="px-4 py-3 flex-shrink-0">
-    <div class="flex items-center justify-between text-xs" style="color:var(--text-subtle)">
-      <span class="flex items-center gap-1.5">
-        {% if worker_status == 'online' %}
-          <span class="w-1.5 h-1.5 rounded-full animate-pulse" style="background:var(--pos)"></span>Worker OK
-        {% elif worker_status == 'starting' %}
-          <span class="w-1.5 h-1.5 rounded-full animate-pulse" style="background:var(--warn)"></span>Starting…
-        {% else %}
-          <span class="w-1.5 h-1.5 rounded-full" style="background:var(--neg)"></span>Worker offline
-        {% endif %}
-      </span>
-      <a href="/logout" style="color:var(--text-subtle)" class="hover:underline">Sign out</a>
+  <!-- Sidebar footer — user identity + sign out -->
+  <div id="sidebar-footer" class="flex-shrink-0" style="border-top:1px solid var(--border)">
+    <div class="px-4 py-2 flex items-center gap-1.5 text-xs" style="color:var(--text-subtle);border-bottom:1px solid var(--border)">
+      {% if worker_status == 'online' %}
+        <span class="w-1.5 h-1.5 rounded-full animate-pulse flex-shrink-0" style="background:var(--pos)"></span>Worker OK
+      {% elif worker_status == 'starting' %}
+        <span class="w-1.5 h-1.5 rounded-full animate-pulse flex-shrink-0" style="background:var(--warn)"></span>Starting…
+      {% else %}
+        <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" style="background:var(--neg)"></span>Worker offline
+      {% endif %}
+    </div>
+    <div class="px-3 py-3 flex items-center gap-3">
+      <div class="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold"
+           style="background:{% if user_role == 'superadmin' %}var(--a-accent){% else %}var(--t-accent){% endif %}">
+        {{ user_name[0]|upper if user_name else '?' }}
+      </div>
+      <div class="flex-1 min-w-0">
+        <p class="text-xs font-semibold truncate" style="color:var(--text)" title="{{ user_email }}">{{ user_name }}</p>
+        <p class="text-xs truncate" style="color:var(--text-subtle)">
+          {% if user_role == 'superadmin' %}Super Admin{% elif org_name %}{{ org_name }}{% else %}Trader{% endif %}
+        </p>
+      </div>
+      <a href="/logout" title="Sign out" class="flex-shrink-0 p-1.5 rounded-lg transition"
+         style="color:var(--text-subtle)"
+         onmouseover="this.style.color='var(--neg)'" onmouseout="this.style.color='var(--text-subtle)'">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+        </svg>
+      </a>
     </div>
   </div>
 </aside>
@@ -383,17 +421,18 @@
 <!-- =====================================================================
      MAIN WRAPPER
 ===================================================================== -->
-<div class="lg:ml-64 min-h-screen flex flex-col">
+<div id="main-content" class="min-h-screen flex flex-col"
+     style="transition:margin-left .25s ease">
 
   <!-- Top navbar -->
-  <header id="vcpilot-navbar" class="sticky top-0 z-30">
-    <div class="flex items-center gap-3 px-4 py-3">
+  <header id="vcpilot-navbar" style="position:sticky;top:0;z-index:20;background:var(--surface);border-bottom:1px solid var(--border);box-shadow:var(--shadow)">
+    <div style="display:flex;align-items:center;gap:.75rem;padding:.75rem 1rem">
 
-      <!-- Hamburger (mobile) -->
-      <button data-drawer-target="vcpilot-sidebar" data-drawer-toggle="vcpilot-sidebar"
-              type="button" aria-controls="vcpilot-sidebar"
-              class="inline-flex lg:hidden items-center p-1.5 rounded-lg transition"
-              style="color:var(--text-muted)" onmouseover="this.style.background='var(--surface-alt)'" onmouseout="this.style.background='transparent'">
+      <!-- Hamburger (all sizes — sidebar is always a drawer) -->
+      <button onclick="openSidebar()" type="button" aria-label="Open menu"
+              class="p-2 rounded-lg flex-shrink-0 transition"
+              style="color:var(--text-muted);background:transparent"
+              onmouseover="this.style.background='var(--surface-alt)'" onmouseout="this.style.background='transparent'">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
         </svg>
@@ -407,19 +446,20 @@
       <!-- Status pills + controls -->
       <div class="flex items-center gap-2 flex-shrink-0">
 
-        <!-- Market regime & trading controls -->
         {% if user_role != 'superadmin' %}
-        {% if regime == 'BULL' %}<span class="badge badge-bull hidden sm:inline-flex">🟢 BULL</span>
+        <!-- Market regime badge -->
+        {% if regime == 'BULL' %}<span class="badge badge-bull">🟢 BULL</span>
         {% elif regime == 'CAUTION' %}<span class="badge badge-caution hidden sm:inline-flex">🟡 CAUTION</span>
-        {% elif regime == 'BEAR' %}<span class="badge badge-bear hidden sm:inline-flex">🔴 BEAR</span>
-        {% else %}<span class="badge hidden sm:inline-flex" style="background:var(--surface-alt);color:var(--text-subtle);border-color:var(--border)">⚪ Not set</span>
+        {% elif regime == 'BEAR' %}<span class="badge badge-bear">🔴 BEAR</span>
+        {% elif not regime_set %}<span class="badge hidden sm:inline-flex" style="background:var(--surface-alt);color:var(--text-subtle);border-color:var(--border)">⚪ No regime</span>
         {% endif %}
 
         <!-- Trading status -->
         {% if not trading_active %}
           {% if worker_status != 'online' %}
           <span class="badge hidden sm:inline-flex" style="background:var(--neg-bg);color:var(--neg);border-color:var(--bear-border)">
-            {% if worker_status == 'starting' %}⏳ Starting{% else %}⚠ Worker offline{% endif %}
+            {% if worker_status == 'starting' %}⏳{% else %}⚠{% endif %}
+            <span class="hidden sm:inline">{% if worker_status == 'starting' %}Starting{% else %}Offline{% endif %}</span>
           </span>
           {% elif trading_paused %}
           <span class="badge badge-paused hidden sm:inline-flex">⏸ Paused</span>
@@ -428,22 +468,24 @@
 
         <!-- Pause/Resume -->
         {% if trading_active %}
-        <form method="post" action="/action/pause" class="hidden sm:block">
-          <button type="submit" class="btn-ghost py-1 px-3 text-xs">Pause</button>
+        <form method="post" action="/action/pause">
+          <button type="submit" class="btn-ghost py-1 px-2 text-xs">⏸</button>
         </form>
         {% elif trading_paused and worker_status == 'online' %}
-        <form method="post" action="/action/resume" class="hidden sm:block">
-          <button type="submit" class="btn-primary py-1 px-3 text-xs">Resume</button>
+        <form method="post" action="/action/resume">
+          <button type="submit" class="btn-primary py-1 px-2 text-xs">▶</button>
         </form>
         {% endif %}
         {% endif %}
 
-        <!-- Org Selector (Super Admins only) -->
+        <!-- Org Selector (Super Admins) -->
         {% if user_role == 'superadmin' and all_orgs %}
-        <form action="/superadmin/switch-org" method="post" class="mr-2">
-          <select name="organization_id" onchange="this.form.submit()" class="input py-1 px-2 text-xs w-48 font-semibold" style="background:var(--surface);color:var(--text);border-color:var(--border);border-radius:0.375rem">
+        <form action="/superadmin/switch-org" method="post">
+          <select name="organization_id" onchange="this.form.submit()"
+                  class="input py-1 px-2 text-xs font-semibold"
+                  style="max-width:140px;background:var(--surface);color:var(--text);border-color:var(--border);border-radius:.375rem">
             {% for org in all_orgs %}
-              <option value="{{ org.id }}" {% if org.id == current_org_id %}selected{% endif %}>🏢 {{ org.name }}</option>
+              <option value="{{ org.id }}" {% if org.id == current_org_id %}selected{% endif %}>{{ org.name }}</option>
             {% endfor %}
           </select>
         </form>
@@ -451,14 +493,12 @@
 
         <!-- Theme toggle -->
         <button onclick="toggleTheme()" id="theme-btn" title="Toggle theme"
-                class="p-1.5 rounded-lg transition"
+                class="p-2 rounded-lg transition flex-shrink-0"
                 style="color:var(--text-muted);background:transparent"
                 onmouseover="this.style.background='var(--surface-alt)'" onmouseout="this.style.background='transparent'">
-          <!-- Moon (shown in light mode) -->
           <svg id="icon-moon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
           </svg>
-          <!-- Sun (shown in dark mode) -->
           <svg id="icon-sun" class="w-4 h-4 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
           </svg>
@@ -467,35 +507,40 @@
     </div>
   </header>
 
-  <!-- Flash messages from redirects -->
+  <!-- Flash messages -->
   {% if request.query_params.get('msg') == 'screen' %}
   <div class="mx-4 mt-4 alert-success">
     <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
-    Screener queued — results appear below within a few minutes once the worker processes the task.
+    Screener queued for this organisation — check Task Log for progress.
   </div>
   {% elif request.query_params.get('msg') == 'regime' %}
   <div class="mx-4 mt-4 alert-info">
     <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
-    Market regime evaluation queued — results appear within ~1 minute.
+    Market regime evaluation queued — global task, results in ~1 minute.
   </div>
   {% elif request.query_params.get('msg') == 'ping' %}
   <div class="mx-4 mt-4 alert-success">
     <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
-    Worker ping sent. Refresh in 10 seconds to see updated status.
+    Worker ping sent — refresh in 10s.
   </div>
   {% elif request.query_params.get('msg') == 'data' %}
   <div class="mx-4 mt-4 alert-info">
     <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
-    Price data refresh queued. This may take a few minutes for the full ASX universe.
+    Price data refresh queued — global task for ASX universe.
+  </div>
+  {% elif request.query_params.get('msg') == 'setup' %}
+  <div class="mx-4 mt-4 alert-info">
+    <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+    Full setup queued — universe → prices → regime → screener. Watch Task Log.
   </div>
   {% endif %}
 
   <!-- Page content -->
-  <main class="flex-1 p-4 lg:p-6">
+  <main class="flex-1" style="padding:1rem">
     {% block content %}{% endblock %}
   </main>
 
-  <footer class="px-6 py-3 text-xs flex items-center justify-between" style="border-top:1px solid var(--border);color:var(--text-subtle)">
+  <footer style="padding:.75rem 1rem;font-size:.75rem;display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--border);color:var(--text-subtle)">
     <span>VCPilot · Minervini SEPA · ASX</span>
     <span>Heartbeat: {{ heartbeat }}</span>
   </footer>
@@ -504,7 +549,62 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.3.0/flowbite.min.js"></script>
 
 <script>
-  /* Theme toggle */
+  /* ── Sidebar open/close ──────────────────────────────────────── */
+  var DESKTOP = 1024;
+
+  function isMobile() { return window.innerWidth < DESKTOP; }
+
+  function openSidebar() {
+    document.getElementById('vcpilot-sidebar').style.transform = 'translateX(0)';
+    if (isMobile()) {
+      document.getElementById('sidebar-overlay').style.display = 'block';
+      document.body.style.overflow = 'hidden';
+    }
+  }
+
+  function closeSidebar() {
+    if (!isMobile()) return;   // never close on desktop
+    document.getElementById('vcpilot-sidebar').style.transform = 'translateX(-100%)';
+    document.getElementById('sidebar-overlay').style.display = 'none';
+    document.body.style.overflow = '';
+  }
+
+  function closeIfMobile() {
+    if (isMobile()) closeSidebar();
+  }
+
+  /* Close on Escape (mobile only) */
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeIfMobile();
+  });
+
+  /* Responsive layout — called on load, resize, and bfcache restore */
+  function checkBreakpoint() {
+    var sidebar = document.getElementById('vcpilot-sidebar');
+    var main    = document.getElementById('main-content');
+    var overlay = document.getElementById('sidebar-overlay');
+    if (!sidebar || !main) return;
+    if (!isMobile()) {
+      sidebar.style.transform = 'translateX(0)';
+      main.style.marginLeft   = '16rem';
+      overlay.style.display   = 'none';
+      document.body.style.overflow = '';
+    } else {
+      main.style.marginLeft = '0';
+      // On mobile, only close if overlay is not already showing (i.e. not user-opened)
+      if (overlay.style.display !== 'block') {
+        sidebar.style.transform = 'translateX(-100%)';
+      }
+    }
+  }
+  checkBreakpoint();
+  window.addEventListener('resize', checkBreakpoint);
+  /* Re-run on browser back/forward (bfcache restore) */
+  window.addEventListener('pageshow', function(e) {
+    if (e.persisted) checkBreakpoint();
+  });
+
+  /* ── Theme toggle ────────────────────────────────────────────── */
   function toggleTheme() {
     var root = document.getElementById('html-root');
     var isDark = root.classList.toggle('dark');
@@ -515,7 +615,6 @@
     document.getElementById('icon-moon').classList.toggle('hidden', isDark);
     document.getElementById('icon-sun').classList.toggle('hidden', !isDark);
   }
-  // Sync icons with current state on load
   updateIcons(document.getElementById('html-root').classList.contains('dark'));
 </script>
 

@@ -60,13 +60,20 @@ def generate_daily_report(organization_id: int = None) -> dict:
 
 
 @app.task(name="app.tasks.reporting.send_daily_report", bind=True)
-def send_daily_report(self):
-    """Send daily P&L report via WhatsApp to each active organization."""
-    logger.info("Generating daily reports for all organizations...")
+def send_daily_report(self, organization_id: int = None):
+    """Send daily P&L report via WhatsApp.
+    When organization_id is provided, sends only to that org (manual trigger).
+    When None (scheduled), sends to all active orgs.
+    """
+    scope = f"org {organization_id}" if organization_id else "all organizations"
+    logger.info(f"Generating daily report for {scope}...")
     from app.models.account import Organization
     try:
         with get_db() as db:
-            orgs = db.query(Organization).filter(Organization.is_active == True).all()
+            org_query = db.query(Organization).filter(Organization.is_active == True)
+            if organization_id:
+                org_query = org_query.filter(Organization.id == organization_id)
+            orgs = org_query.all()
 
         for org in orgs:
             try:
@@ -92,14 +99,19 @@ def send_daily_report(self):
 def health_check(self):
     """
     Heartbeat task. If this stops running, the worker is dead.
-    Stores last heartbeat timestamp in SystemConfig.
+    Writes a global heartbeat AND per-org heartbeat so each org's
+    health page shows the correct worker online/offline status.
     """
     from datetime import datetime
     now_str = datetime.utcnow().isoformat()
     try:
         with get_db() as db:
+            from app.models.account import Organization
+
+            # ── Global (system-level) heartbeat ──────────────────────────
             cfg = db.query(SystemConfig).filter(
-                SystemConfig.key == "last_heartbeat"
+                SystemConfig.key == "last_heartbeat",
+                SystemConfig.organization_id == None,
             ).first()
             if cfg:
                 cfg.value = now_str
@@ -109,11 +121,32 @@ def health_check(self):
                     value=now_str,
                     label="Last Worker Heartbeat",
                     group="system",
+                    organization_id=None,
                 ))
+
+            # ── Per-org heartbeat — keeps each org's status widget green ─
+            orgs = db.query(Organization).filter(Organization.is_active == True).all()
+            for org in orgs:
+                cfg_org = db.query(SystemConfig).filter(
+                    SystemConfig.key == "last_heartbeat",
+                    SystemConfig.organization_id == org.id,
+                ).first()
+                if cfg_org:
+                    cfg_org.value = now_str
+                else:
+                    db.add(SystemConfig(
+                        key="last_heartbeat",
+                        value=now_str,
+                        label="Last Worker Heartbeat",
+                        group="system",
+                        organization_id=org.id,
+                    ))
+
             db.add(AuditLog(
                 action=AuditAction.HEALTH_CHECK,
                 message=f"Heartbeat: {now_str}",
             ))
+
         logger.debug(f"Health check OK: {now_str}")
     except Exception as e:
         logger.error(f"Health check failed: {e}")

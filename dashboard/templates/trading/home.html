@@ -93,8 +93,9 @@
     {% for s in signals %}
     <div class="tbl-row" style="display:flex;align-items:center;gap:.75rem;padding:.75rem 1rem">
       <div style="flex:1;min-width:0">
-        <div style="display:flex;align-items:center;gap:.5rem">
+        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
           <span class="mono font-bold" style="font-size:.875rem;color:var(--text)">{{ s.ticker }}</span>
+          {% if s.company_name %}<span style="font-size:.7rem;color:var(--text-subtle)">{{ s.company_name }}</span>{% endif %}
           <span style="font-size:.7rem;color:var(--text-muted)">{{ s.vcp }}</span>
           {% if s.status == 'TRIGGERED' %}<span class="tag-pos" style="font-size:.65rem">Triggered</span>
           {% elif s.status == 'SKIPPED' %}<span class="tag" style="font-size:.65rem">Skipped</span>
@@ -131,8 +132,9 @@
     {% for p in positions %}
     <div class="tbl-row" style="display:flex;align-items:center;gap:.75rem;padding:.75rem 1rem">
       <div style="flex:1;min-width:0">
-        <div style="display:flex;align-items:center;gap:.5rem">
+        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
           <span class="mono font-bold" style="font-size:.875rem;color:var(--text)">{{ p.ticker }}</span>
+          {% if p.company_name %}<span style="font-size:.7rem;color:var(--text-subtle)">{{ p.company_name }}</span>{% endif %}
           {% if p.is_paper %}<span class="badge badge-paper" style="font-size:.65rem">PAPER</span>{% endif %}
         </div>
         <p style="font-size:.75rem;color:var(--text-muted);margin-top:.2rem">

@@ -23,37 +23,40 @@ DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "changeme")
 
 @app.on_event("startup")
 async def _startup():
-    """Auto-start WAHA session + configure webhook on every dashboard boot."""
+    """
+    On startup, verify WAHA is reachable and log active sessions.
+    We do NOT auto-start any org session — each org admin triggers their own
+    QR scan via /admin/whatsapp → 'Start Session'.
+    Each org uses session name 'org_{id}' (requires WAHA Plus for multi-session).
+    """
     import asyncio, httpx
     from loguru import logger
     from app.config import settings
 
-    async def _init_waha():
-        await asyncio.sleep(3)   # give WAHA a moment to be reachable
-        api   = settings.waha_api_url.rstrip("/")
-        key   = settings.waha_api_key
-        sess  = settings.waha_session
-        hook  = settings.waha_hook_url
-        hdrs  = {"X-Api-Key": key, "Content-Type": "application/json"}
-
+    async def _check_waha():
+        await asyncio.sleep(4)   # give WAHA a moment to be ready
+        api  = settings.waha_api_url.rstrip("/")
+        key  = settings.waha_api_key
+        sess = settings.waha_session   # "default" for WAHA Core
+        hook = settings.waha_hook_url
+        hdrs = {"X-Api-Key": key, "Content-Type": "application/json"}
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                # Start session if not already running
+                # Start/ensure default session
                 r = await client.post(f"{api}/api/sessions/start",
                                       json={"name": sess}, headers=hdrs)
-                status = r.json().get("status", "?")
+                status = r.json().get("status", "?") if r.status_code in (200,201) else r.status_code
                 logger.info(f"WAHA session '{sess}' → {status}")
-
-                # Register webhook if URL is configured
+                # Register webhook
                 if hook:
                     await client.put(f"{api}/api/sessions/{sess}",
-                        json={"webhooks": [{"url": hook, "events": ["message", "session.status"]}]},
+                        json={"webhooks": [{"url": hook, "events": ["message","session.status"]}]},
                         headers=hdrs)
                     logger.info(f"WAHA webhook registered: {hook}")
         except Exception as e:
             logger.warning(f"WAHA startup init failed (non-fatal): {e}")
 
-    asyncio.create_task(_init_waha())
+    asyncio.create_task(_check_waha())
 
 
 # ---------------------------------------------------------------------------
@@ -104,8 +107,14 @@ def _global(request: Request, db: Session) -> dict:
     org_id = request.session.get("organization_id")
 
     def cfg(key, default=""):
-        if key in ("last_market_regime", "last_regime_check", "last_heartbeat"):
+        if key in ("last_market_regime", "last_regime_check"):
             c = db.query(SystemConfig).filter(SystemConfig.key == key, SystemConfig.organization_id == None).first()
+        elif key == "last_heartbeat":
+            # Prefer per-org heartbeat (written by updated health_check task);
+            # fall back to the legacy global row so old deployments still work.
+            c = db.query(SystemConfig).filter(SystemConfig.key == key, SystemConfig.organization_id == org_id).first()
+            if not c:
+                c = db.query(SystemConfig).filter(SystemConfig.key == key, SystemConfig.organization_id == None).first()
         else:
             c = db.query(SystemConfig).filter(SystemConfig.key == key, SystemConfig.organization_id == org_id).first()
         return c.value if c else default
@@ -139,22 +148,36 @@ def _global(request: Request, db: Session) -> dict:
         from app.models.account import Organization
         all_orgs = db.query(Organization).filter(Organization.is_active == True).order_by(Organization.name).all()
 
+    # User display info for sidebar footer
+    user_email = request.session.get("email", "")
+    user_name  = ""
+    if user_role != "superadmin" and request.session.get("user_id"):
+        from app.models.auth import User
+        u = db.query(User).filter(User.id == request.session.get("user_id")).first()
+        if u:
+            user_name = u.name or ""
+    if not user_name:
+        user_name = "Super Admin" if user_role == "superadmin" else (user_email.split("@")[0] if user_email else "User")
+
+    user_id = request.session.get("user_id")
+
     return {
         "request": request,
         "path": str(request.url.path),
-        # Regime: show empty string when never evaluated (templates handle display)
         "regime": regime_raw,
         "regime_set": bool(regime_raw and regime_raw not in ("UNKNOWN", "")),
         "trading_paused": trading_paused,
         "whatsapp_enabled": whatsapp_enabled,
         "is_paper": is_paper,
         "heartbeat": hb_display or "Never",
-        "worker_status": wstatus,                          # online | starting | offline
-        # Trading is only truly active if: not paused AND worker online
+        "worker_status": wstatus,
         "trading_active": (not trading_paused) and (wstatus == "online"),
         "open_count": open_count,
         "signal_count": signal_count,
         "user_role": user_role,
+        "user_id": user_id,
+        "user_name": user_name,
+        "user_email": user_email,
         "org_name": request.session.get("organization_name", ""),
         "all_orgs": all_orgs,
         "current_org_id": org_id,
@@ -348,11 +371,15 @@ async def home(request: Request, db: Session = Depends(get_db)):
     from app.models.trade import Position, Trade, TradeStatus
     from app.models.signal import Signal, SignalStatus
     from app.models.account import Account
+    from app.models.market import Stock
 
     ctx = _global(request, db)
 
     account = db.query(Account).filter(Account.is_active == True, Account.organization_id == org_id).first()
     capital = float(account.capital_aud) if account else 1000.0
+
+    # Single query for all company names — used across positions + signals
+    stock_names = {s.ticker: (s.name or "") for s in db.query(Stock).all()}
 
     # Open positions
     positions = db.query(Position).filter(Position.status == TradeStatus.OPEN, Position.organization_id == org_id).all()
@@ -364,7 +391,9 @@ async def home(request: Request, db: Session = Depends(get_db)):
         pnl   = (curr - entry) * p.qty
         total_risk += (entry - stop) * p.qty
         pos_data.append({
-            "ticker": p.ticker, "qty": p.qty,
+            "ticker": p.ticker,
+            "company_name": stock_names.get(p.ticker, ""),
+            "qty": p.qty,
             "entry": entry, "current": curr, "stop": stop,
             "pnl_pct": round((curr - entry) / entry * 100, 2),
             "pnl_aud": round(pnl, 2),
@@ -376,6 +405,7 @@ async def home(request: Request, db: Session = Depends(get_db)):
     signals = db.query(Signal).filter(Signal.signal_date == date.today(), Signal.organization_id == org_id).all()
     sig_data = [{
         "id": s.id, "ticker": s.ticker,
+        "company_name": stock_names.get(s.ticker, ""),
         "pivot": float(s.pivot_price or 0),
         "stop": float(s.stop_price or 0),
         "rs": float(s.rs_rating or 0),
@@ -410,15 +440,21 @@ async def positions(request: Request, db: Session = Depends(get_db)):
     org_id = request.session.get("organization_id")
 
     from app.models.trade import Position, Trade, TradeStatus
+    from app.models.market import Stock
 
     ctx = _global(request, db)
+
+    stock_names = {s.ticker: (s.name or "") for s in db.query(Stock).all()}
+
     positions = db.query(Position).filter(Position.status == TradeStatus.OPEN, Position.organization_id == org_id).all()
     pos_data = []
     for p in positions:
         curr  = float(p.current_price or p.entry_price)
         entry = float(p.entry_price)
         pos_data.append({
-            "id": p.id, "ticker": p.ticker, "qty": p.qty,
+            "id": p.id, "ticker": p.ticker,
+            "company_name": stock_names.get(p.ticker, ""),
+            "qty": p.qty,
             "entry": entry, "current": curr,
             "stop": float(p.current_stop),
             "target_1": float(p.target_1 or 0),
@@ -432,6 +468,7 @@ async def positions(request: Request, db: Session = Depends(get_db)):
     trades = db.query(Trade).filter(Trade.organization_id == org_id).order_by(desc(Trade.exit_date)).limit(50).all()
     trade_data = [{
         "ticker": t.ticker,
+        "company_name": stock_names.get(t.ticker, ""),
         "entry_date": str(t.entry_date), "exit_date": str(t.exit_date),
         "days": t.hold_days,
         "entry": float(t.entry_price), "exit": float(t.exit_price),
@@ -573,8 +610,27 @@ async def skip_signal(request: Request, signal_id: int, db: Session = Depends(ge
     if s:
         s.status = SignalStatus.SKIPPED
         db.add(AuditLog(action=AuditAction.MANUAL_OVERRIDE, ticker=s.ticker,
-                        actor="dashboard", message="Signal skipped via dashboard",
-                        organization_id=org_id))
+                        actor=request.session.get("email","dashboard"), user_id=request.session.get("user_id"),
+                        message="Signal skipped via dashboard", organization_id=org_id))
+        db.commit()
+    return RedirectResponse("/signals", 302)
+
+
+@app.post("/signals/{signal_id}/unskip")
+async def unskip_signal(request: Request, signal_id: int, db: Session = Depends(get_db)):
+    """Restore a skipped signal back to PENDING so it can be acted on."""
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    org_id = request.session.get("organization_id")
+
+    from app.models.signal import Signal, SignalStatus
+    from app.models.audit import AuditLog, AuditAction
+    s = db.query(Signal).filter(Signal.id == signal_id, Signal.organization_id == org_id).first()
+    if s and s.status == SignalStatus.SKIPPED:
+        s.status = SignalStatus.PENDING
+        db.add(AuditLog(action=AuditAction.MANUAL_OVERRIDE, ticker=s.ticker,
+                        actor=request.session.get("email","dashboard"), user_id=request.session.get("user_id"),
+                        message="Signal unskipped (restored to PENDING) via dashboard", organization_id=org_id))
         db.commit()
     return RedirectResponse("/signals", 302)
 
@@ -632,6 +688,95 @@ async def watchlist(request: Request, db: Session = Depends(get_db)):
         
     ctx["watchlist"] = watchlist_data
     return templates.TemplateResponse("trading/watchlist.html", ctx)
+
+
+@app.post("/positions/{pos_id}/close")
+async def close_position(
+    request: Request,
+    pos_id: int,
+    exit_reason: str = Form(...),
+    exit_price: float = Form(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Manually close an open position the Minervini way.
+    Records a Trade, marks Position CLOSED, writes audit, sends WhatsApp alert.
+    If exit_price is not provided, the last known current_price is used.
+    """
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    org_id = request.session.get("organization_id")
+
+    from app.models.trade import Position, Trade, TradeStatus, ExitReason, OrderAction, OrderType, OrderStatus, Order
+    from app.models.audit import AuditLog, AuditAction
+    from app.models.account import Account
+
+    pos = db.query(Position).filter(
+        Position.id == pos_id,
+        Position.organization_id == org_id,
+        Position.status == TradeStatus.OPEN,
+    ).first()
+    if not pos:
+        return RedirectResponse("/positions?msg=not_found", 302)
+
+    today = date.today()
+    close_price = exit_price if (exit_price and exit_price > 0) else float(pos.current_price or pos.entry_price)
+    entry_price = float(pos.entry_price)
+    pnl_aud = (close_price - entry_price) * pos.qty
+    pnl_pct = (close_price - entry_price) / entry_price * 100
+
+    # Validate exit reason
+    try:
+        reason = ExitReason[exit_reason]
+    except KeyError:
+        reason = ExitReason.MANUAL
+
+    # Mark position closed
+    pos.status = TradeStatus.CLOSED
+
+    # Create closed trade record
+    trade = Trade(
+        ticker=pos.ticker,
+        account_id=pos.account_id,
+        organization_id=org_id,
+        signal_id=pos.signal_id,
+        entry_date=pos.entry_date,
+        exit_date=today,
+        hold_days=(today - pos.entry_date).days,
+        entry_price=pos.entry_price,
+        exit_price=close_price,
+        qty=pos.qty,
+        gross_pnl_aud=round(pnl_aud, 2),
+        net_pnl_aud=round(pnl_aud - 6.0, 2),   # deduct commission
+        pnl_pct=round(pnl_pct / 100, 4),
+        initial_stop=pos.initial_stop,
+        exit_reason=reason,
+        is_paper=pos.is_paper,
+        cgt_eligible_discount=(today - pos.entry_date).days > 365,
+    )
+    db.add(trade)
+
+    db.add(AuditLog(
+        action=AuditAction.POSITION_CLOSED,
+        organization_id=org_id,
+        user_id=request.session.get("user_id"),
+        ticker=pos.ticker,
+        message=f"Manual close: {reason.value} @ ${close_price:.3f} | P&L ${pnl_aud:+.0f} ({pnl_pct:+.1f}%)",
+        detail={"reason": reason.value, "exit_price": close_price, "pnl_aud": round(pnl_aud, 2)},
+        actor=request.session.get("email","dashboard"),
+    ))
+    db.commit()
+
+    # WhatsApp alert
+    try:
+        from app.notifications.whatsapp import WhatsAppNotifier
+        WhatsAppNotifier(organization_id=org_id).send_exit_alert(
+            pos.ticker, reason.value, pnl_pct, pnl_aud, pos.is_paper
+        )
+    except Exception:
+        pass
+
+    return RedirectResponse("/positions?msg=closed", 302)
 
 
 @app.post("/watchlist/add")
@@ -694,7 +839,8 @@ async def watchlist_promote(request: Request, item_id: int, db: Session = Depend
     db.add(AuditLog(
         action=AuditAction.MANUAL_OVERRIDE,
         ticker=w.ticker,
-        actor="dashboard",
+        actor=request.session.get("email","dashboard"),
+        user_id=request.session.get("user_id"),
         message="Watchlist item manually promoted to Signal",
         organization_id=org_id
     ))
@@ -738,7 +884,7 @@ async def action_pause(request: Request, db: Session = Depends(get_db)):
     if cfg:
         cfg.value = "true"
         cfg.updated_by = "dashboard"
-    db.add(AuditLog(action=AuditAction.TRADING_PAUSED, actor="dashboard", organization_id=org_id))
+    db.add(AuditLog(action=AuditAction.TRADING_PAUSED, actor=request.session.get("email","dashboard"), user_id=request.session.get("user_id"), organization_id=org_id))
     db.commit()
     return RedirectResponse("/", 302)
 
@@ -756,22 +902,22 @@ async def action_resume(request: Request, db: Session = Depends(get_db)):
     if cfg:
         cfg.value = "false"
         cfg.updated_by = "dashboard"
-    db.add(AuditLog(action=AuditAction.TRADING_RESUMED, actor="dashboard", organization_id=org_id))
+    db.add(AuditLog(action=AuditAction.TRADING_RESUMED, actor=request.session.get("email","dashboard"), user_id=request.session.get("user_id"), organization_id=org_id))
     db.commit()
     return RedirectResponse("/", 302)
 
 
 @app.post("/action/run-screener")
 async def action_run_screener(request: Request):
-    """Queue the screener — bypasses trading-day gate so it works any day/time."""
+    """Queue the screener for the current org only — bypasses trading-day gate."""
     if not _auth(request):
         return RedirectResponse("/login", 302)
-    # Super admins allowed in standard views under active organization context
+    org_id = request.session.get("organization_id")
     try:
         from app.tasks.screening import _run_screen_force
-        _run_screen_force.delay()
+        _run_screen_force.delay(organization_id=org_id)
     except Exception:
-        pass  # Worker may not be available; task will queue when it comes online
+        pass
     return RedirectResponse("/signals?msg=screen", 302)
 
 
@@ -779,9 +925,9 @@ async def action_run_screener(request: Request):
 async def action_send_report(request: Request):
     if not _auth(request):
         return RedirectResponse("/login", 302)
-    # Super admins allowed in standard views under active organization context
+    org_id = request.session.get("organization_id")
     from app.tasks.reporting import send_daily_report
-    send_daily_report.delay()
+    send_daily_report.delay(organization_id=org_id)
     return RedirectResponse("/", 302)
 
 
@@ -828,13 +974,13 @@ async def action_full_setup(request: Request):
 
 @app.post("/action/force-screen")
 async def action_force_screen(request: Request):
-    """Run screener now, bypassing the trading-day gate."""
+    """Run screener for current org now, bypassing the trading-day gate."""
     if not _auth(request):
         return RedirectResponse("/login", 302)
-    # Super admins allowed in standard views under active organization context
+    org_id = request.session.get("organization_id")
     try:
         from app.tasks.screening import _run_screen_force
-        _run_screen_force.delay()
+        _run_screen_force.delay(organization_id=org_id)
     except Exception:
         pass
     return RedirectResponse("/signals?msg=screen", 302)
@@ -865,7 +1011,10 @@ async def admin_tasks(request: Request, db: Session = Depends(get_db)):
     ctx = _global(request, db)
 
     # Seed latest 40 rows so the page is not blank on load
-    logs = db.query(AuditLog).filter(AuditLog.organization_id == org_id).order_by(desc(AuditLog.id)).limit(40).all()
+    try:
+        logs = db.query(AuditLog).filter(AuditLog.organization_id == org_id).order_by(desc(AuditLog.id)).limit(40).all()
+    except Exception:
+        logs = []
     last_id = logs[0].id if logs else 0
 
     ACTION_COLOURS = {
@@ -910,9 +1059,6 @@ async def admin_tasks_poll(request: Request, after: int = 0, db: Session = Depen
     if not _auth(request):
         from fastapi.responses import JSONResponse
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
-    if request.session.get("user_role") == "superadmin":
-        from fastapi.responses import JSONResponse
-        return JSONResponse({"error": "unauthorized"}, status_code=403)
     org_id = request.session.get("organization_id")
 
     from fastapi.responses import JSONResponse
@@ -937,7 +1083,10 @@ async def admin_tasks_poll(request: Request, after: int = 0, db: Session = Depen
         "HEALTH_CHECK":         "var(--text-subtle)",
     }
 
-    new_logs = db.query(AuditLog).filter(AuditLog.id > after, AuditLog.organization_id == org_id).order_by(desc(AuditLog.id)).limit(50).all()
+    try:
+        new_logs = db.query(AuditLog).filter(AuditLog.id > after, AuditLog.organization_id == org_id).order_by(desc(AuditLog.id)).limit(50).all()
+    except Exception:
+        new_logs = []
     return JSONResponse({
         "logs": [{
             "id":      l.id,
@@ -972,7 +1121,10 @@ async def admin_health(request: Request, db: Session = Depends(get_db)):
 
     ctx = _global(request, db)
     account = db.query(Account).filter(Account.is_active == True, Account.organization_id == org_id).first()
-    logs = db.query(AuditLog).filter(AuditLog.organization_id == org_id).order_by(desc(AuditLog.created_at)).limit(8).all()
+    try:
+        logs = db.query(AuditLog).filter(AuditLog.organization_id == org_id).order_by(desc(AuditLog.created_at)).limit(8).all()
+    except Exception:
+        logs = []
 
     stock_count     = db.query(func.count(Stock.id)).scalar() or 0
     price_bar_count = db.query(func.count(PriceBar.id)).scalar() or 0
@@ -1208,14 +1360,35 @@ async def update_config(request: Request, config_id: int, value: str = Form(...)
     from app.models.config import SystemConfig
     from app.models.audit import AuditLog, AuditAction
     c = db.query(SystemConfig).filter(SystemConfig.id == config_id, SystemConfig.organization_id == org_id).first()
-    if c and value:
-        old = c.value
+    if c and value is not None:
+        old_val = c.value
         c.value = value
-        c.updated_by = "dashboard"
-        db.add(AuditLog(action=AuditAction.CONFIG_CHANGED, entity_id=c.key,
-                        before_value=old, after_value=value, actor="dashboard",
-                        organization_id=org_id))
-        db.commit()
+        c.updated_by = request.session.get("email", "dashboard")
+        # AuditLog write is non-fatal — missing DB column won't block the save
+        try:
+            db.add(AuditLog(
+                action=AuditAction.CONFIG_CHANGED,
+                entity_id=c.key,
+                before_value=old_val,
+                after_value=value,
+                actor=request.session.get("email", "dashboard"),
+                user_id=request.session.get("user_id"),
+                organization_id=org_id,
+            ))
+            db.commit()
+        except Exception as _audit_err:
+            logger.warning(f"Config save audit log failed (non-fatal): {_audit_err}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            # Re-save the config without the audit log
+            try:
+                c.value = value
+                c.updated_by = request.session.get("email", "dashboard")
+                db.commit()
+            except Exception:
+                pass
     return RedirectResponse("/admin/config?saved=1", 302)
 
 
@@ -1231,23 +1404,31 @@ async def admin_audit(request: Request, db: Session = Depends(get_db)):
     action_f = request.query_params.get("action", "ALL")
     ticker_f = request.query_params.get("ticker", "").strip().upper()
 
+    actor_f = request.query_params.get("actor", "").strip()
+
     q = db.query(AuditLog).filter(AuditLog.organization_id == org_id).order_by(desc(AuditLog.created_at))
     if action_f != "ALL":
         q = q.filter(AuditLog.action == action_f)
     if ticker_f:
         t = ticker_f if ticker_f.endswith(".AX") else ticker_f + ".AX"
         q = q.filter(AuditLog.ticker == t)
+    if actor_f:
+        q = q.filter(AuditLog.actor.ilike(f"%{actor_f}%"))
 
-    logs = q.limit(100).all()
+    try:
+        logs = q.limit(200).all()
+    except Exception:
+        logs = []
     ctx.update({
         "logs": [{"time": str(l.created_at)[5:19], "action": str(l.action).replace("AuditAction.", ""),
-                  "actor": l.actor, "ticker": l.ticker or "—",
-                  "message": (l.message or "")[:70],
+                  "actor": l.actor or "system", "ticker": l.ticker or "—",
+                  "message": (l.message or "")[:80],
                   "before": (l.before_value or "")[:20], "after": (l.after_value or "")[:20]}
                  for l in logs],
         "actions": ["ALL"] + sorted(set(str(a.value) for a in AuditAction)),
         "filter_action": action_f,
         "filter_ticker": ticker_f,
+        "filter_actor": actor_f,
     })
     return templates.TemplateResponse("admin/audit.html", ctx)
 
@@ -1375,22 +1556,38 @@ async def admin_whatsapp(request: Request, db: Session = Depends(get_db)):
     from app.config import settings
 
     ctx = _global(request, db)
-    notifier     = WhatsAppNotifier(organization_id=org_id)
-    session_info = notifier.get_session_status()
-    status       = session_info.get("status", "UNKNOWN")
-    qr_b64       = notifier.get_qr() if status == "SCAN_QR_CODE" else None
 
-    recent_cmds = db.query(AuditLog).filter(
-        AuditLog.action == AuditAction.AGENT_COMMAND,
-        AuditLog.organization_id == org_id
-    ).order_by(desc(AuditLog.created_at)).limit(20).all()
+    # WAHA calls are all wrapped — if WAHA container is down, page still loads
+    try:
+        notifier     = WhatsAppNotifier(organization_id=org_id)
+        session_info = notifier.get_session_status()
+        status       = session_info.get("status", "UNKNOWN")
+        qr_b64       = notifier.get_qr() if status in ("SCAN_QR_CODE", "STARTING") else None
+        wa_session   = notifier.session
+        admin_jid    = notifier.admin_jid or ""
+        admin_number = admin_jid.split("@")[0] if admin_jid else ""
+    except Exception as _e:
+        logger.warning(f"WhatsApp page: WAHA unreachable — {_e}")
+        status = "UNKNOWN"
+        qr_b64 = None
+        wa_session = "—"
+        admin_jid = ""
+        admin_number = ""
+
+    try:
+        recent_cmds = db.query(AuditLog).filter(
+            AuditLog.action == AuditAction.AGENT_COMMAND,
+            AuditLog.organization_id == org_id
+        ).order_by(desc(AuditLog.created_at)).limit(20).all()
+    except Exception:
+        recent_cmds = []
 
     ctx.update({
         "wa_status":       status,
-        "wa_session":      notifier.session,
+        "wa_session":      wa_session,
         "wa_url":          settings.waha_api_url,
-        "admin_jid":       notifier.admin_jid,
-        "admin_number":    notifier.admin_jid.split("@")[0] if notifier.admin_jid else "",
+        "admin_jid":       admin_jid,
+        "admin_number":    admin_number,
         "hook_url":        settings.waha_hook_url,
         "qr_b64":          qr_b64,
         "recent_commands": [
@@ -1406,15 +1603,23 @@ async def admin_whatsapp(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/admin/whatsapp/start-session")
 async def whatsapp_start_session(request: Request):
-    """Manually start / restart the WAHA session."""
+    """
+    Force-restart the WAHA session.
+    Stops any existing session and starts fresh → puts it into SCAN_QR_CODE state.
+    """
     if not _auth(request):
         return RedirectResponse("/login", 302)
-    # Super admins allowed in standard views under active organization context
     org_id = request.session.get("organization_id")
 
     from app.notifications.whatsapp import WhatsAppNotifier
-    WhatsAppNotifier(organization_id=org_id).ensure_session()
-    return RedirectResponse("/admin/whatsapp?msg=started", 302)
+    new_status = WhatsAppNotifier(organization_id=org_id).restart_session()
+    # Redirect with a flash that tells the page what happened
+    if new_status == "SCAN_QR_CODE":
+        return RedirectResponse("/admin/whatsapp?msg=scan_qr", 302)
+    elif new_status == "WORKING":
+        return RedirectResponse("/admin/whatsapp?msg=already_working", 302)
+    else:
+        return RedirectResponse(f"/admin/whatsapp?msg=started", 302)
 
 
 @app.post("/admin/whatsapp/send-test")
@@ -1526,12 +1731,16 @@ async def superadmin_organizations_create(
         user.roles.append(admin_role)
 
     # 4. Seed Organization System Configurations
+    # WAHA Core (free) only supports one "default" session shared by all orgs.
+    # The webhook routes messages to the correct org by matching the sender phone number
+    # against each org's whatsapp_admin_number setting.
+    # For per-org sessions, use WAHA Plus (paid): devlikeapro/waha-plus:latest
     configs_to_seed = [
         ("trading_paused", "false", ConfigValueType.BOOLEAN, "Trading Paused", "Toggles automated trade placement"),
         ("whatsapp_enabled", "true", ConfigValueType.BOOLEAN, "WhatsApp Alerts", "Enables real-time notifications"),
         ("whatsapp_admin_number", "", ConfigValueType.STRING, "WhatsApp Admin Number", "Number to send alerts and receive commands JID format"),
         ("whatsapp_api_key", settings.waha_api_key, ConfigValueType.STRING, "WhatsApp API Key", "API key for the WhatsApp (WAHA) service", True),
-        ("whatsapp_session_name", "default", ConfigValueType.STRING, "WhatsApp Session Name", "The session name registered in WAHA (e.g. 'default' for WAHA Core, or org-specific for WAHA Plus)"),
+        ("whatsapp_session_name", "default", ConfigValueType.STRING, "WhatsApp Session Name", "WAHA session name (always 'default' for WAHA Core; use WAHA Plus for per-org sessions)"),
         ("ibkr_account", "", ConfigValueType.STRING, "IBKR Account ID", "Interactive Brokers account number"),
         ("ibkr_username", "", ConfigValueType.STRING, "IBKR Username", "Interactive Brokers login username"),
         ("ibkr_password", "", ConfigValueType.STRING, "IBKR Password", "Interactive Brokers login password", True),
@@ -1592,15 +1801,86 @@ async def superadmin_org_detail(org_id: int, request: Request, db: Session = Dep
     ctx = _global(request, db)
     users = db.query(User).filter(User.organization_id == org_id).all()
     accounts = db.query(Account).filter(Account.organization_id == org_id).all()
-    logs = db.query(AuditLog).filter(AuditLog.organization_id == org_id).order_by(desc(AuditLog.created_at)).limit(50).all()
+    try:
+        logs = db.query(AuditLog).filter(AuditLog.organization_id == org_id).order_by(desc(AuditLog.created_at)).limit(50).all()
+    except Exception:
+        logs = []
 
     ctx.update({
         "organization": org,
         "users": users,
         "accounts": accounts,
-        "logs": logs
+        "logs": logs,
+        "msg": request.query_params.get("msg", ""),
     })
     return templates.TemplateResponse("superadmin/org_detail.html", ctx)
+
+
+@app.post("/superadmin/organizations/{org_id}/deactivate")
+async def superadmin_org_deactivate(org_id: int, request: Request, db: Session = Depends(get_db)):
+    """
+    Soft-delete an organisation: sets is_active=False.
+    The org's data (users, signals, trades, rules) is retained.
+    Beat tasks skip inactive orgs automatically (all tasks filter is_active==True).
+    """
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    if request.session.get("user_role") != "superadmin":
+        return RedirectResponse("/", 302)
+
+    from app.models.account import Organization
+    from app.models.audit import AuditLog, AuditAction
+
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    if not org:
+        return RedirectResponse("/superadmin/organizations?msg=not_found", 302)
+
+    # Safety: prevent deactivating the org the superadmin is currently viewing as
+    current_org_id = request.session.get("organization_id")
+    if org.id == current_org_id:
+        return RedirectResponse(
+            f"/superadmin/organizations/{org_id}?msg=cannot_deactivate_self", 302
+        )
+
+    org.is_active = False
+    db.add(AuditLog(
+        action=AuditAction.CONFIG_CHANGED,
+        actor="superadmin",
+        organization_id=org_id,
+        message=f"Organisation '{org.name}' soft-deleted (is_active=False)",
+    ))
+    db.commit()
+
+    logger.info(f"Organisation '{org.name}' (ID: {org_id}) deactivated by superadmin")
+    return RedirectResponse(f"/superadmin/organizations?msg=deactivated&name={org.name}", 302)
+
+
+@app.post("/superadmin/organizations/{org_id}/reactivate")
+async def superadmin_org_reactivate(org_id: int, request: Request, db: Session = Depends(get_db)):
+    """Re-activate a soft-deleted organisation."""
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    if request.session.get("user_role") != "superadmin":
+        return RedirectResponse("/", 302)
+
+    from app.models.account import Organization
+    from app.models.audit import AuditLog, AuditAction
+
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    if not org:
+        return RedirectResponse("/superadmin/organizations?msg=not_found", 302)
+
+    org.is_active = True
+    db.add(AuditLog(
+        action=AuditAction.CONFIG_CHANGED,
+        actor="superadmin",
+        organization_id=org_id,
+        message=f"Organisation '{org.name}' reactivated (is_active=True)",
+    ))
+    db.commit()
+
+    logger.info(f"Organisation '{org.name}' (ID: {org_id}) reactivated by superadmin")
+    return RedirectResponse(f"/superadmin/organizations/{org_id}?msg=reactivated", 302)
 
 
 @app.get("/superadmin/rules", response_class=HTMLResponse)
@@ -1696,6 +1976,50 @@ async def superadmin_rules_toggle_tier(rule_id: str, request: Request, tier: str
         db.commit()
 
     return RedirectResponse("/superadmin/rules?saved=1", 302)
+
+
+@app.post("/superadmin/rules/sync-all")
+async def superadmin_rules_sync_all(request: Request, db: Session = Depends(get_db)):
+    """
+    Propagate global template rule settings (enabled_globally, threshold, tier_overrides)
+    to ALL org-level rule copies.
+    Only overwrites values that still match the previous template snapshot — org-customised
+    rules (updated_by != 'superadmin' / 'migration' / 'system') are left unchanged.
+    Passing force=1 in the query string overwrites ALL org rules regardless.
+    """
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    if request.session.get("user_role") != "superadmin":
+        return RedirectResponse("/", 302)
+
+    force = request.query_params.get("force", "0") == "1"
+    from app.models.config import RuleConfig
+    from sqlalchemy.orm.attributes import flag_modified
+
+    # Load all global template rules
+    global_rules = db.query(RuleConfig).filter(RuleConfig.organization_id == None).all()
+    synced = 0
+    skipped = 0
+    for g in global_rules:
+        org_rules = db.query(RuleConfig).filter(
+            RuleConfig.rule_id == g.rule_id,
+            RuleConfig.organization_id != None,
+        ).all()
+        for org_rule in org_rules:
+            # Skip if the org admin has explicitly customised this rule, unless force=1
+            if not force and org_rule.updated_by not in (None, "superadmin", "migration", "system", "admin"):
+                skipped += 1
+                continue
+            org_rule.enabled_globally = g.enabled_globally
+            org_rule.threshold = g.threshold
+            org_rule.tier_overrides = dict(g.tier_overrides or {})
+            flag_modified(org_rule, "tier_overrides")
+            org_rule.updated_by = "superadmin:sync"
+            synced += 1
+
+    db.commit()
+    logger.info(f"Rules sync-all: {synced} org rules updated, {skipped} skipped (org-customised)")
+    return RedirectResponse(f"/superadmin/rules?saved=1&synced={synced}&skipped={skipped}", 302)
 
 
 @app.post("/superadmin/rules/{rule_id}/threshold")
@@ -1848,64 +2172,46 @@ async def superadmin_user_reset_password(user_id: int, request: Request, db: Ses
     if not user:
         return RedirectResponse("/superadmin/users?error=User+not+found", 302)
 
-    # Generate token
     token = secrets.token_urlsafe(32)
     user.reset_token = token
     user.reset_token_expires = datetime.utcnow() + timedelta(hours=1)
     db.commit()
 
-    # Generate link
     host = request.headers.get("host", "localhost:8501")
     scheme = "https" if request.url.scheme == "https" else "http"
     reset_link = f"{scheme}://{host}/reset-password?token={token}"
 
     subject = "Reset Your VCPilot Password"
-    html_content = f"""
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px;">
-        <h2 style="color: #1d4ed8; margin-bottom: 20px;">VCPilot Password Reset</h2>
-        <p>A password reset has been initiated for your account.</p>
-        <p>Please click the button below to choose a new password:</p>
-        <div style="text-align: center; margin: 30px 0;">
-            <a href="{reset_link}" style="background-color: #1d4ed8; color: white; padding: 12px 24px; text-decoration: none; font-weight: bold; border-radius: 6px; display: inline-block;">Reset Password</a>
-        </div>
-        <p>Or copy and paste this link into your browser:</p>
-        <p style="font-size: 12px; word-break: break-all; color: #6b7280;">{reset_link}</p>
-        <p style="color: #6b7280; font-size: 14px;">This link will expire in 1 hour.</p>
-    </div>
-    """
+    html_content = (
+        '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px">'
+        '<h2 style="color:#1d4ed8">VCPilot Password Reset</h2>'
+        '<p>Click the button below to set a new password:</p>'
+        f'<div style="text-align:center;margin:30px 0"><a href="{reset_link}" '
+        'style="background:#1d4ed8;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px">Reset Password</a></div>'
+        f'<p style="font-size:12px;color:#6b7280">Or copy: {reset_link}</p>'
+        '<p style="color:#6b7280;font-size:14px">This link expires in 1 hour.</p></div>'
+    )
 
     email_sent = send_email(user.email, subject, html_content)
     if email_sent:
         return RedirectResponse("/superadmin/users?saved=reset_email", 302)
     else:
         import urllib.parse
-        return RedirectResponse(f"/superadmin/users?saved=reset_manual&token={token}&email={urllib.parse.quote(user.email)}", 302)
+        encoded_email = urllib.parse.quote(user.email)
+        return RedirectResponse(f"/superadmin/users?saved=reset_manual&token={token}&email={encoded_email}", 302)
 
 
 @app.get("/reset-password", response_class=HTMLResponse)
 async def reset_password_get(request: Request, token: str = Query(...), db: Session = Depends(get_db)):
     from datetime import datetime
     from app.models.auth import User
-
     user = db.query(User).filter(User.reset_token == token, User.reset_token_expires > datetime.utcnow()).first()
     if not user:
         return templates.TemplateResponse("reset_password.html", {"request": request, "token": token, "error": "Invalid or expired reset token.", "success": False})
-
     return templates.TemplateResponse("reset_password.html", {"request": request, "token": token, "error": None, "success": False})
 
 
 @app.post("/reset-password")
 async def reset_password_post(request: Request, token: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     from datetime import datetime
-    from app.models.auth import User, hash_password
-
-    user = db.query(User).filter(User.reset_token == token, User.reset_token_expires > datetime.utcnow()).first()
-    if not user:
-        return templates.TemplateResponse("reset_password.html", {"request": request, "token": token, "error": "Invalid or expired reset token.", "success": False})
-
-    user.password_hash = hash_password(password)
-    user.reset_token = None
-    user.reset_token_expires = None
-    db.commit()
-
-    return templates.TemplateResponse("reset_password.html", {"request": request, "token": token, "error": None, "success": True})
+    from app.models.auth import User, hash_p

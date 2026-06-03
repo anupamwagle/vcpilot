@@ -1,6 +1,11 @@
 """
 VCPilot Celery Application.
 Broker: Redis. All tasks are registered here and imported by workers.
+
+Beat schedule file: /tmp/celerybeat-schedule (always writable — no permission issues).
+Beat command: celery -A app.tasks.celery_app beat --loglevel=info
+              --schedule=/tmp/celerybeat-schedule --pidfile=/tmp/celerybeat.pid
+              --max-interval=30
 """
 from celery import Celery
 from celery.schedules import crontab
@@ -40,6 +45,11 @@ app.conf.update(
 
     # Result retention
     result_expires=86400,  # 24 hours
+
+    # Beat scheduler — store state in /tmp so any user can write it.
+    # This matches the --schedule flag on the beat container command.
+    beat_schedule_filename="/tmp/celerybeat-schedule",
+    beat_max_loop_interval=30,  # seconds — keeps beat responsive
 
     # Beat schedule (ASX-aligned, all times AEST/AEDT)
     beat_schedule={

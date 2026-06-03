@@ -5,11 +5,20 @@
 {% block content %}
 
 {% set saved = request.query_params.get('saved', '') %}
+{% set msg   = request.query_params.get('msg', '') %}
+{% set deactivated_name = request.query_params.get('name', '') %}
 {% if saved == '1' %}
 <div class="alert-success mb-4">
   <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
   Organisation created and admin user assigned successfully.
 </div>
+{% elif msg == 'deactivated' %}
+<div class="alert-danger mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm-1-9a1 1 0 012 0v4a1 1 0 01-2 0V9zm1-5a1 1 0 100 2 1 1 0 000-2z" clip-rule="evenodd"/></svg>
+  Organisation <strong>{{ deactivated_name }}</strong> deactivated. All data retained — reactivate from its detail page.
+</div>
+{% elif msg == 'not_found' %}
+<div class="alert-danger mb-4">Organisation not found.</div>
 {% endif %}
 
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">

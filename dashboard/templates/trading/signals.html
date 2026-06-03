@@ -3,10 +3,16 @@
 {% block page_title %}Signals · {{ signal_date }}{% endblock %}
 
 {% block content %}
-{% if request.query_params.get('msg') == 'screen' %}
+{% set msg = request.query_params.get('msg', '') %}
+{% if msg == 'screen' %}
 <div class="alert-success mb-4">
   <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
   Screener queued — this page will show results once the worker finishes (usually within a few minutes). Refresh to see updates.
+</div>
+{% elif msg == 'promoted' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Watchlist stock promoted to signal successfully.
 </div>
 {% endif %}
 {% if not signals %}
@@ -47,6 +53,12 @@
       {% if s.status == 'PENDING' %}
       <form method="post" action="/signals/{{ s.id }}/skip">
         <button type="submit" class="btn-ghost text-xs py-1">Skip</button>
+      </form>
+      {% elif s.status == 'SKIPPED' %}
+      <form method="post" action="/signals/{{ s.id }}/unskip">
+        <button type="submit" class="btn-ghost text-xs py-1" style="color:var(--t-accent);border-color:var(--t-accent)">
+          ↩ Unskip
+        </button>
       </form>
       {% endif %}
     </div>

@@ -249,6 +249,9 @@ def get_fundamentals(ticker: str) -> dict:
     Returns dict with eps_quarterly, revenue_quarterly, roe, net_margin, etc.
     """
     result = {
+        "company_name": "",
+        "sector": "",
+        "industry": "",
         "eps_quarterly": [],
         "revenue_quarterly": [],
         "roe": None,
@@ -280,6 +283,15 @@ def get_fundamentals(ticker: str) -> dict:
                     )
         except Exception:
             pass
+
+        # Company name — prefer longName, fall back to shortName
+        long_name = info.get("longName") or info.get("shortName") or ""
+        if long_name:
+            result["company_name"] = long_name.strip()
+
+        # Sector / industry
+        result["sector"]   = info.get("sector") or ""
+        result["industry"] = info.get("industry") or ""
 
         # ROE, margins from info
         result["roe"] = info.get("returnOnEquity")

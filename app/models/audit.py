@@ -52,7 +52,8 @@ class AuditLog(Base):
     id              = Column(Integer, primary_key=True)
     action          = Column(Enum(AuditAction), nullable=False, index=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
-    actor           = Column(String(64), default="system")   # system | admin | agent | celery
+    user_id         = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    actor           = Column(String(128), default="system")  # system | admin | agent | celery | user email
     entity_type     = Column(String(64), nullable=True)       # e.g. "RuleConfig", "Position"
     entity_id       = Column(String(64), nullable=True)       # e.g. rule_id or position id
     ticker          = Column(String(16), nullable=True, index=True)
@@ -70,6 +71,21 @@ class AuditLog(Base):
     ip_address  = Column(String(45), nullable=True)
 
     created_at  = Column(DateTime, default=datetime.utcnow, index=True)
+
+    @classmethod
+    def safe(cls, db, **kwargs):
+        """Write an audit log entry, silently ignoring DB errors (e.g. missing column)."""
+        try:
+            entry = cls(**kwargs)
+            db.add(entry)
+            db.flush()
+        except Exception as e:
+            from loguru import logger
+            logger.warning(f"AuditLog write failed (non-fatal): {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     def __repr__(self):
         return f"<AuditLog {self.action} by={self.actor} at={self.created_at}>"

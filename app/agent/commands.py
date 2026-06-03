@@ -11,6 +11,7 @@ Supported commands (case-insensitive):
   RESUME              — Resume new trade entries
   REPORT              — Generate daily P&L report
   SKIP <TICKER>       — Cancel a pending signal for today
+  UNSKIP <TICKER>     — Restore a skipped signal back to PENDING
   EXIT <TICKER>       — Emergency close an open position (next open)
   STOP <TICKER> <PRICE> — Update stop loss for a position
   RULE <RULE_ID> ON|OFF — Toggle a rule globally
@@ -65,6 +66,7 @@ class AgentCommandHandler:
             "RESUME":    self.cmd_resume,
             "REPORT":    self.cmd_report,
             "SKIP":      self.cmd_skip,
+            "UNSKIP":    self.cmd_unskip,
             "EXIT":      self.cmd_exit,
             "STOP":      self.cmd_stop,
             "RULE":      self.cmd_rule,
@@ -206,6 +208,26 @@ class AgentCommandHandler:
                     detail={"action": "skip_signal"})
         return f"✅ Signal for *{ticker}* skipped for today."
 
+    def cmd_unskip(self, args) -> str:
+        if not args:
+            return "Usage: UNSKIP <TICKER>"
+        ticker = args[0].replace(".AX", "") + ".AX"
+        with get_db() as db:
+            signal = db.query(Signal).filter(
+                Signal.ticker == ticker,
+                Signal.signal_date == date.today(),
+                Signal.status == SignalStatus.SKIPPED,
+                Signal.organization_id == self.organization_id
+            ).first()
+            if signal:
+                signal.status = SignalStatus.PENDING
+                db.add(signal)
+            else:
+                return f"No skipped signal found for {ticker} today."
+        self._audit(AuditAction.MANUAL_OVERRIDE, ticker=ticker,
+                    detail={"action": "unskip_signal"})
+        return f"↩ Signal for *{ticker}* restored to PENDING."
+
     def cmd_exit(self, args) -> str:
         if not args:
             return "Usage: EXIT <TICKER>"
@@ -305,6 +327,7 @@ class AgentCommandHandler:
             "PAUSE / RESUME — Toggle trading\n"
             "REPORT — Daily P&L report\n"
             "SKIP <TICKER> — Cancel today's signal\n"
+            "UNSKIP <TICKER> — Restore skipped signal\n"
             "EXIT <TICKER> — Emergency exit position\n"
             "STOP <TICKER> <PRICE> — Update stop loss\n"
             "RULE <ID> ON|OFF — Toggle a rule\n"

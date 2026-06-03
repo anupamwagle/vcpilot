@@ -5,12 +5,35 @@
 {% block content %}
 
 {% set saved = request.query_params.get('saved', '') %}
+{% set synced = request.query_params.get('synced', '') %}
+{% set skipped = request.query_params.get('skipped', '') %}
 {% if saved == '1' %}
 <div class="alert-success mb-4">
   <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
   Rules configuration updated successfully.
+  {% if synced %}Propagated to {{ synced }} org rule copies ({{ skipped }} org-customised rows skipped).{% endif %}
 </div>
 {% endif %}
+
+{# ── Sync toolbar ──────────────────────────────────────────────────────── #}
+<div class="card p-4 mb-4" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem">
+  <div>
+    <p class="text-sm font-semibold" style="color:var(--text)">Propagate to Organisations</p>
+    <p class="text-xs" style="color:var(--text-subtle);margin-top:.125rem">
+      Push current global rule settings to all organisation copies.
+      <em>Soft sync</em> skips rules already customised by an org admin.
+      <em>Force sync</em> overwrites everything.
+    </p>
+  </div>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+    <form method="post" action="/superadmin/rules/sync-all">
+      <button type="submit" class="btn-admin text-xs py-1.5">🔄 Soft Sync to All Orgs</button>
+    </form>
+    <form method="post" action="/superadmin/rules/sync-all?force=1" onsubmit="return confirm('This will overwrite ALL org-level rule customisations. Continue?')">
+      <button type="submit" class="btn-ghost text-xs py-1.5" style="color:var(--neg);border-color:var(--neg)">⚠ Force Sync (overwrite all)</button>
+    </form>
+  </div>
+</div>
 
 <div class="card overflow-hidden mb-6">
   <div class="px-4 py-3 flex items-center justify-between" style="background:var(--surface-alt);border-bottom:1px solid var(--border)">

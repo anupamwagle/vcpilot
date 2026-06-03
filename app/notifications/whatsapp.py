@@ -76,6 +76,7 @@ class WhatsAppNotifier:
         Start the WAHA session if it isn't running yet.
         Should be called once on app startup (or from a Celery task).
         Returns True if session is/becomes WORKING.
+        Does NOT force-restart — use restart_session() for that.
         """
         try:
             # Check current status
@@ -89,7 +90,7 @@ class WhatsAppNotifier:
                     logger.info(f"WAHA session '{self.session}' already WORKING")
                     return True
                 elif status == "SCAN_QR_CODE":
-                    logger.warning("WAHA session needs QR code scan — visit http://localhost:3000/dashboard")
+                    logger.warning("WAHA session needs QR code scan — visit /admin/whatsapp to scan")
                     return False
 
             # Session not started — start it
@@ -101,8 +102,6 @@ class WhatsAppNotifier:
             if start.status_code in (200, 201):
                 new_status = start.json().get("status", "")
                 logger.info(f"WAHA session started — status: {new_status}")
-                if new_status == "SCAN_QR_CODE":
-                    logger.warning("QR scan required — visit http://localhost:3000/dashboard to scan")
                 return new_status == "WORKING"
             else:
                 logger.warning(f"WAHA session start failed: {start.status_code} {start.text[:100]}")
@@ -111,6 +110,53 @@ class WhatsAppNotifier:
         except Exception as e:
             logger.error(f"WAHA session ensure failed: {e}")
             return False
+
+    def restart_session(self) -> str:
+        """
+        Force-stop the existing session (if any) and start a fresh one.
+        A fresh start returns SCAN_QR_CODE which triggers the QR display.
+        Returns the new session status string.
+        """
+        try:
+            # 1. Try to stop the existing session gracefully
+            stop = httpx.post(
+                f"{self.base_url}/api/sessions/{self.session}/stop",
+                json={},
+                headers=self._headers, timeout=10,
+            )
+            logger.info(f"WAHA stop → {stop.status_code}")
+        except Exception as e:
+            logger.debug(f"WAHA stop failed (non-fatal): {e}")
+
+        try:
+            # 2. Delete session to fully clean state (WAHA Core)
+            httpx.delete(
+                f"{self.base_url}/api/sessions/{self.session}",
+                headers=self._headers, timeout=10,
+            )
+        except Exception:
+            pass
+
+        import time
+        time.sleep(1)   # brief pause for WAHA to clean up
+
+        try:
+            # 3. Start fresh session — should return SCAN_QR_CODE
+            start = httpx.post(
+                f"{self.base_url}/api/sessions/start",
+                json={"name": self.session},
+                headers=self._headers, timeout=15,
+            )
+            if start.status_code in (200, 201):
+                new_status = start.json().get("status", "STARTING")
+                logger.info(f"WAHA session restarted — status: {new_status}")
+                return new_status
+            else:
+                logger.warning(f"WAHA restart start failed: {start.status_code} {start.text[:100]}")
+                return "FAILED"
+        except Exception as e:
+            logger.error(f"WAHA restart failed: {e}")
+            return "ERROR"
 
     def get_qr(self) -> str | None:
         """Return base64 QR code PNG for the current session, or None."""

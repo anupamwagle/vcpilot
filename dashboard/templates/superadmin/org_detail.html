@@ -4,9 +4,27 @@
 
 {% block content %}
 
-<div class="mb-4">
+{# ── Back nav + flash messages ─────────────────────────────────────────── #}
+<div class="mb-4" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem">
   <a href="/superadmin/organizations" class="text-xs font-semibold" style="color:var(--a-accent)">← Back to Organisations</a>
+  {% if not organization.is_active %}
+  <span class="text-xs font-bold px-2 py-0.5 rounded" style="background:#fef2f2;color:var(--neg);border:1px solid var(--neg)">
+    ⚠ INACTIVE — This organisation is soft-deleted
+  </span>
+  {% endif %}
 </div>
+
+{% set msg = request.query_params.get('msg', '') %}
+{% if msg == 'reactivated' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Organisation reactivated — all scheduled tasks will include it again.
+</div>
+{% elif msg == 'cannot_deactivate_self' %}
+<div class="alert-danger mb-4">
+  Cannot deactivate the organisation you are currently viewing as. Switch to a different org first.
+</div>
+{% endif %}
 
 <!-- Overview Cards -->
 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
@@ -144,6 +162,38 @@
   </div>
   {% else %}
   <div class="p-10 text-center text-xs" style="color:var(--text-subtle)">No activity logged yet for this organisation.</div>
+  {% endif %}
+</div>
+
+
+{# ── Danger Zone ───────────────────────────────────────────────────────── #}
+<div class="card p-4 mt-6" style="border-color:var(--neg)">
+  <p class="text-sm font-bold mb-1" style="color:var(--neg)">⚠ Danger Zone</p>
+  <p class="text-xs mb-3" style="color:var(--text-subtle)">
+    Soft-deleting sets the organisation to <strong>inactive</strong>. All data (users, signals, trades, rules) is preserved.
+    Celery tasks stop processing it immediately. Reactivate at any time.
+  </p>
+
+  {% if organization.is_active %}
+  <form method="post" action="/superadmin/organizations/{{ organization.id }}/deactivate"
+        onsubmit="return confirm('Deactivate {{ organization.name }}?\n\nScheduled tasks will stop for this org. Data is preserved and it can be reactivated.')">
+    <button type="submit"
+            style="font-size:.75rem;padding:.375rem .875rem;border-radius:.375rem;font-weight:700;
+                   background:transparent;color:var(--neg);border:1px solid var(--neg);cursor:pointer">
+      🗑 Deactivate Organisation
+    </button>
+  </form>
+  {% else %}
+  <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+    <p class="text-xs font-bold" style="color:var(--neg)">This organisation is currently inactive.</p>
+    <form method="post" action="/superadmin/organizations/{{ organization.id }}/reactivate">
+      <button type="submit"
+              style="font-size:.75rem;padding:.375rem .875rem;border-radius:.375rem;font-weight:700;
+                     background:transparent;color:var(--pos);border:1px solid var(--pos);cursor:pointer">
+        ↺ Reactivate Organisation
+      </button>
+    </form>
+  </div>
   {% endif %}
 </div>
 

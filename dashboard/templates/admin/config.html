@@ -30,7 +30,7 @@
       <input type="hidden" name="value" id="val-{{ cfg.id }}" value="{{ cfg.value }}"/>
       <label class="toggle-wrap" style="margin-right:1rem">
         <input type="checkbox" class="toggle-inp"
-               {% if cfg.value.lower() == 'true' %}checked{% endif %}
+               {% if (cfg.value or '').lower() == 'true' %}checked{% endif %}
                onchange="document.getElementById('val-{{ cfg.id }}').value = this.checked ? 'true' : 'false'; this.form.submit();"/>
         <div class="toggle-track"></div>
         <div class="toggle-thumb"></div>

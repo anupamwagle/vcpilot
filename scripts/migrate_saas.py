@@ -145,6 +145,19 @@ def migrate():
                 conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_type};"))
                 conn.commit()
 
+        # Add user_id column to audit_logs if not exists
+        audit_user_col = conn.execute(text("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'audit_logs' AND column_name = 'user_id';
+        """)).fetchone()
+        if not audit_user_col:
+            logger.info("Adding 'user_id' column to 'audit_logs'...")
+            conn.execute(text("""
+                ALTER TABLE audit_logs
+                ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+            """))
+            conn.commit()
+
         # Add organization_id column to rule_configs if not exists
         rule_col_exists = conn.execute(text("""
             SELECT column_name 
@@ -314,7 +327,8 @@ def migrate():
             ("whatsapp_enabled", "true", "BOOLEAN", "WhatsApp Alerts", "Enables real-time notifications", "whatsapp", False),
             ("whatsapp_admin_number", "", "STRING", "WhatsApp Admin Number", "Number to send alerts and receive commands JID format", "whatsapp", False),
             ("whatsapp_api_key", settings.waha_api_key, "STRING", "WhatsApp API Key", "API key for the WhatsApp (WAHA) service", "whatsapp", True),
-            ("whatsapp_session_name", "default", "STRING", "WhatsApp Session Name", "The session name registered in WAHA (e.g. 'default' for WAHA Core, or org-specific for WAHA Plus)", "whatsapp", False),
+            # Session name set per-org below using org_id — do not hardcode "default" here
+            ("whatsapp_session_name", "default", "STRING", "WhatsApp Session Name", "WAHA session name (always 'default' for WAHA Core; use WAHA Plus for per-org sessions)", "whatsapp", False),
             ("ibkr_account", "", "STRING", "IBKR Account ID", "Interactive Brokers account number", "broker", False),
             ("ibkr_username", "", "STRING", "IBKR Username", "Interactive Brokers login username", "broker", False),
             ("ibkr_password", "", "STRING", "IBKR Password", "Interactive Brokers login password", "broker", True),

@@ -282,6 +282,15 @@ def run_daily_screen(self):
 
                     # --- Fundamentals ---
                     fundamentals = get_fundamentals(ticker)
+
+                    # Persist company name/sector to Stock row (free — info already fetched)
+                    if fundamentals.get("company_name"):
+                        with get_db() as _db:
+                            _stk = _db.query(Stock).filter(Stock.ticker == ticker).first()
+                            if _stk:
+                                _stk.name     = fundamentals["company_name"]
+                                _stk.sector   = fundamentals.get("sector") or _stk.sector
+                                _stk.industry = fundamentals.get("industry") or _stk.industry
                     fund_results = evaluate_fundamentals(ticker, fundamentals, engine)
                     fund_passed  = sum(1 for r in fund_results.values() if r.passed)
                     fund_total   = len(fund_results)
@@ -409,9 +418,11 @@ def run_full_setup(self):
 
 
 @app.task(name="app.tasks.screening._run_screen_force", bind=True, max_retries=1)
-def _run_screen_force(self):
+def _run_screen_force(self, organization_id: int = None):
     """
     Full Minervini screen bypassing the trading-day gate. For manual triggers.
+    When organization_id is provided, runs ONLY for that org (manual dashboard trigger).
+    When None (scheduled or superadmin), runs for all active orgs.
     Writes a SCREENER_TICKER audit row per stock so the Task Log shows live progress.
     """
     logger.info("Running forced screen (bypassing trading-day check)...")
@@ -420,7 +431,10 @@ def _run_screen_force(self):
     try:
         with get_db() as db:
             from app.models.account import Organization
-            orgs = db.query(Organization).filter(Organization.is_active == True).all()
+            org_query = db.query(Organization).filter(Organization.is_active == True)
+            if organization_id:
+                org_query = org_query.filter(Organization.id == organization_id)
+            orgs = org_query.all()
 
             tickers = [s.ticker for s in db.query(Stock).filter(
                 Stock.is_active == True, Stock.blacklisted == False
@@ -511,6 +525,15 @@ def _run_screen_force(self):
                     if trend_passed == trend_total:
                         # ── All trend rules pass → run fundamentals ─────────────
                         fundamentals = get_fundamentals(ticker)
+
+                        # Persist company name/sector to Stock row (free — info already fetched)
+                        if fundamentals.get("company_name"):
+                            with get_db() as _db:
+                                _stk = _db.query(Stock).filter(Stock.ticker == ticker).first()
+                                if _stk:
+                                    _stk.name     = fundamentals["company_name"]
+                                    _stk.sector   = fundamentals.get("sector") or _stk.sector
+                                    _stk.industry = fundamentals.get("industry") or _stk.industry
                         fund_results = evaluate_fundamentals(ticker, fundamentals, engine)
                         fund_passed  = sum(1 for r in fund_results.values() if r.passed)
                         fund_total   = len(fund_results)
