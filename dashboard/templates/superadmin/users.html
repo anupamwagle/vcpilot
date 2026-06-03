@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% block title %}Super Admin · Users{% endblock %}
+{% block page_title %}Global Users Manager{% endblock %}
+
+{% block content %}
+
+{% set saved = request.query_params.get('saved', '') %}
+{% if saved == '1' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  User created and role assigned successfully.
+</div>
+{% elif saved == 'reset_email' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Password reset link sent to the user's email successfully.
+</div>
+{% elif saved == 'reset_manual' %}
+<div class="alert-warning mb-4">
+  <p class="font-bold flex items-center gap-1.5 text-amber-800 dark:text-amber-400">
+    ⚠️ Password Reset Email Delivery Offline / Skipped
+  </p>
+  <p class="text-xs mt-1 text-amber-700 dark:text-amber-300">
+    SMTP was offline or skipped in development. Copy this password reset link and send it manually to the user:
+  </p>
+  <code class="block bg-slate-950 text-emerald-400 p-2 rounded mt-2 font-mono text-xs select-all border border-amber-900/30">
+    http://{{ request.headers.get('host', 'localhost:8501') }}/reset-password?token={{ request.query_params.get('token') }}
+  </code>
+</div>
+{% endif %}
+
+{% if error %}
+<div class="alert-danger mb-4">
+  {{ error }}
+</div>
+{% endif %}
+
+<!-- Filters & Search Bar -->
+<div class="card p-4 mb-6">
+  <form method="get" class="flex flex-wrap items-center gap-3">
+    <div class="flex-1 min-w-[240px]">
+      <input type="text" name="search" value="{{ search or '' }}" placeholder="Search by name or email..." class="input w-full text-xs" />
+    </div>
+    <div class="w-48">
+      <select name="org_id" class="input w-full text-xs">
+        <option value="">All Organisations</option>
+        {% for org in organizations %}
+          <option value="{{ org.id }}" {% if selected_org_id|string == org.id|string %}selected{% endif %}>{{ org.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn-primary text-xs py-1.5 px-4">Apply Filters</button>
+    {% if search or selected_org_id %}
+      <a href="/superadmin/users" class="btn-ghost text-xs py-1.5 px-3">Clear</a>
+    {% endif %}
+  </form>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+
+  <!-- Create User Form (Passwordless) -->
+  <div class="card p-4 lg:col-span-1 h-fit">
+    <p class="section-title mb-4">👤 Create User Account</p>
+    <form method="post" action="/superadmin/users/create" class="space-y-4">
+      <div>
+        <label class="field-label mb-1.5" for="name">Full Name</label>
+        <input type="text" id="name" name="name" class="input w-full text-xs" placeholder="e.g. Richard Wyckoff" required />
+      </div>
+
+      <div>
+        <label class="field-label mb-1.5" for="email">Email Address</label>
+        <input type="email" id="email" name="email" class="input w-full text-xs" placeholder="e.g. trader@gmail.com" required />
+      </div>
+
+      <div>
+        <label class="field-label mb-1.5" for="organization_id">Assigned Organisation</label>
+        <select id="organization_id" name="organization_id" class="input w-full text-xs" required>
+          <option value="" disabled selected>Select Organisation...</option>
+          {% for org in organizations %}
+            <option value="{{ org.id }}">{{ org.name }} ({{ org.tier.value }})</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div>
+        <label class="field-label mb-1.5" for="role_id">Assigned Role</label>
+        <select id="role_id" name="role_id" class="input w-full text-xs" required>
+          <option value="" disabled selected>Select Role...</option>
+          {% for role in roles %}
+            <option value="{{ role.id }}">{{ role.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <p class="text-[10px]" style="color:var(--text-subtle)">
+        * User account is created without password. They can authenticate using email OTP or set up a password via a password reset link.
+      </p>
+
+      <button type="submit" class="btn-primary w-full text-xs py-2 mt-2">Create User</button>
+    </form>
+  </div>
+
+  <!-- Users List -->
+  <div class="card lg:col-span-2 overflow-hidden">
+    <div class="section-head px-4 py-3">
+      <p class="section-title">👥 Registered Users</p>
+      <span class="text-xs" style="color:var(--text-subtle)">{{ users|length }} users showing</span>
+    </div>
+
+    {% if users %}
+    <div class="overflow-x-auto">
+      <table class="w-full text-left border-collapse">
+        <thead>
+          <tr style="background:var(--surface-alt);border-bottom:1px solid var(--border)">
+            <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">User</th>
+            <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Organisation</th>
+            <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Role</th>
+            <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Created</th>
+            <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for u in users %}
+          <tr class="tbl-row border-b last:border-0" style="border-color:var(--border)">
+            <td class="p-3">
+              <span class="text-sm font-semibold block" style="color:var(--text)">{{ u.name or '—' }}</span>
+              <span class="text-xs font-mono block" style="color:var(--text-subtle)">{{ u.email }}</span>
+            </td>
+            <td class="p-3">
+              {% if u.organization %}
+                <a href="/superadmin/organizations/{{ u.organization.id }}" class="text-xs font-semibold hover:underline" style="color:var(--text)">
+                  {{ u.organization.name }}
+                </a>
+              {% else %}
+                <span class="text-xs" style="color:var(--text-muted)">—</span>
+              {% endif %}
+            </td>
+            <td class="p-3 text-xs font-semibold" style="color:var(--a-accent)">
+              {% for r in u.roles %}
+                {{ r.name }}{% if not loop.last %}, {% endif %}
+              {% else %}
+                No Role
+              {% endfor %}
+            </td>
+            <td class="p-3 text-xs font-mono" style="color:var(--text-subtle)">
+              {{ u.created_at.strftime('%Y-%m-%d') if u.created_at else 'N/A' }}
+            </td>
+            <td class="p-3 space-y-2">
+              <!-- Edit/Manage role drop form -->
+              <form method="post" action="/superadmin/users/{{ u.id }}/update-role" class="flex items-center gap-1">
+                <select name="role_id" class="input py-0.5 px-1 text-[10px] w-24">
+                  {% for r in roles %}
+                    <option value="{{ r.id }}" {% if r in u.roles %}selected{% endif %}>{{ r.name }}</option>
+                  {% endfor %}
+                </select>
+                <button type="submit" class="btn-ghost text-[10px] px-1 py-0.5 hover:underline" style="color:var(--pos)">Save</button>
+              </form>
+
+              <!-- Reset Password form -->
+              <form method="post" action="/superadmin/users/{{ u.id }}/reset-password" class="block">
+                <button type="submit" class="btn-ghost text-[10px] px-1 py-0.5 hover:underline text-amber-600 dark:text-amber-400">
+                  🔑 Reset Password
+                </button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="p-8 text-center text-xs" style="color:var(--text-subtle)">
+      No user accounts matched the filter criteria.
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+
+{% endblock %}

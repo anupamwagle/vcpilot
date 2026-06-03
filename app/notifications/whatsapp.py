@@ -15,33 +15,171 @@ from app.config import settings
 class WhatsAppNotifier:
     """Send messages to the admin WhatsApp via WAHA."""
 
-    def __init__(self):
-        self.base_url = settings.waha_api_url.rstrip("/")
-        self.session  = settings.waha_session
-        self.api_key  = settings.waha_api_key
-        self.admin_jid= settings.whatsapp_admin_jid
-        self._headers = {"X-Api-Key": self.api_key, "Content-Type": "application/json"}
+    def __init__(self, organization_id=None):
+        self.organization_id = organization_id
+        self.base_url  = settings.waha_api_url.rstrip("/")
+        if organization_id:
+            self.session = f"org_{organization_id}"
+        else:
+            self.session = settings.waha_session   # always "default" for WAHA Core
+        self.api_key   = settings.waha_api_key
+        
+        # Default fallback configurations
+        self.whatsapp_enabled = settings.whatsapp_enabled
+        self.admin_jid = settings.admin_jid
+        
+        if organization_id:
+            try:
+                from app.database import SessionLocal
+                from app.models.config import SystemConfig
+                db = SessionLocal()
+                try:
+                    def cfg(key):
+                        c = db.query(SystemConfig).filter(
+                            SystemConfig.key == key, 
+                            SystemConfig.organization_id == organization_id
+                        ).first()
+                        return c.value if c else None
+                        
+                    enabled_val = cfg("whatsapp_enabled")
+                    if enabled_val is not None:
+                        self.whatsapp_enabled = enabled_val.lower() in ("true", "1", "yes")
+                        
+                    number_val = cfg("whatsapp_admin_number")
+                    if number_val:
+                        num = number_val.lstrip("+").replace(" ", "")
+                        self.admin_jid = f"{num}@c.us"
+
+                    api_key_val = cfg("whatsapp_api_key")
+                    if api_key_val:
+                        self.api_key = api_key_val
+
+                    session_val = cfg("whatsapp_session_name")
+                    if session_val:
+                        self.session = session_val
+                    else:
+                        self.session = f"org_{organization_id}"
+                finally:
+                    db.close()
+            except Exception:
+                pass
+
+        self._headers  = {"X-Api-Key": self.api_key, "Content-Type": "application/json"}
+
+
+    # -------------------------------------------------------------------------
+    # Session management
+    # -------------------------------------------------------------------------
+
+    def ensure_session(self) -> bool:
+        """
+        Start the WAHA session if it isn't running yet.
+        Should be called once on app startup (or from a Celery task).
+        Returns True if session is/becomes WORKING.
+        """
+        try:
+            # Check current status
+            resp = httpx.get(
+                f"{self.base_url}/api/sessions/{self.session}",
+                headers=self._headers, timeout=10,
+            )
+            if resp.status_code == 200:
+                status = resp.json().get("status", "")
+                if status == "WORKING":
+                    logger.info(f"WAHA session '{self.session}' already WORKING")
+                    return True
+                elif status == "SCAN_QR_CODE":
+                    logger.warning("WAHA session needs QR code scan — visit http://localhost:3000/dashboard")
+                    return False
+
+            # Session not started — start it
+            start = httpx.post(
+                f"{self.base_url}/api/sessions/start",
+                json={"name": self.session},
+                headers=self._headers, timeout=15,
+            )
+            if start.status_code in (200, 201):
+                new_status = start.json().get("status", "")
+                logger.info(f"WAHA session started — status: {new_status}")
+                if new_status == "SCAN_QR_CODE":
+                    logger.warning("QR scan required — visit http://localhost:3000/dashboard to scan")
+                return new_status == "WORKING"
+            else:
+                logger.warning(f"WAHA session start failed: {start.status_code} {start.text[:100]}")
+                return False
+
+        except Exception as e:
+            logger.error(f"WAHA session ensure failed: {e}")
+            return False
+
+    def get_qr(self) -> str | None:
+        """Return base64 QR code PNG for the current session, or None."""
+        try:
+            resp = httpx.get(
+                f"{self.base_url}/api/{self.session}/auth/qr",
+                headers=self._headers, timeout=10,
+            )
+            if resp.status_code == 200:
+                content_type = resp.headers.get("content-type", "")
+                if "image" in content_type or resp.content.startswith(b"\x89PNG"):
+                    import base64
+                    return base64.b64encode(resp.content).decode("utf-8")
+                
+                try:
+                    data = resp.json()
+                    return data.get("value")   # base64 PNG
+                except Exception:
+                    import base64
+                    return base64.b64encode(resp.content).decode("utf-8")
+        except Exception as e:
+            logger.debug(f"QR fetch failed: {e}")
+        return None
+
+    def get_session_status(self) -> dict:
+        """Return raw session status dict from WAHA."""
+        try:
+            resp = httpx.get(
+                f"{self.base_url}/api/sessions/{self.session}",
+                headers=self._headers, timeout=8,
+            )
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception as e:
+            logger.debug(f"WAHA status check failed: {e}")
+        return {"status": "UNKNOWN", "error": "Could not reach WAHA"}
+
+    # -------------------------------------------------------------------------
+    # Sending
+    # -------------------------------------------------------------------------
 
     def send(self, message: str, chat_id: str = None) -> bool:
         """Send a text message. Defaults to admin chat."""
+        if not self.whatsapp_enabled:
+            logger.info(f"WhatsApp Alerts are disabled for Org {self.organization_id}. Did not send message: {message[:60]}...")
+            return False
+
+
         target = chat_id or self.admin_jid
         if not target:
-            logger.warning("No WhatsApp target configured")
+            logger.warning("WhatsApp: no target JID configured — set WHATSAPP_ADMIN_NUMBER in .env")
             return False
 
         url = f"{self.base_url}/api/sendText"
         payload = {
             "session": self.session,
-            "chatId": target,
-            "text": message,
+            "chatId":  target,
+            "text":    message,
         }
         try:
             resp = httpx.post(url, json=payload, headers=self._headers, timeout=10)
             if resp.status_code in (200, 201):
-                logger.debug(f"WhatsApp sent: {message[:60]}...")
+                logger.debug(f"WhatsApp sent OK to {target}: {message[:60]}...")
                 return True
             else:
-                logger.warning(f"WhatsApp send failed: {resp.status_code} {resp.text[:100]}")
+                logger.warning(
+                    f"WhatsApp send failed ({resp.status_code}): {resp.text[:120]}\n"
+                    f"  → session='{self.session}' target='{target}' waha='{self.base_url}'"
+                )
                 return False
         except Exception as e:
             logger.error(f"WhatsApp send error: {e}")
@@ -98,14 +236,14 @@ class WhatsAppNotifier:
         return self.send(msg)
 
     def send_daily_report(self, report: dict) -> bool:
-        date      = report.get("date", "")
+        date_str  = report.get("date", "")
         signals   = report.get("signals_count", 0)
         positions = report.get("open_positions", 0)
         pnl_today = report.get("pnl_today_aud", 0)
         pnl_total = report.get("pnl_total_aud", 0)
         regime    = report.get("market_regime", "UNKNOWN")
         msg = (
-            f"📊 *VCPilot Daily Report — {date}*\n"
+            f"📊 *VCPilot Daily Report — {date_str}*\n"
             f"Market: {regime}\n"
             f"Signals today: {signals}\n"
             f"Open positions: {positions}\n"

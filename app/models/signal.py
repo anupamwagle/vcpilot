@@ -8,6 +8,7 @@ from sqlalchemy import (
     Column, Integer, String, Boolean, DateTime, Date,
     Enum, Numeric, Text, JSON, ForeignKey
 )
+from sqlalchemy.orm import relationship
 from app.database import Base
 
 
@@ -29,7 +30,12 @@ class Signal(Base):
     id              = Column(Integer, primary_key=True)
     ticker          = Column(String(16), nullable=False, index=True)
     signal_date     = Column(Date, nullable=False, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
     status          = Column(Enum(SignalStatus), default=SignalStatus.PENDING, nullable=False)
+
+    # Relationships
+    organization    = relationship("Organization")
+
 
     # Price context at signal generation
     close_price     = Column(Numeric(12, 4))
@@ -78,9 +84,14 @@ class Watchlist(Base):
     """
     __tablename__ = "watchlist"
 
-    id          = Column(Integer, primary_key=True)
-    ticker      = Column(String(16), nullable=False, index=True)
-    added_date  = Column(Date, default=datetime.utcnow)
+    id              = Column(Integer, primary_key=True)
+    ticker          = Column(String(16), nullable=False, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
+    added_date      = Column(Date, default=datetime.utcnow)
+
+    # Relationships
+    organization    = relationship("Organization")
+
     status      = Column(Enum(WatchlistStatus), default=WatchlistStatus.WATCHING)
     added_by    = Column(String(64), default="screener")  # screener | admin | agent
     notes       = Column(Text, nullable=True)

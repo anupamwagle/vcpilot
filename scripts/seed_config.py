@@ -10,6 +10,7 @@ from loguru import logger
 from app.database import get_db
 from app.models.config import SystemConfig, RuleConfig, RuleCategory, ConfigValueType
 from app.models.account import Account, AccountTier, TierLevel
+from app.config import settings
 
 
 # =============================================================================
@@ -27,19 +28,37 @@ SYSTEM_CONFIGS = [
     dict(key="last_heartbeat",       value="",        value_type="STRING",
          label="Last Worker Heartbeat", group="system"),
 
-    # --- Universe ---
-    dict(key="trading_universe",     value="ASX200",  value_type="STRING",
-         label="Trading Universe",   group="trading",
-         description="ASX200 | ASX300 | ALLASX"),
-    dict(key="base_currency",        value="AUD",     value_type="STRING",
-         label="Base Currency",      group="trading"),
-
     # --- Capital ---
-    dict(key="account_capital_aud",  value="1000",    value_type="FLOAT",
-         label="Account Capital (AUD)", group="trading",
-         description="Current total account capital in AUD"),
-    dict(key="weekly_injection_aud", value="1000",    value_type="FLOAT",
-         label="Weekly Capital Injection (AUD)", group="trading"),
+    dict(key="weekly_injection_aud", value=str(settings.weekly_capital_injection_env), value_type="FLOAT",
+         label="Weekly Capital Injection (AUD)", group="capital",
+         description="Weekly capital injected into trading calculations"),
+
+    # --- IBKR Configuration ---
+    dict(key="ibkr_account", value=str(settings.ibkr_account_env), value_type="STRING",
+         label="IBKR Account Number", group="ibkr",
+         description="Paper account DU number or live account number from IBKR portal"),
+    dict(key="ibkr_username", value=str(settings.ibkr_username_env), value_type="STRING",
+         label="IBKR Username", group="ibkr", is_secret=True,
+         description="IBKR account username used to log into Gateway"),
+    dict(key="ibkr_password", value=str(settings.ibkr_password_env), value_type="STRING",
+         label="IBKR Password", group="ibkr", is_secret=True,
+         description="IBKR account password used to log into Gateway"),
+    dict(key="ibkr_paper_mode", value="true" if settings.ibkr_paper_mode_env else "false", value_type="BOOLEAN",
+         label="IBKR Paper Mode", group="ibkr",
+         description="True for paper trading (port 4002), False for live trading (port 4001)"),
+
+    # --- WhatsApp ---
+    dict(key="whatsapp_enabled", value="true" if settings.whatsapp_enabled_env else "false", value_type="BOOLEAN",
+         label="WhatsApp Alerts Enabled", group="whatsapp",
+         description="Enable or disable all WhatsApp notifications and remote command handling"),
+    dict(key="whatsapp_admin_number", value=str(settings.whatsapp_admin_number_env), value_type="STRING",
+         label="WhatsApp Admin Number", group="whatsapp",
+         description="Your WhatsApp phone number in international format (e.g. 61400000000, no + or spaces)"),
+
+    # --- Data APIs ---
+    dict(key="fmp_api_key", value=str(settings.fmp_api_key_env), value_type="STRING",
+         label="FMP API Key", group="data", is_secret=True,
+         description="Financial Modeling Prep API key for supplemental fundamental data"),
 ]
 
 
@@ -498,6 +517,12 @@ def seed_all():
                 ))
                 logger.info("Seeded default account (paper, $1000, ADMIN tier)")
 
+        # --- Clean up old/removed keys ---
+        removed_keys = ["trading_universe", "base_currency", "account_capital_aud"]
+        for rk in removed_keys:
+            db.query(SystemConfig).filter(SystemConfig.key == rk).delete()
+        db.flush()
+
         # --- SystemConfig ---
         for cfg_data in SYSTEM_CONFIGS:
             existing = db.query(SystemConfig).filter(
@@ -513,7 +538,8 @@ def seed_all():
         # --- RuleConfig ---
         for rule_data in RULE_CONFIGS:
             existing = db.query(RuleConfig).filter(
-                RuleConfig.rule_id == rule_data["rule_id"]
+                RuleConfig.rule_id == rule_data["rule_id"],
+                RuleConfig.organization_id == None
             ).first()
             if not existing:
                 fields = {k: v for k, v in rule_data.items()

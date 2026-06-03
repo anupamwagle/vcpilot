@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Positions{% endblock %}
+{% block page_title %}Positions{% endblock %}
+
+{% block content %}
+<!-- Stats -->
+<div class="grid grid-cols-3 gap-3 mb-6">
+  <div class="stat-card">
+    <p class="field-label">Closed Trades</p>
+    <p class="text-2xl font-bold" style="color:var(--text)">{{ trade_count }}</p>
+  </div>
+  <div class="stat-card">
+    <p class="field-label">Win Rate</p>
+    <p class="text-2xl font-bold {% if win_rate >= 50 %}pnl-pos{% else %}pnl-neg{% endif %}">{{ win_rate }}%</p>
+  </div>
+  <div class="stat-card">
+    <p class="field-label">Total P&L</p>
+    <p class="text-2xl font-bold {% if total_pnl >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}">${{ "{:+,.0f}".format(total_pnl) }}</p>
+  </div>
+</div>
+
+<!-- Open Positions -->
+<div class="card overflow-hidden mb-6">
+  <div class="section-head">
+    <p class="section-title">Open Positions ({{ positions|length }})</p>
+  </div>
+  {% if positions %}
+  <div class="overflow-x-auto">
+    <table class="tbl">
+      <thead><tr>
+        <th>Ticker</th><th class="text-right">Qty</th><th class="text-right">Entry</th>
+        <th class="text-right">Current</th><th class="text-right">Stop</th>
+        <th class="text-right">Target</th><th class="text-right">P&L %</th>
+        <th class="text-right">P&L $</th><th class="text-right">Days</th><th>Mode</th>
+      </tr></thead>
+      <tbody>
+        {% for p in positions %}
+        <tr>
+          <td class="mono font-bold">{{ p.ticker }}</td>
+          <td class="text-right">{{ p.qty }}</td>
+          <td class="text-right mono">${{ "%.3f"|format(p.entry) }}</td>
+          <td class="text-right mono font-semibold">${{ "%.3f"|format(p.current) }}</td>
+          <td class="text-right mono pnl-neg">${{ "%.3f"|format(p.stop) }}</td>
+          <td class="text-right mono" style="color:var(--pos)">${{ "%.3f"|format(p.target_1) if p.target_1 else "—" }}</td>
+          <td class="text-right font-bold {% if p.pnl_pct >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}">{{ "{:+.1f}".format(p.pnl_pct) }}%</td>
+          <td class="text-right {% if p.pnl_aud >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}">${{ "{:+.0f}".format(p.pnl_aud) }}</td>
+          <td class="text-right" style="color:var(--text-muted)">{{ p.days }}d</td>
+          <td><span class="{% if p.is_paper %}badge badge-paper{% else %}badge badge-live{% endif %}">{% if p.is_paper %}PAPER{% else %}LIVE{% endif %}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty"><p class="empty-title">No open positions</p><p class="empty-sub">Positions appear after order fills</p></div>
+  {% endif %}
+</div>
+
+<!-- Closed Trades -->
+<div class="card overflow-hidden">
+  <div class="section-head">
+    <p class="section-title">Closed Trades</p>
+    {% if trades %}<span class="tag">{{ trade_count }} total</span>{% endif %}
+  </div>
+  {% if trades %}
+  <div class="overflow-x-auto">
+    <table class="tbl">
+      <thead><tr>
+        <th>Ticker</th><th>Entry Date</th><th>Exit Date</th><th class="text-right">Days</th>
+        <th class="text-right">Entry $</th><th class="text-right">Exit $</th>
+        <th class="text-right">P&L %</th><th class="text-right">P&L $</th>
+        <th>Reason</th><th class="text-center">CGT</th>
+      </tr></thead>
+      <tbody>
+        {% for t in trades %}
+        <tr>
+          <td class="mono font-bold">{{ t.ticker }}</td>
+          <td style="color:var(--text-muted);font-size:.75rem">{{ t.entry_date }}</td>
+          <td style="color:var(--text-muted);font-size:.75rem">{{ t.exit_date }}</td>
+          <td class="text-right" style="color:var(--text-muted)">{{ t.days }}</td>
+          <td class="text-right mono">${{ "%.3f"|format(t.entry) }}</td>
+          <td class="text-right mono">${{ "%.3f"|format(t.exit) }}</td>
+          <td class="text-right font-bold {% if t.pnl_pct >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}">{{ "{:+.1f}".format(t.pnl_pct) }}%</td>
+          <td class="text-right {% if t.pnl_aud >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}">${{ "{:+.0f}".format(t.pnl_aud) }}</td>
+          <td style="color:var(--text-muted);font-size:.75rem">{{ t.reason }}</td>
+          <td class="text-center">{% if t.cgt %}<span class="tag-pos" style="font-size:.65rem">✓ 50% discount</span>{% else %}<span style="color:var(--text-subtle)">—</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty"><p class="empty-title">No closed trades yet</p><p class="empty-sub">P&L history appears here after positions close</p></div>
+  {% endif %}
+</div>
+{% endblock %}

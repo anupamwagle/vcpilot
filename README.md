@@ -12,19 +12,19 @@ VCPilot implements Mark Minervini's SEPA (Specific Entry Point Analysis) methodo
 ┌─────────────────────────────────────────────────────┐
 │                   Docker Compose                     │
 │  ┌──────────┐  ┌──────────┐  ┌────────────────────┐ │
-│  │TimescaleDB│  │  Redis   │  │  IBKR Gateway      │ │
-│  │(PostgreSQL)  │ (Celery) │  │  (paper/live)      │ │
+│  │ Database │  │  Redis   │  │  IBKR (Gateway)    │ │
+│  │(Postgres)│  │          │  │  (paper/live)      │ │
 │  └──────────┘  └──────────┘  └────────────────────┘ │
 │  ┌──────────────────────────────────────────────┐   │
-│  │  App Container                               │   │
-│  │  ├── Celery Worker (screening/trading/report) │   │
-│  │  ├── Celery Beat (scheduler — AEST aligned)  │   │
-│  │  └── Data fetcher (yfinance + FMP)           │   │
+│  │  Worker & Beat (Celery)                      │   │
+│  │  ├── worker (screening/trading/reporting)    │   │
+│  │  └── beat (scheduler — AEST aligned)         │   │
 │  └──────────────────────────────────────────────┘   │
-│  ┌──────────────┐   ┌───────────────────────────┐  │
-│  │  Streamlit   │   │  WAHA (WhatsApp HTTP API)  │  │
-│  │  Dashboard   │   │  → WhatsApp Agent          │  │
-│  └──────────────┘   └───────────────────────────┘  │
+│  ┌──────────────────────┐   ┌──────────────────────┐  │
+│  │  API Service (UI)    │   │  WhatsApp Service    │  │
+│  │  FastAPI + Jinja2    │   │  → WhatsApp Agent    │  │
+│  │  port 8501           │   │  port 3000           │  │
+│  └──────────────────────┘   └──────────────────────┘  │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -42,36 +42,37 @@ VCPilot implements Mark Minervini's SEPA (Specific Entry Point Analysis) methodo
 git clone https://github.com/anupamwagle/vcpilot.git
 cd vcpilot
 cp .env.example .env
-# Edit .env — set IBKR credentials, WhatsApp number, passwords
+# Edit .env — set system ports, database credentials, and SUPERADMIN_EMAIL / SUPERADMIN_PASSWORD
 ```
 
-### 2. Start core services
+### 2. Start services
 ```bash
-docker compose up db redis app dashboard waha -d
+# Automatically initializes tables, seeds configs, and runs SaaS migrations
+docker compose up -d
 ```
 
-### 3. Initialise database + seed Minervini rules
-```bash
-docker compose run --rm app python -m scripts.init_db
-```
-
-### 4. Open dashboard
+### 3. Open dashboard
 ```
 http://localhost:8501
 ```
+- **Email OTP Login:** The default authentication method. Enter your email on the **Email OTP** tab on `/login`. A 6-digit passcode will be emailed to you (or displayed in the terminal logs and redirected URL query parameters in development mode). Enter the passcode to authenticate.
+- **Traditional Password Sign-In:** Available on the **Password** tab on `/login`.
+  - **Super Admin Credentials:** Set via `.env` (`SUPERADMIN_EMAIL` and `SUPERADMIN_PASSWORD`). Allows you to manage tenants, rules, and global users.
+  - **Organization Admins & Users:** Seeded or created passwordlessly by the Super Admin.
+- **Passwordless Creation & Password Setup Reset:** No passwords are input during tenant or user creation. Users are created with a secure random hash. Trigger the **Reset Password** flow from the Super Admin panel to send a setup link. If SMTP is offline, a copyable manual link will be generated in the UI.
+- **Organization Switcher:** Super Admins can switch context to any tenant organization using the top-right header selector to view scoped dashboards and configure settings.
 
-### 5. Start trading services (paper mode — ALWAYS start here)
+### 4. Start trading services (paper mode — ALWAYS start here)
 ```bash
-# Confirm IBKR_PAPER_MODE=true in .env first
-docker compose --profile trading up ibkr-gateway -d
-docker compose up celery-worker celery-beat -d
+# Configure credentials & settings (IBKR account, username, password, paper mode) on the http://localhost:8501/admin/config page under your Tenant Admin session first
+docker compose --profile trading up ibkr -d
 ```
 
 ---
 
 ## Minervini Rules Implemented
 
-All rules are configurable via the Rules Config dashboard page with global enable/disable and per-tier threshold overrides.
+All rules are configurable per organization via the Rules Config page, allowing Organisation Admins and Super Admins to enable/disable rules or update thresholds independently. The Super Admin can also customize the default tier configurations inherited by organizations.
 
 **Trend Template** (8 criteria — all must pass): Price vs 200/150/50MA alignment, 200MA slope, 52-week range position, RS ≥ 70
 
@@ -90,6 +91,9 @@ All rules are configurable via the Rules Config dashboard page with global enabl
 ---
 
 ## WhatsApp Commands
+
+> [!NOTE]
+> WhatsApp commands are routed to the specific tenant organization context based on the session (`org_{org_id}`) and restricted to the sender matching that organization's configured `whatsapp_admin_number`.
 
 | Command | Description |
 |---|---|
@@ -146,7 +150,7 @@ vcpilot/
 │   ├── risk/         # Position sizing, portfolio heat
 │   ├── screener/     # Minervini rules, VCP, exit rules
 │   └── tasks/        # Celery tasks
-├── dashboard/        # Streamlit admin UI (7 pages)
+├── dashboard/        # FastAPI + Jinja2 dashboard (4 trading + 4 admin pages)
 ├── docker/           # Dockerfiles
 ├── migrations/       # DB schema + TimescaleDB setup
 ├── scripts/          # init_db.py, seed_config.py

@@ -9,7 +9,7 @@ import enum
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Boolean, DateTime,
-    Enum, ForeignKey, Numeric, Text, JSON
+    Enum, ForeignKey, Numeric, Text, JSON, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -43,17 +43,26 @@ class SystemConfig(Base):
     """
     __tablename__ = "system_configs"
 
-    id          = Column(Integer, primary_key=True)
-    key         = Column(String(128), unique=True, nullable=False, index=True)
-    value       = Column(Text, nullable=False)
-    value_type  = Column(Enum(ConfigValueType), default=ConfigValueType.STRING)
-    label       = Column(String(256))                  # Human-readable name for UI
-    description = Column(Text)                         # Shown as tooltip in UI
-    group       = Column(String(64), default="general")# Groups settings in UI
-    is_secret   = Column(Boolean, default=False)       # Hides value in UI
-    created_at  = Column(DateTime, default=datetime.utcnow)
-    updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    updated_by  = Column(String(64), default="system")
+    id              = Column(Integer, primary_key=True)
+    key             = Column(String(128), nullable=False, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
+    value           = Column(Text, nullable=False)
+    value_type      = Column(Enum(ConfigValueType), default=ConfigValueType.STRING)
+    label           = Column(String(256))                  # Human-readable name for UI
+    description     = Column(Text)                         # Shown as tooltip in UI
+    group           = Column(String(64), default="general")# Groups settings in UI
+    is_secret       = Column(Boolean, default=False)       # Hides value in UI
+    created_at      = Column(DateTime, default=datetime.utcnow)
+    updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by      = Column(String(64), default="system")
+
+    # Relationships
+    organization    = relationship("Organization")
+
+    __table_args__ = (
+        UniqueConstraint("key", "organization_id", name="uq_system_config_key_org"),
+    )
+
 
     def typed_value(self):
         """Return value cast to its declared type."""
@@ -88,10 +97,14 @@ class RuleConfig(Base):
     }
     """
     __tablename__ = "rule_configs"
+    __table_args__ = (
+        UniqueConstraint('rule_id', 'organization_id', name='uq_rule_config_rule_org'),
+    )
 
     id              = Column(Integer, primary_key=True)
-    rule_id         = Column(String(64), unique=True, nullable=False, index=True)
+    rule_id         = Column(String(64), nullable=False, index=True)
                                                        # e.g. "trend_price_above_200ma"
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
     category        = Column(Enum(RuleCategory), nullable=False)
     label           = Column(String(256), nullable=False)  # Display name
     description     = Column(Text)                        # Full rule explanation
@@ -115,6 +128,9 @@ class RuleConfig(Base):
     created_at      = Column(DateTime, default=datetime.utcnow)
     updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by      = Column(String(64), default="system")
+
+    # Relationships
+    organization    = relationship("Organization")
 
     def is_enabled_for_tier(self, tier_level: str) -> bool:
         """Check if rule is enabled for a given tier level."""

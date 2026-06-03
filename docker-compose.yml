@@ -2,7 +2,7 @@ version: "3.9"
 
 # =============================================================================
 # VCPilot — Docker Compose
-# Services: db, redis, app, celery-worker, celery-beat, dashboard, waha, ibkr-gateway
+# Services: database, redis, app, worker, beat, api, whatsapp, ibkr
 # =============================================================================
 
 x-app-env: &app-env
@@ -25,9 +25,9 @@ services:
   # ---------------------------------------------------------------------------
   # TimescaleDB (PostgreSQL + time-series extension)
   # ---------------------------------------------------------------------------
-  db:
+  database:
     image: timescale/timescaledb:latest-pg16
-    container_name: vcpilot-db
+    container_name: vcpilot-database
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
@@ -66,17 +66,18 @@ services:
       retries: 5
 
   # ---------------------------------------------------------------------------
-  # App — Main Python service (screener, broker, risk, data)
+  # App — Database setup & migration runner
+  # Runs once on boot to initialize tables, hypertables, seeds, and SaaS migrations.
   # ---------------------------------------------------------------------------
   app:
     build:
       context: .
       dockerfile: docker/Dockerfile.app
     container_name: vcpilot-app
-    restart: unless-stopped
+    restart: "no"
     <<: *app-env
     depends_on:
-      db:
+      database:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -86,12 +87,12 @@ services:
       - ./migrations:/app/migrations
     networks:
       - vcpilot-net
-    command: python -m scripts.init_db
+    command: sh -c "python -m scripts.init_db && python -m scripts.migrate_saas"
 
   # ---------------------------------------------------------------------------
-  # Celery Worker
+  # Worker — Celery Worker
   # ---------------------------------------------------------------------------
-  celery-worker:
+  worker:
     build:
       context: .
       dockerfile: docker/Dockerfile.app
@@ -99,10 +100,12 @@ services:
     restart: unless-stopped
     <<: *app-env
     depends_on:
-      db:
+      database:
         condition: service_healthy
       redis:
         condition: service_healthy
+      app:
+        condition: service_completed_successfully
     volumes:
       - ./app:/app/app
     networks:
@@ -115,9 +118,9 @@ services:
       retries: 3
 
   # ---------------------------------------------------------------------------
-  # Celery Beat — Scheduler
+  # Beat — Celery Beat Scheduler
   # ---------------------------------------------------------------------------
-  celery-beat:
+  beat:
     build:
       context: .
       dockerfile: docker/Dockerfile.app
@@ -125,10 +128,12 @@ services:
     restart: unless-stopped
     <<: *app-env
     depends_on:
-      db:
+      database:
         condition: service_healthy
       redis:
         condition: service_healthy
+      app:
+        condition: service_completed_successfully
     volumes:
       - ./app:/app/app
     networks:
@@ -136,18 +141,22 @@ services:
     command: celery -A app.tasks.celery_app beat --loglevel=info --scheduler celery.beat.PersistentScheduler
 
   # ---------------------------------------------------------------------------
-  # Streamlit Dashboard — Admin UI
+  # API — FastAPI & Streamlit Admin/Client UI
   # ---------------------------------------------------------------------------
-  dashboard:
+  api:
     build:
       context: .
       dockerfile: docker/Dockerfile.dashboard
-    container_name: vcpilot-dashboard
+    container_name: vcpilot-api
     restart: unless-stopped
     <<: *app-env
     depends_on:
-      db:
+      database:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_completed_successfully
     ports:
       - "${DASHBOARD_PORT:-8501}:8501"
     volumes:
@@ -155,18 +164,26 @@ services:
       - ./app:/app/app
     networks:
       - vcpilot-net
-    command: streamlit run /app/dashboard/Home.py --server.port=8501 --server.address=0.0.0.0
+    command: uvicorn dashboard.main:app --host 0.0.0.0 --port 8501 --reload --reload-dir /app/dashboard
 
   # ---------------------------------------------------------------------------
-  # WAHA — WhatsApp HTTP API (self-hosted, no Meta approval needed)
+  # WhatsApp — WAHA WhatsApp HTTP API
   # ---------------------------------------------------------------------------
-  waha:
+  whatsapp:
     image: devlikeapro/waha:latest
-    container_name: vcpilot-waha
+    container_name: vcpilot-whatsapp
     restart: unless-stopped
     environment:
       WHATSAPP_API_KEY: ${WAHA_API_KEY}
       WHATSAPP_DEFAULT_ENGINE: WEBJS
+      # Static credentials for the WAHA dashboard
+      WAHA_DASHBOARD_USERNAME: admin
+      WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:-vcpilot_2026}
+      # Auto-start the default session on container boot
+      WHATSAPP_START_SESSION: default
+      # Push all incoming messages to the API webhook
+      WHATSAPP_HOOK_URL: ${WAHA_HOOK_URL:-http://api:8501/webhook/whatsapp}
+      WHATSAPP_HOOK_EVENTS: message,session.status
     ports:
       - "3000:3000"
     volumes:
@@ -175,10 +192,10 @@ services:
       - vcpilot-net
 
   # ---------------------------------------------------------------------------
-  # IBKR Gateway — Interactive Brokers Gateway (paper by default)
-  # Start this manually when ready to trade: docker compose up ibkr-gateway
+  # IBKR — Interactive Brokers Gateway (paper by default)
+  # Start this manually when ready to trade: docker compose --profile trading up ibkr
   # ---------------------------------------------------------------------------
-  ibkr-gateway:
+  ibkr:
     image: ghcr.io/gnzsnz/ib-gateway:latest
     container_name: vcpilot-ibkr
     restart: unless-stopped

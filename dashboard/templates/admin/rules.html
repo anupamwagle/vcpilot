@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Rules Config{% endblock %}
+{% block page_title %}Minervini Rules Configuration{% endblock %}
+
+{% block content %}
+{% if saved %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Rule updated and audit-logged.
+</div>
+{% endif %}
+
+{% set ns = namespace(total=0) %}
+{% for v in rules_by_category.values() %}{% set ns.total = ns.total + v|length %}{% endfor %}
+<p class="text-sm mb-4" style="color:var(--text-muted)">
+  All {{ ns.total }} rules loaded from database.
+  Changes take effect immediately on the next screener run. Mandatory rules (🔒) cannot be disabled.
+</p>
+
+<div id="accordion-rules" data-accordion="collapse">
+{% for cat, rules in rules_by_category.items() %}
+{% set cat_label = category_labels.get(cat, cat) %}
+{% set cat_icon  = category_icons.get(cat, '📋') %}
+{% set enabled_n = rules|selectattr('enabled')|list|length %}
+
+<div class="mb-3">
+  <h2 id="hd-{{ cat }}">
+    <button type="button"
+      class="flex items-center justify-between w-full px-4 py-3 rounded-xl text-left font-medium transition"
+      style="background:var(--surface);border:1px solid var(--border);color:var(--text)"
+      data-accordion-target="#bd-{{ cat }}" aria-expanded="false">
+      <span style="display:flex;align-items:center;gap:.625rem">
+        <span>{{ cat_icon }}</span>
+        <span style="font-size:.875rem;font-weight:600">{{ cat_label }}</span>
+        <span class="tag {% if enabled_n == rules|length %}tag-pos{% else %}tag{% endif %}" style="font-size:.65rem">
+          {{ enabled_n }}/{{ rules|length }} on
+        </span>
+      </span>
+      <svg class="w-4 h-4 flex-shrink-0" style="color:var(--text-subtle)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+      </svg>
+    </button>
+  </h2>
+
+  <div id="bd-{{ cat }}" class="hidden" aria-labelledby="hd-{{ cat }}">
+    <div class="card" style="border-radius:0 0 .75rem .75rem;border-top:none">
+      {% for rule in rules %}
+      <div style="padding:1rem;{% if not loop.last %}border-bottom:1px solid var(--border){% endif %}">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem">
+          <div style="flex:1;min-width:0">
+            <!-- Title row -->
+            <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.375rem">
+              <span style="font-size:.875rem;font-weight:600;color:{% if rule.enabled %}var(--text){% else %}var(--text-subtle){% endif %}">{{ rule.label }}</span>
+              {% if rule.is_mandatory %}<span class="tag-neg" style="font-size:.65rem">🔒 Mandatory</span>{% endif %}
+              {% if rule.minervini_ref %}<span class="tag" style="font-size:.65rem;font-style:italic">{{ rule.minervini_ref }}</span>{% endif %}
+            </div>
+            {% if rule.description %}
+            <p style="font-size:.75rem;color:var(--text-muted);margin-bottom:.625rem">{{ rule.description }}</p>
+            {% endif %}
+            <!-- Threshold -->
+            {% if rule.threshold is not none %}
+            <form method="post" action="/admin/rules/{{ rule.rule_id }}/threshold"
+                  style="display:flex;align-items:center;gap:.5rem">
+              <label class="field-label" style="margin:0;white-space:nowrap">{{ rule.threshold_label or 'Threshold' }}:</label>
+              <input type="number" name="threshold" value="{{ rule.threshold }}"
+                     min="{{ rule.threshold_min }}" max="{{ rule.threshold_max }}" step="0.5"
+                     class="input" style="width:6rem;padding:.375rem .625rem" {% if read_only %}disabled{% endif %}/>
+              {% if not read_only %}
+              <button type="submit" class="btn-admin text-xs py-1 px-2.5" style="white-space:nowrap">Save</button>
+              {% endif %}
+            </form>
+            {% endif %}
+          </div>
+
+          <!-- Toggle -->
+          <div style="flex-shrink:0;padding-top:.125rem">
+            {% if rule.is_mandatory or read_only %}
+            <div style="width:2.25rem;height:1.25rem;border-radius:9999px;background:{% if rule.enabled %}var(--t-accent){% else %}var(--border-strong){% endif %};position:relative;opacity:.5">
+              <div style="position:absolute;top:.125rem;{% if rule.enabled %}left:1.125rem;{% else %}left:.125rem;{% endif %}width:1rem;height:1rem;border-radius:9999px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2)"></div>
+            </div>
+            {% else %}
+            <form method="post" action="/admin/rules/{{ rule.rule_id }}/toggle">
+              <button type="submit" style="cursor:pointer;padding:0;background:none;border:none">
+                <div style="width:2.25rem;height:1.25rem;border-radius:9999px;position:relative;transition:background 200ms;background:{% if rule.enabled %}var(--t-accent){% else %}var(--border-strong){% endif %}">
+                  <div style="position:absolute;top:.125rem;width:1rem;height:1rem;border-radius:9999px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:transform 200ms;{% if rule.enabled %}transform:translateX(1.125rem){% else %}transform:translateX(.125rem){% endif %}"></div>
+                </div>
+              </button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endfor %}
+</div>
+{% endblock %}

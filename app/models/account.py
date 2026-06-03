@@ -16,6 +16,32 @@ class TierLevel(str, enum.Enum):
     ADMIN    = "ADMIN"      # Full access, can override everything
 
 
+class OrganizationTier(str, enum.Enum):
+    BRONZE = "BRONZE"
+    SILVER = "SILVER"
+    GOLD   = "GOLD"
+
+
+class Organization(Base):
+    """
+    Represents a tenant organization (SaaS level).
+    """
+    __tablename__ = "organizations"
+
+    id         = Column(Integer, primary_key=True)
+    name       = Column(String(128), unique=True, nullable=False)
+    tier       = Column(Enum(OrganizationTier), default=OrganizationTier.BRONZE, nullable=False)
+    is_active  = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    accounts = relationship("Account", back_populates="organization")
+    users    = relationship("User", back_populates="organization")
+
+    def __repr__(self):
+        return f"<Organization {self.name} [{self.tier}]>"
+
+
 class AccountTier(Base):
     """
     Defines capabilities and rule overrides per tier.
@@ -53,15 +79,18 @@ class Account(Base):
     name            = Column(String(128), nullable=False, default="Primary")
     ibkr_account_id = Column(String(32), nullable=True)           # e.g. DU1234567
     tier_id         = Column(Integer, ForeignKey("account_tiers.id"), nullable=False)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
     is_active       = Column(Boolean, default=True)
     is_paper        = Column(Boolean, default=True)                # Always paper until explicitly set live
     capital_aud     = Column(Numeric(12, 2), default=0.00)         # Current account capital
     created_at      = Column(DateTime, default=datetime.utcnow)
     updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    tier      = relationship("AccountTier", back_populates="accounts")
-    positions = relationship("Position", back_populates="account")
-    trades    = relationship("Trade", back_populates="account")
+    tier         = relationship("AccountTier", back_populates="accounts")
+    organization = relationship("Organization", back_populates="accounts")
+    positions    = relationship("Position", back_populates="account")
+    trades       = relationship("Trade", back_populates="account")
+
 
     def __repr__(self):
         return f"<Account {self.name} [{self.ibkr_account_id}]>"

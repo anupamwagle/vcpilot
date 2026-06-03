@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+{% block title %}System Health{% endblock %}
+{% block page_title %}System Health{% endblock %}
+
+{% block content %}
+
+<!-- ── Worker / regime banners ────────────────────────────────── -->
+{% if worker_status == 'offline' %}
+<div class="alert-danger mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+  <div><strong>Celery worker is offline.</strong> Trading automatically suspended — no new entries until worker is back. Last heartbeat: <strong>{{ heartbeat }}</strong></div>
+</div>
+{% elif worker_status == 'starting' %}
+<div class="alert-warn mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+  <div><strong>Worker starting up.</strong> Heartbeat task runs every 10 min — click <strong>Ping Worker</strong> below to trigger it immediately.</div>
+</div>
+{% endif %}
+
+{% set msg = request.query_params.get('msg', '') %}
+{% if msg == 'ping' %}
+<div class="alert-success mb-4"><svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+Worker ping queued — refresh in ~10 seconds.</div>
+{% elif msg == 'regime' %}
+<div class="alert-info mb-4"><svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+Market regime queued — refresh in ~1 minute.</div>
+{% elif msg == 'setup' %}
+<div class="alert-info mb-4"><svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+<div><strong>Full setup queued.</strong> The worker will: fetch ASX200 universe → download 2yr price history → evaluate market regime → run screener. This takes 5–15 minutes. Check the Signals and Watchlist pages after.</div></div>
+{% elif msg == 'data' %}
+<div class="alert-info mb-4"><svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+Price data refresh queued — takes a few minutes for the full universe.</div>
+{% endif %}
+
+<!-- ── First-run banner ────────────────────────────────────────── -->
+{% if is_first_run %}
+<div class="alert-warn mb-5" style="align-items:flex-start;flex-direction:column;gap:.75rem">
+  <div style="display:flex;align-items:center;gap:.625rem">
+    <svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+    <strong>First-time setup required.</strong>
+  </div>
+  <p style="font-size:.8125rem">The stock universe table is empty — the screener has nothing to scan. Click <strong>🚀 Run Full Setup</strong> below to fetch the ASX200 universe, download 2 years of price history, evaluate the market regime, and run the first screen. This takes 5–15 minutes and requires the Celery worker to be online.</p>
+  <form method="post" action="/action/full-setup">
+    <button type="submit" class="btn-primary">🚀 Run Full Setup Now</button>
+  </form>
+</div>
+{% endif %}
+
+<!-- ── Status cards ───────────────────────────────────────────── -->
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+
+  <div class="stat-card">
+    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Celery Worker</p>
+    {% if worker_status == 'online' %}
+      <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full animate-pulse" style="background:var(--pos)"></span>
+      <span class="text-sm font-bold" style="color:var(--pos)">Online</span></div>
+      <p class="text-xs mt-1" style="color:var(--text-subtle)">{{ heartbeat }}</p>
+    {% elif worker_status == 'starting' %}
+      <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full animate-pulse" style="background:var(--warn)"></span>
+      <span class="text-sm font-bold" style="color:var(--warn)">Starting…</span></div>
+      <p class="text-xs mt-1" style="color:var(--text-subtle)">No heartbeat yet</p>
+    {% else %}
+      <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full" style="background:var(--neg)"></span>
+      <span class="text-sm font-bold" style="color:var(--neg)">Offline</span></div>
+      <p class="text-xs mt-1" style="color:var(--text-subtle)">Last: {{ heartbeat }}</p>
+    {% endif %}
+  </div>
+
+  <div class="stat-card">
+    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Market Regime</p>
+    {% if regime == 'BULL' %}<p class="text-sm font-bold" style="color:var(--bull)">🟢 BULL</p>
+    {% elif regime == 'CAUTION' %}<p class="text-sm font-bold" style="color:var(--caution)">🟡 CAUTION</p>
+    {% elif regime == 'BEAR' %}<p class="text-sm font-bold" style="color:var(--bear)">🔴 BEAR</p>
+    {% else %}
+      <p class="text-sm font-bold" style="color:var(--text-muted)">Not evaluated</p>
+      <p class="text-xs mt-1" style="color:var(--text-subtle)">Auto: 5:15pm AEST</p>
+    {% endif %}
+  </div>
+
+  <div class="stat-card">
+    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Trading</p>
+    {% if trading_active %}
+      <p class="text-sm font-bold" style="color:var(--pos)">▶ Active</p>
+      <p class="text-xs mt-1" style="color:var(--text-subtle)">Entries enabled</p>
+    {% elif worker_status != 'online' %}
+      <p class="text-sm font-bold" style="color:var(--neg)">⚠ Blocked</p>
+      <p class="text-xs mt-1" style="color:var(--text-subtle)">Worker not online</p>
+    {% else %}
+      <p class="text-sm font-bold" style="color:var(--warn)">⏸ Paused</p>
+      <p class="text-xs mt-1" style="color:var(--text-subtle)">Manually paused</p>
+    {% endif %}
+  </div>
+
+  <div class="stat-card">
+    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Account</p>
+    <p class="text-sm font-bold" style="color:var(--t-accent)">{% if is_paper_account %}📄 Paper{% else %}💰 Live{% endif %}</p>
+    <p class="text-xs mt-1" style="color:var(--text-subtle)">${{ "{:,.0f}".format(capital) }} AUD</p>
+  </div>
+</div>
+
+<!-- ── Data diagnostics ───────────────────────────────────────── -->
+<div class="card p-4 mb-6">
+  <p class="field-label mb-3">Data State</p>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.75rem">
+    {% for label, val, ok in [
+      ('ASX Universe', stock_count|string ~ ' stocks', stock_count > 0),
+      ('Price Bars (total)', "{:,}".format(price_bar_count), price_bar_count > 0),
+      ('Today\'s Bars', today_bars|string, today_bars > 0),
+      ('Today\'s Signals', signal_count_today|string, true),
+      ('Watchlist', watchlist_count|string ~ ' stocks', true),
+    ] %}
+    <div style="padding:.75rem;background:var(--surface-alt);border-radius:.5rem;border:1px solid var(--border)">
+      <p class="field-label">{{ label }}</p>
+      <p style="font-size:1.125rem;font-weight:700;color:{% if ok %}var(--pos){% else %}var(--neg){% endif %}">{{ val }}</p>
+    </div>
+    {% endfor %}
+  </div>
+  {% if stock_count == 0 %}
+  <p style="font-size:.75rem;color:var(--warn);margin-top:.75rem">⚠ No stocks in universe — screener cannot run. Click <strong>Run Full Setup</strong> above.</p>
+  {% elif price_bar_count == 0 %}
+  <p style="font-size:.75rem;color:var(--warn);margin-top:.75rem">⚠ No price data — run <strong>Refresh Price Data</strong> or <strong>Full Setup</strong> before screening.</p>
+  {% else %}
+  <p style="font-size:.75rem;color:var(--text-subtle);margin-top:.75rem">✓ Data looks good. Screener ready.</p>
+  {% endif %}
+</div>
+
+<!-- ── Manual triggers ────────────────────────────────────────── -->
+<div class="card p-4 mb-6">
+  <p class="field-label mb-3">Manual Triggers</p>
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem">
+    <form method="post" action="/action/full-setup">
+      <button type="submit" class="btn-primary text-xs py-1.5">🚀 Full Setup</button>
+    </form>
+    <form method="post" action="/action/ping-worker">
+      <button type="submit" class="btn-ghost text-xs py-1.5">⚡ Ping Worker</button>
+    </form>
+    <form method="post" action="/action/evaluate-regime">
+      <button type="submit" class="btn-ghost text-xs py-1.5">🌡 Evaluate Market</button>
+    </form>
+    <form method="post" action="/action/refresh-data">
+      <button type="submit" class="btn-ghost text-xs py-1.5">🔄 Refresh Price Data</button>
+    </form>
+    <form method="post" action="/action/force-screen">
+      <button type="submit" class="btn-ghost text-xs py-1.5">🔍 Force Screen</button>
+    </form>
+  </div>
+  <p style="font-size:.75rem;color:var(--text-subtle);margin-top:.625rem">
+    <strong>Full Setup</strong> = universe → price data → regime → screen (use once on first run) ·
+    <strong>Force Screen</strong> = screen now regardless of day/time
+  </p>
+</div>
+
+<!-- ── IBKR + Schedule ────────────────────────────────────────── -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+  <div class="card p-4">
+    <p class="text-xs font-semibold uppercase tracking-wider mb-3" style="color:var(--text-subtle)">IBKR Gateway</p>
+    <div class="space-y-2">
+      {% for label, val in [('Host', 'ibkr:4002'), ('Port', '4002 (paper) / 4001 (live)'), ('Mode', 'Paper' if is_paper_account else '⚠ LIVE')] %}
+      <div class="flex items-center justify-between py-1.5 border-b last:border-0" style="border-color:var(--border)">
+        <span class="text-xs" style="color:var(--text-muted)">{{ label }}</span>
+        <span class="text-xs font-mono font-medium" style="color:var(--text)">{{ val }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="text-xs mt-3 font-mono px-2 py-1.5 rounded" style="background:var(--surface-alt);color:var(--text-muted)">
+      docker compose --profile trading up ibkr
+    </p>
+  </div>
+
+  <div class="card p-4">
+    <p class="text-xs font-semibold uppercase tracking-wider mb-3" style="color:var(--text-subtle)">Automatic Schedule (AEST)</p>
+    <div class="space-y-1.5">
+      {% for time, task in [
+        ('Sun 8pm', 'Refresh ASX200 universe'),
+        ('Mon–Fri 5:00pm', 'Refresh price data'),
+        ('Mon–Fri 5:15pm', 'Evaluate market regime'),
+        ('Mon–Fri 5:30pm', 'Run Minervini screener'),
+        ('Mon–Fri 6:00pm', 'Send WhatsApp report'),
+        ('Every 5 min (mkt hrs)', 'Entry + exit rule checks'),
+        ('Every 10 min', 'Worker heartbeat'),
+      ] %}
+      <div class="flex items-center gap-2 text-xs">
+        <span class="font-mono rounded px-1.5 py-0.5 flex-shrink-0 text-xs" style="background:var(--surface-alt);color:var(--text-muted)">{{ time }}</span>
+        <span style="color:var(--text-muted)">{{ task }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<!-- ── Recent events ──────────────────────────────────────────── -->
+<div class="card overflow-hidden">
+  <div class="section-head">
+    <p class="section-title">Recent Events</p>
+    <a href="/admin/audit" class="text-xs font-medium" style="color:var(--a-accent)">Full log →</a>
+  </div>
+  {% if recent_logs %}
+  <div>
+    {% for log in recent_logs %}
+    <div class="flex items-start gap-3 px-4 py-2.5 tbl-row">
+      <span class="text-xs font-mono flex-shrink-0 w-12 mt-0.5" style="color:var(--text-subtle)">{{ log.time }}</span>
+      <div class="flex-1 min-w-0">
+        <span class="text-xs font-semibold" style="color:var(--a-accent)">{{ log.action }}</span>
+        {% if log.ticker != '—' %}<span class="text-xs font-mono ml-1.5" style="color:var(--text-muted)">{{ log.ticker }}</span>{% endif %}
+        {% if log.message %}<p class="text-xs truncate mt-0.5" style="color:var(--text-subtle)">{{ log.message }}</p>{% endif %}
+      </div>
+      <span class="text-xs flex-shrink-0" style="color:var(--text-subtle)">{{ log.actor }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="px-4 py-10 text-center text-xs" style="color:var(--text-subtle)">No events yet — run the screener or ping the worker above.</div>
+  {% endif %}
+</div>
+
+{% endblock %}

@@ -30,15 +30,19 @@ def get_asx200_tickers() -> list[str]:
     Returns list in yfinance format: ["BHP.AX", "CBA.AX", ...]
     Falls back to a cached list if Wikipedia is unavailable.
     """
+    import io, requests as _req
     try:
-        tables = pd.read_html(ASX200_WIKIPEDIA_URL)
-        # The ASX 200 table is typically the first table with a 'Code' column
+        # pd.read_html blocks Wikipedia without a browser UA — use requests first
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; VCPilot/1.0; +https://github.com/anupamwagle/vcpilot)"}
+        resp = _req.get(ASX200_WIKIPEDIA_URL, headers=headers, timeout=20)
+        resp.raise_for_status()
+        tables = pd.read_html(io.StringIO(resp.text))
         for tbl in tables:
-            cols = [c.lower() for c in tbl.columns]
-            if "code" in cols or "ticker" in cols:
-                col = "Code" if "Code" in tbl.columns else "Ticker"
+            cols_lower = [str(c).lower() for c in tbl.columns]
+            if "code" in cols_lower:
+                col = next(c for c in tbl.columns if str(c).lower() == "code")
                 codes = tbl[col].dropna().tolist()
-                tickers = [f"{c.strip().upper()}.AX" for c in codes if isinstance(c, str)]
+                tickers = [f"{str(c).strip().upper()}.AX" for c in codes if isinstance(c, str) and len(c.strip()) >= 2]
                 if len(tickers) > 100:
                     logger.info(f"Fetched {len(tickers)} ASX200 tickers from Wikipedia")
                     return tickers
@@ -46,6 +50,7 @@ def get_asx200_tickers() -> list[str]:
         logger.warning(f"Wikipedia ASX200 fetch failed: {e}. Using fallback list.")
 
     # Minimal fallback — top 20 by market cap (extend this in production)
+    logger.warning("Using 20-stock fallback universe — Wikipedia unavailable")
     return [
         "BHP.AX", "CBA.AX", "NAB.AX", "WBC.AX", "ANZ.AX", "WES.AX",
         "MQG.AX", "CSL.AX", "RIO.AX", "WOW.AX", "FMG.AX", "TLS.AX",
@@ -57,6 +62,44 @@ def get_asx200_tickers() -> list[str]:
 # ---------------------------------------------------------------------------
 # Price & OHLCV
 # ---------------------------------------------------------------------------
+
+def _add_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute moving averages, volume metrics, 52-week range, and ATR."""
+    if df is None or df.empty:
+        return df
+
+    # Ensure standard names
+    if "adj close" in df.columns and "adj_close" not in df.columns:
+        df = df.rename(columns={"adj close": "adj_close"})
+
+    # Compute moving averages
+    for period_ma, col in [(10, "ma_10"), (21, "ma_21"), (50, "ma_50"),
+                           (150, "ma_150"), (200, "ma_200")]:
+        df[col] = df["close"].rolling(period_ma, min_periods=period_ma).mean()
+
+    df["ma_200_prev"] = df["ma_200"].shift(1)
+
+    # Volume metrics
+    df["avg_vol_50"] = df["volume"].rolling(50, min_periods=20).mean()
+    df["vol_ratio"] = df["volume"] / df["avg_vol_50"].replace(0, np.nan)
+
+    # 52-week range
+    df["high_52w"] = df["high"].rolling(252, min_periods=50).max()
+    df["low_52w"]  = df["low"].rolling(252, min_periods=50).min()
+    df["pct_from_52w_high"] = (df["close"] - df["high_52w"]) / df["high_52w"] * 100
+    df["pct_from_52w_low"]  = (df["close"] - df["low_52w"]) / df["low_52w"] * 100
+
+    # ATR (14-day)
+    df["prev_close"] = df["close"].shift(1)
+    df["tr"] = df[["high", "low", "prev_close"]].apply(
+        lambda r: max(r["high"] - r["low"],
+                      abs(r["high"] - r["prev_close"]),
+                      abs(r["low"] - r["prev_close"])), axis=1
+    )
+    df["atr_14"] = df["tr"].rolling(14, min_periods=14).mean()
+
+    return df
+
 
 def get_price_history(
     ticker: str,
@@ -81,31 +124,7 @@ def get_price_history(
         df["date"] = pd.to_datetime(df["date"]).dt.date
         df = df.sort_values("date").reset_index(drop=True)
 
-        # Compute moving averages
-        for period_ma, col in [(10, "ma_10"), (21, "ma_21"), (50, "ma_50"),
-                               (150, "ma_150"), (200, "ma_200")]:
-            df[col] = df["close"].rolling(period_ma, min_periods=period_ma).mean()
-
-        df["ma_200_prev"] = df["ma_200"].shift(1)
-
-        # Volume metrics
-        df["avg_vol_50"] = df["volume"].rolling(50, min_periods=20).mean()
-        df["vol_ratio"] = df["volume"] / df["avg_vol_50"].replace(0, np.nan)
-
-        # 52-week range
-        df["high_52w"] = df["high"].rolling(252, min_periods=50).max()
-        df["low_52w"]  = df["low"].rolling(252, min_periods=50).min()
-        df["pct_from_52w_high"] = (df["close"] - df["high_52w"]) / df["high_52w"] * 100
-        df["pct_from_52w_low"]  = (df["close"] - df["low_52w"]) / df["low_52w"] * 100
-
-        # ATR (14-day)
-        df["prev_close"] = df["close"].shift(1)
-        df["tr"] = df[["high", "low", "prev_close"]].apply(
-            lambda r: max(r["high"] - r["low"],
-                          abs(r["high"] - r["prev_close"]),
-                          abs(r["low"] - r["prev_close"])), axis=1
-        )
-        df["atr_14"] = df["tr"].rolling(14, min_periods=14).mean()
+        df = _add_indicators(df)
 
         return df
 
@@ -156,6 +175,7 @@ def get_batch_prices(
             df.columns = [c.lower() if isinstance(c, str) else c for c in df.columns]
             df["date"] = pd.to_datetime(df["date"]).dt.date
             df = df.sort_values("date").reset_index(drop=True)
+            df = _add_indicators(df)
             results[ticker] = df
         except Exception as e:
             logger.debug(f"Batch parse failed for {ticker}: {e}")

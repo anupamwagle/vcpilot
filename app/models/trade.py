@@ -59,7 +59,11 @@ class Order(Base):
     ibkr_order_id   = Column(Integer, nullable=True, index=True)  # IBKR perm ID
     ticker          = Column(String(16), nullable=False, index=True)
     account_id      = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
     signal_id       = Column(Integer, ForeignKey("signals.id"), nullable=True)
+
+    # Relationships
+    organization    = relationship("Organization")
 
     action          = Column(Enum(OrderAction), nullable=False)
     order_type      = Column(Enum(OrderType), nullable=False)
@@ -94,7 +98,11 @@ class Position(Base):
     id              = Column(Integer, primary_key=True)
     ticker          = Column(String(16), nullable=False, index=True)
     account_id      = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
     signal_id       = Column(Integer, ForeignKey("signals.id"), nullable=True)
+
+    # Relationships
+    organization    = relationship("Organization")
 
     entry_date      = Column(Date, nullable=False)
     entry_price     = Column(Numeric(12, 4), nullable=False)
@@ -144,7 +152,11 @@ class Trade(Base):
     id              = Column(Integer, primary_key=True)
     ticker          = Column(String(16), nullable=False, index=True)
     account_id      = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
     signal_id       = Column(Integer, ForeignKey("signals.id"), nullable=True)
+
+    # Relationships
+    organization    = relationship("Organization")
 
     entry_date      = Column(Date, nullable=False)
     exit_date       = Column(Date, nullable=False)

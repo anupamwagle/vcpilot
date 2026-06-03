@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}Super Admin · Organisation Details{% endblock %}
+{% block page_title %}{{ organization.name }} · Tenant Details{% endblock %}
+
+{% block content %}
+
+<div class="mb-4">
+  <a href="/superadmin/organizations" class="text-xs font-semibold" style="color:var(--a-accent)">← Back to Organisations</a>
+</div>
+
+<!-- Overview Cards -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+  <div class="stat-card">
+    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Tier Allocation</p>
+    <div class="flex items-center gap-2">
+      {% if organization.tier.value == 'GOLD' %}
+        <span class="text-lg font-bold" style="color:#d97706">🥇 Gold</span>
+      {% elif organization.tier.value == 'SILVER' %}
+        <span class="text-lg font-bold" style="color:#475569">🥈 Silver</span>
+      {% else %}
+        <span class="text-lg font-bold" style="color:#c2410c">🥉 Bronze</span>
+      {% endif %}
+    </div>
+    <p class="text-xs mt-1" style="color:var(--text-subtle)">Rules inherited automatically</p>
+  </div>
+
+  <div class="stat-card">
+    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Active Users</p>
+    <p class="text-lg font-bold" style="color:var(--text)">{{ users|length }} User(s)</p>
+    <p class="text-xs mt-1" style="color:var(--text-subtle)">Registered in tenant base</p>
+  </div>
+
+  <div class="stat-card">
+    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Trading Accounts</p>
+    <p class="text-lg font-bold" style="color:var(--t-accent)">{{ accounts|length }} Account(s)</p>
+    <p class="text-xs mt-1" style="color:var(--text-subtle)">Mapped IBKR endpoints</p>
+  </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+  
+  <!-- Accounts List -->
+  <div class="card overflow-hidden">
+    <div class="section-head px-4 py-3">
+      <p class="section-title">💳 Accounts Associated</p>
+    </div>
+    {% if accounts %}
+    <table class="w-full text-left border-collapse">
+      <thead>
+        <tr style="background:var(--surface-alt);border-bottom:1px solid var(--border)">
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Account Name</th>
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">IBKR Account</th>
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Capital (AUD)</th>
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Environment</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for acc in accounts %}
+        <tr class="tbl-row border-b last:border-0" style="border-color:var(--border)">
+          <td class="p-3 text-sm font-semibold" style="color:var(--text)">{{ acc.name }}</td>
+          <td class="p-3 text-xs font-mono" style="color:var(--text-subtle)">{{ acc.ibkr_account_id or '—' }}</td>
+          <td class="p-3 text-sm font-bold" style="color:var(--text)">${{ "{:,.2f}".format(acc.capital_aud) }}</td>
+          <td class="p-3 text-xs">
+            {% if acc.is_paper %}
+              <span class="text-xs font-semibold px-2 py-0.5 rounded" style="background:var(--surface-alt);color:var(--text-subtle)">📄 Paper</span>
+            {% else %}
+              <span class="text-xs font-semibold px-2 py-0.5 rounded" style="background:#ffedd5;color:#c2410c">⚠ LIVE</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="p-6 text-center text-xs" style="color:var(--text-subtle)">No accounts found for this organisation.</div>
+    {% endif %}
+  </div>
+
+  <!-- Users and Roles List -->
+  <div class="card overflow-hidden">
+    <div class="section-head px-4 py-3">
+      <p class="section-title">👤 Organisation Users</p>
+    </div>
+    {% if users %}
+    <table class="w-full text-left border-collapse">
+      <thead>
+        <tr style="background:var(--surface-alt);border-bottom:1px solid var(--border)">
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Name</th>
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Email</th>
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Role</th>
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr class="tbl-row border-b last:border-0" style="border-color:var(--border)">
+          <td class="p-3 text-sm font-semibold" style="color:var(--text)">{{ u.name or '—' }}</td>
+          <td class="p-3 text-xs font-mono" style="color:var(--text-subtle)">{{ u.email }}</td>
+          <td class="p-3 text-xs font-semibold" style="color:var(--a-accent)">
+            {% for r in u.roles %}
+              {{ r.name }}{% if not loop.last %}, {% endif %}
+            {% else %}
+              No Role
+            {% endfor %}
+          </td>
+          <td class="p-3 text-xs">
+            {% if u.is_active %}
+              <span class="font-bold" style="color:var(--pos)">Active</span>
+            {% else %}
+              <span class="font-bold" style="color:var(--neg)">Inactive</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="p-6 text-center text-xs" style="color:var(--text-subtle)">No users found for this organisation.</div>
+    {% endif %}
+  </div>
+
+</div>
+
+<!-- Scoped Audit Logs -->
+<div class="card overflow-hidden">
+  <div class="section-head px-4 py-3">
+    <p class="section-title">📋 Organisation Audit Trail</p>
+    <span class="text-xs" style="color:var(--text-subtle)">Recent activity log</span>
+  </div>
+  
+  {% if logs %}
+  <div>
+    {% for log in logs %}
+    <div class="flex items-start gap-3 px-4 py-2.5 tbl-row">
+      <span class="text-xs font-mono flex-shrink-0 w-16 mt-0.5" style="color:var(--text-subtle)">{{ log.created_at.strftime('%H:%M:%S') if log.created_at else 'N/A' }}</span>
+      <div class="flex-1 min-w-0">
+        <span class="text-xs font-semibold" style="color:var(--a-accent)">{{ log.action }}</span>
+        {% if log.ticker %}<span class="text-xs font-mono ml-1.5" style="color:var(--text-muted)">{{ log.ticker }}</span>{% endif %}
+        {% if log.message %}<p class="text-xs truncate mt-0.5" style="color:var(--text-subtle)">{{ log.message }}</p>{% endif %}
+      </div>
+      <span class="text-xs flex-shrink-0 font-mono text-right" style="color:var(--text-subtle)">{{ log.actor }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="p-10 text-center text-xs" style="color:var(--text-subtle)">No activity logged yet for this organisation.</div>
+  {% endif %}
+</div>
+
+{% endblock %}

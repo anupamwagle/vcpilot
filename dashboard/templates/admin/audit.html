@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Audit Log{% endblock %}
+{% block page_title %}Audit Log{% endblock %}
+
+{% block content %}
+<!-- Filters -->
+<form method="get" action="/admin/audit"
+      style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:.75rem;padding:1rem;background:var(--surface);border:1px solid var(--border);border-radius:.75rem;margin-bottom:1.25rem">
+  <div style="flex:1;min-width:9rem">
+    <label class="field-label">Action</label>
+    <select name="action" class="input">
+      {% for action in actions %}
+      <option value="{{ action }}" {% if action == filter_action %}selected{% endif %}>{{ action }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div style="flex:0 0 8rem">
+    <label class="field-label">Ticker</label>
+    <input type="text" name="ticker" value="{{ filter_ticker }}" placeholder="BHP" class="input" style="text-transform:uppercase"/>
+  </div>
+  <button type="submit" class="btn-admin" style="padding:.5rem 1.25rem">Filter</button>
+  <a href="/admin/audit" class="btn-ghost" style="padding:.5rem 1rem">Clear</a>
+</form>
+
+<!-- Log table -->
+<div class="card overflow-hidden">
+  <div class="section-head">
+    <p class="section-title">Event Log</p>
+    <span class="tag">{{ logs|length }} records shown · append-only</span>
+  </div>
+  {% if logs %}
+  <div class="overflow-x-auto">
+    <table class="tbl">
+      <thead><tr>
+        <th style="width:7rem">Time</th>
+        <th>Action</th>
+        <th style="width:5rem">Actor</th>
+        <th style="width:6rem">Ticker</th>
+        <th>Message</th>
+        <th style="width:6rem">Before</th>
+        <th style="width:6rem">After</th>
+      </tr></thead>
+      <tbody>
+        {% for log in logs %}
+        <tr>
+          <td class="mono" style="font-size:.7rem;color:var(--text-subtle)">{{ log.time }}</td>
+          <td><span class="tag-admin" style="font-size:.7rem">{{ log.action }}</span></td>
+          <td style="font-size:.75rem;color:var(--text-muted)">{{ log.actor }}</td>
+          <td class="mono" style="font-size:.75rem">{{ log.ticker }}</td>
+          <td style="font-size:.75rem;color:var(--text-muted);max-width:20rem" class="truncate">{{ log.message }}</td>
+          <td class="mono" style="font-size:.7rem;color:var(--text-subtle)">{{ log.before }}</td>
+          <td class="mono" style="font-size:.7rem;color:{% if log.after not in ('—','') %}var(--pos){% else %}var(--text-subtle){% endif %}">{{ log.after }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty"><p class="empty-title">No log entries match your filters</p></div>
+  {% endif %}
+</div>
+{% endblock %}

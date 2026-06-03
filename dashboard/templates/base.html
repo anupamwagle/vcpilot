@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en" id="html-root">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>{% block title %}Dashboard{% endblock %} · VCPilot</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.3.0/flowbite.min.css"/>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231d4ed8' stroke-width='2.5'><path d='M3 17c1.5-1 2.5-3 4-3s2.5 1.5 4 1.5 2-2 3.5-2 1.5.5 2.5.5L21 9M21 9h-4M21 9v4' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+
+  <style>
+    /* =====================================================================
+       THEME — CSS VARIABLES
+       Light = Flowbite blue/white (default)
+       Dark  = Charcoal/emerald
+    ===================================================================== */
+    :root {
+      --bg:            #f9fafb;
+      --surface:       #ffffff;
+      --surface-alt:   #f3f4f6;
+      --sidebar:       #ffffff;
+      --border:        #e5e7eb;
+      --border-strong: #d1d5db;
+      --text:          #111827;
+      --text-muted:    #6b7280;
+      --text-subtle:   #9ca3af;
+      --shadow:        0 1px 3px 0 rgb(0 0 0 / .08), 0 1px 2px -1px rgb(0 0 0 / .08);
+      --shadow-md:     0 4px 6px -1px rgb(0 0 0 / .07), 0 2px 4px -2px rgb(0 0 0 / .07);
+
+      /* Section accents */
+      --t-accent:      #1d4ed8;   /* blue-700  — Trading */
+      --t-accent-bg:   #eff6ff;   /* blue-50 */
+      --t-accent-mid:  #dbeafe;   /* blue-100 */
+      --a-accent:      #6d28d9;   /* violet-700 — Admin */
+      --a-accent-bg:   #f5f3ff;   /* violet-50 */
+      --a-accent-mid:  #ede9fe;   /* violet-100 */
+
+      /* Status */
+      --pos:           #059669;   /* emerald-600 */
+      --pos-bg:        #ecfdf5;
+      --neg:           #dc2626;   /* red-600 */
+      --neg-bg:        #fef2f2;
+      --warn:          #d97706;   /* amber-600 */
+      --warn-bg:       #fffbeb;
+
+      /* Regime */
+      --bull:          #059669; --bull-bg: #ecfdf5; --bull-border: #a7f3d0;
+      --caution:       #d97706; --caution-bg: #fffbeb; --caution-border: #fde68a;
+      --bear:          #dc2626; --bear-bg: #fef2f2; --bear-border: #fca5a5;
+    }
+
+    html.dark {
+      --bg:            #030712;
+      --surface:       #111827;
+      --surface-alt:   #1f2937;
+      --sidebar:       #111827;
+      --border:        #374151;
+      --border-strong: #4b5563;
+      --text:          #f9fafb;
+      --text-muted:    #9ca3af;
+      --text-subtle:   #6b7280;
+      --shadow:        none;
+      --shadow-md:     none;
+
+      --t-accent:      #34d399;
+      --t-accent-bg:   rgba(52,211,153,.10);
+      --t-accent-mid:  rgba(52,211,153,.18);
+      --a-accent:      #a78bfa;
+      --a-accent-bg:   rgba(167,139,250,.10);
+      --a-accent-mid:  rgba(167,139,250,.18);
+
+      --pos:           #34d399;
+      --pos-bg:        rgba(52,211,153,.10);
+      --neg:           #f87171;
+      --neg-bg:        rgba(248,113,113,.10);
+      --warn:          #fbbf24;
+      --warn-bg:       rgba(251,191,36,.10);
+
+      --bull:          #34d399; --bull-bg: rgba(52,211,153,.10); --bull-border: rgba(52,211,153,.30);
+      --caution:       #fbbf24; --caution-bg: rgba(251,191,36,.10); --caution-border: rgba(251,191,36,.30);
+      --bear:          #f87171; --bear-bg: rgba(248,113,113,.10); --bear-border: rgba(248,113,113,.30);
+    }
+
+    /* =====================================================================
+       BASE ELEMENTS
+    ===================================================================== */
+    *, *::before, *::after { box-sizing: border-box; }
+    body { background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, sans-serif; margin: 0; }
+
+    /* =====================================================================
+       COMPONENT CLASSES
+    ===================================================================== */
+
+    /* Cards */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      box-shadow: var(--shadow);
+    }
+    .stat-card { padding: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: 0.75rem; box-shadow: var(--shadow); }
+
+    /* Tables */
+    .tbl-head   { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); background: var(--surface-alt); }
+    .tbl-row    { border-bottom: 1px solid var(--border); }
+    .tbl-row:hover { background: var(--surface-alt); }
+    .tbl-cell   { padding: 0.625rem 1rem; font-size: 0.8125rem; color: var(--text); }
+
+    /* Sidebar */
+    #vcpilot-sidebar { background: var(--sidebar); border-right: 1px solid var(--border); }
+    .sidebar-section-label {
+      display: block; padding: 0.75rem 0.75rem 0.25rem;
+      font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.1em; color: var(--text-subtle);
+    }
+    .nav-link {
+      display: flex; align-items: center; gap: 0.625rem;
+      padding: 0.5rem 0.75rem; border-radius: 0.5rem;
+      font-size: 0.8125rem; font-weight: 500; color: var(--text-muted);
+      text-decoration: none; transition: background 150ms, color 150ms;
+    }
+    .nav-link:hover { background: var(--surface-alt); color: var(--text); }
+    .nav-link.active-t { background: var(--t-accent-bg); color: var(--t-accent); }
+    .nav-link.active-a { background: var(--a-accent-bg); color: var(--a-accent); }
+    .nav-badge {
+      margin-left: auto; font-size: 0.65rem; font-weight: 700;
+      padding: 0.1rem 0.4rem; border-radius: 0.3rem;
+      background: var(--t-accent-mid); color: var(--t-accent);
+    }
+
+    /* Navbar */
+    #vcpilot-navbar { background: var(--surface); border-bottom: 1px solid var(--border); box-shadow: var(--shadow); }
+
+    /* Status badges */
+    .badge { display: inline-flex; align-items: center; font-size: 0.7rem; font-weight: 700; padding: 0.2rem 0.55rem; border-radius: 9999px; border-width: 1px; }
+    .badge-bull    { background: var(--bull-bg);    color: var(--bull);    border-color: var(--bull-border); }
+    .badge-caution { background: var(--caution-bg); color: var(--caution); border-color: var(--caution-border); }
+    .badge-bear    { background: var(--bear-bg);    color: var(--bear);    border-color: var(--bear-border); }
+    .badge-paper   { background: #dbeafe; color: #1d4ed8; border-color: #bfdbfe; }
+    .badge-live    { background: #ffedd5; color: #c2410c; border-color: #fed7aa; }
+    .badge-paused  { background: var(--warn-bg); color: var(--warn); border-color: rgba(217,119,6,.3); }
+    html.dark .badge-paper { background: rgba(59,130,246,.15); color: #93c5fd; border-color: rgba(59,130,246,.3); }
+    html.dark .badge-live  { background: rgba(249,115,22,.15); color: #fb923c; border-color: rgba(249,115,22,.3); }
+
+    /* P&L colours */
+    .pnl-pos { color: var(--pos); }
+    .pnl-neg { color: var(--neg); }
+    .pnl-pos-bg { background: var(--pos-bg); }
+    .pnl-neg-bg { background: var(--neg-bg); }
+
+    /* Buttons */
+    .btn-primary   { display:inline-flex;align-items:center;gap:.375rem;padding:.5rem 1rem;font-size:.8125rem;font-weight:600;border-radius:.5rem;transition:background 150ms;color:#fff;background:var(--t-accent); }
+    .btn-primary:hover { filter: brightness(1.1); }
+    .btn-ghost     { display:inline-flex;align-items:center;gap:.375rem;padding:.5rem 1rem;font-size:.8125rem;font-weight:500;border-radius:.5rem;transition:all 150ms;color:var(--text-muted);background:transparent;border:1px solid var(--border); }
+    .btn-ghost:hover { background:var(--surface-alt); color:var(--text); }
+    .btn-admin     { display:inline-flex;align-items:center;gap:.375rem;padding:.5rem 1rem;font-size:.8125rem;font-weight:600;border-radius:.5rem;transition:background 150ms;color:#fff;background:var(--a-accent); }
+    .btn-danger    { display:inline-flex;align-items:center;gap:.375rem;padding:.5rem 1rem;font-size:.8125rem;font-weight:600;border-radius:.5rem;transition:background 150ms;color:#fff;background:var(--neg); }
+
+    /* Inputs */
+    .input {
+      background: var(--surface-alt); border: 1px solid var(--border);
+      color: var(--text); border-radius: .5rem; padding: .5rem .875rem;
+      font-size: .8125rem; outline: none; width: 100%;
+      transition: border-color 150ms, box-shadow 150ms;
+    }
+    .input:focus { border-color: var(--t-accent); box-shadow: 0 0 0 3px rgba(29,78,216,.15); }
+    html.dark .input:focus { box-shadow: 0 0 0 3px rgba(52,211,153,.15); }
+    .input::placeholder { color: var(--text-subtle); }
+
+    /* Toggle switch */
+    .toggle-wrap { position:relative; display:inline-flex; align-items:center; cursor:pointer; }
+    .toggle-inp  { position:absolute; opacity:0; width:0; height:0; }
+    .toggle-track {
+      width:2.25rem; height:1.25rem; border-radius:9999px;
+      background: var(--border-strong); transition: background 200ms;
+    }
+    .toggle-inp:checked ~ .toggle-track { background: var(--t-accent); }
+    .toggle-thumb {
+      position:absolute; top:.125rem; left:.125rem;
+      width:1rem; height:1rem; border-radius:9999px;
+      background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.2);
+      transition: transform 200ms;
+    }
+    .toggle-inp:checked ~ .toggle-track ~ .toggle-thumb { transform: translateX(1rem); }
+
+    /* Divider */
+    .divider { border-top: 1px solid var(--border); }
+
+    /* Alert */
+    .alert-success { display:flex;gap:.625rem;align-items:center;padding:.75rem 1rem;background:var(--pos-bg);border:1px solid var(--bull-border);border-radius:.5rem;color:var(--pos);font-size:.8125rem;font-weight:500; }
+    .alert-warn    { display:flex;gap:.625rem;align-items:center;padding:.75rem 1rem;background:var(--warn-bg);border:1px solid var(--caution-border);border-radius:.5rem;color:var(--warn);font-size:.8125rem;font-weight:500; }
+    .alert-danger  { display:flex;gap:.625rem;align-items:center;padding:.75rem 1rem;background:var(--neg-bg);border:1px solid var(--bear-border);border-radius:.5rem;color:var(--neg);font-size:.8125rem;font-weight:500; }
+    .alert-info    { display:flex;gap:.625rem;align-items:center;padding:.75rem 1rem;background:var(--t-accent-bg);border:1px solid var(--t-accent-mid);border-radius:.5rem;color:var(--t-accent);font-size:.8125rem;font-weight:500; }
+
+    /* Section header */
+    .section-head {
+      display:flex; align-items:center; justify-content:space-between;
+      padding: .75rem 1rem; border-bottom: 1px solid var(--border);
+    }
+    .section-title { font-size:.875rem; font-weight:600; color:var(--text); }
+
+    /* Sidebar footer */
+    #sidebar-footer { background: var(--sidebar); border-top: 1px solid var(--border); }
+
+    /* Tables — use these in all child templates */
+    .tbl { width:100%; font-size:.8125rem; border-collapse:collapse; }
+    .tbl th { padding:.625rem 1rem; font-size:.7rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text-subtle); background:var(--surface-alt); text-align:left; white-space:nowrap; }
+    .tbl td { padding:.625rem 1rem; color:var(--text); border-bottom:1px solid var(--border); }
+    .tbl tr:last-child td { border-bottom:none; }
+    .tbl tr:hover td { background:var(--surface-alt); }
+    .tbl .mono { font-family:'SF Mono',Monaco,monospace; }
+
+    /* Code snippet */
+    .code { font-family:'SF Mono',Monaco,monospace; font-size:.75rem; padding:.15rem .4rem; background:var(--surface-alt); color:var(--text-muted); border-radius:.25rem; border:1px solid var(--border); }
+
+    /* Empty states */
+    .empty { padding:2.5rem 1rem; text-align:center; }
+    .empty-title { color:var(--text-muted); font-size:.875rem; font-weight:500; }
+    .empty-sub   { color:var(--text-subtle); font-size:.75rem; margin-top:.25rem; }
+
+    /* Label */
+    .field-label { display:block; font-size:.75rem; font-weight:600; color:var(--text-muted); margin-bottom:.375rem; }
+
+    /* Mono badge (used in rules/audit) */
+    .tag { display:inline-block; font-size:.7rem; font-weight:600; padding:.15rem .5rem; border-radius:.3rem; background:var(--surface-alt); color:var(--text-muted); border:1px solid var(--border); }
+    .tag-pos { background:var(--pos-bg); color:var(--pos); border-color:var(--bull-border); }
+    .tag-neg { background:var(--neg-bg); color:var(--neg); border-color:var(--bear-border); }
+    .tag-blue { background:var(--t-accent-bg); color:var(--t-accent); border-color:var(--t-accent-mid); }
+    .tag-admin { background:var(--a-accent-bg); color:var(--a-accent); border-color:var(--a-accent-mid); }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width:5px; height:5px; }
+    ::-webkit-scrollbar-track { background:transparent; }
+    ::-webkit-scrollbar-thumb { background:var(--border-strong); border-radius:9999px; }
+
+    /* Select / option — force theme colours so native dropdown matches */
+    select.input { color-scheme: light; }
+    html.dark select.input { color-scheme: dark; background:var(--surface-alt); color:var(--text); }
+    html.dark select.input option { background:var(--surface-alt); color:var(--text); }
+  </style>
+</head>
+
+<body>
+
+<!-- Theme init — runs before render to prevent flash -->
+<script>
+  (function(){
+    var stored = localStorage.getItem('vcpilot-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    if (stored === 'dark' || (!stored && prefersDark)) {
+      document.getElementById('html-root').classList.add('dark');
+    }
+  })();
+</script>
+
+<!-- =====================================================================
+     SIDEBAR
+===================================================================== -->
+<aside id="vcpilot-sidebar"
+  class="fixed top-0 left-0 z-40 w-64 h-screen
+         transition-transform duration-300 -translate-x-full lg:translate-x-0
+         flex flex-col">
+
+  <!-- Logo -->
+  <div class="flex items-center gap-3 px-5 py-4 flex-shrink-0" style="border-bottom:1px solid var(--border)">
+    <div class="w-8 h-8 rounded-lg flex items-center justify-center text-white flex-shrink-0"
+         style="background:var(--bg); border: 1.5px solid var(--border)">
+      <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" style="color: var(--t-accent)">
+        <path d="M3 17c1.5-1 2.5-3 4-3s2.5 1.5 4 1.5 2-2 3.5-2 1.5.5 2.5.5L21 9M21 9h-4M21 9v4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div class="flex-1 min-w-0">
+      <p class="font-bold text-sm leading-none" style="color:var(--text)">
+        {% if user_role == 'superadmin' %}Super Admin{% else %}{{ org_name or 'VCPilot' }}{% endif %}
+      </p>
+      <p class="text-xs mt-0.5" style="color:var(--text-subtle)">ASX · Minervini SEPA</p>
+    </div>
+    {% if user_role != 'superadmin' %}
+      {% if is_paper %}<span class="badge badge-paper">PAPER</span>
+      {% else %}<span class="badge badge-live">LIVE</span>{% endif %}
+    {% endif %}
+  </div>
+
+  <!-- Nav -->
+  <nav class="flex-1 px-3 py-3 space-y-0.5 overflow-y-auto">
+    <!-- Scoped Org Workspace -->
+    <span class="sidebar-section-label">Trading</span>
+
+    <a href="/" class="nav-link {% if path == '/' %}active-t{% endif %}">
+      <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+      Dashboard
+    </a>
+
+    <a href="/positions" class="nav-link {% if path == '/positions' %}active-t{% endif %}">
+      <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+      Positions
+      {% if open_count > 0 %}<span class="nav-badge">{{ open_count }}</span>{% endif %}
+    </a>
+
+    <a href="/signals" class="nav-link {% if path == '/signals' %}active-t{% endif %}">
+      <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
+      Signals
+      {% if signal_count > 0 %}<span class="nav-badge">{{ signal_count }}</span>{% endif %}
+    </a>
+
+    <a href="/watchlist" class="nav-link {% if path == '/watchlist' %}active-t{% endif %}">
+      <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+      Watchlist
+    </a>
+
+    <span class="sidebar-section-label" style="margin-top:.75rem">Admin</span>
+
+    <a href="/admin/health" class="nav-link {% if path == '/admin/health' %}active-a{% endif %}">
+      <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
+      System Health
+    </a>
+
+    <a href="/admin/rules" class="nav-link {% if path == '/admin/rules' %}active-a{% endif %}">
+      <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+      Rules Config
+    </a>
+
+    <a href="/admin/config" class="nav-link {% if path == '/admin/config' %}active-a{% endif %}">
+      <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+      System Config
+    </a>
+
+    <a href="/admin/audit" class="nav-link {% if path == '/admin/audit' %}active-a{% endif %}">
+      <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+      Audit Log
+    </a>
+
+    <a href="/admin/tasks" class="nav-link {% if path == '/admin/tasks' %}active-a{% endif %}">
+      <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
+      Task Log
+      <span class="nav-badge" style="background:var(--pos-bg);color:var(--pos)">Live</span>
+    </a>
+
+    {% if whatsapp_enabled %}
+    <a href="/admin/whatsapp" class="nav-link {% if path == '/admin/whatsapp' %}active-a{% endif %}">
+      <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+      WhatsApp
+    </a>
+    {% endif %}
+
+    {% if user_role == 'superadmin' %}
+    <span class="sidebar-section-label" style="margin-top:.75rem">SaaS Management</span>
+
+    <a href="/superadmin/organizations" class="nav-link {% if path.startswith('/superadmin/organization') %}active-t{% endif %}">
+      <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+      Organisations
+    </a>
+
+    <a href="/superadmin/rules" class="nav-link {% if path == '/superadmin/rules' %}active-a{% endif %}">
+      <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+      Global Rules (Tiers)
+    </a>
+
+    <a href="/superadmin/users" class="nav-link {% if path == '/superadmin/users' %}active-a{% endif %}">
+      <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+      Global Users
+    </a>
+    {% endif %}
+  </nav>
+
+  <!-- Sidebar footer -->
+  <div id="sidebar-footer" class="px-4 py-3 flex-shrink-0">
+    <div class="flex items-center justify-between text-xs" style="color:var(--text-subtle)">
+      <span class="flex items-center gap-1.5">
+        {% if worker_status == 'online' %}
+          <span class="w-1.5 h-1.5 rounded-full animate-pulse" style="background:var(--pos)"></span>Worker OK
+        {% elif worker_status == 'starting' %}
+          <span class="w-1.5 h-1.5 rounded-full animate-pulse" style="background:var(--warn)"></span>Starting…
+        {% else %}
+          <span class="w-1.5 h-1.5 rounded-full" style="background:var(--neg)"></span>Worker offline
+        {% endif %}
+      </span>
+      <a href="/logout" style="color:var(--text-subtle)" class="hover:underline">Sign out</a>
+    </div>
+  </div>
+</aside>
+
+<!-- =====================================================================
+     MAIN WRAPPER
+===================================================================== -->
+<div class="lg:ml-64 min-h-screen flex flex-col">
+
+  <!-- Top navbar -->
+  <header id="vcpilot-navbar" class="sticky top-0 z-30">
+    <div class="flex items-center gap-3 px-4 py-3">
+
+      <!-- Hamburger (mobile) -->
+      <button data-drawer-target="vcpilot-sidebar" data-drawer-toggle="vcpilot-sidebar"
+              type="button" aria-controls="vcpilot-sidebar"
+              class="inline-flex lg:hidden items-center p-1.5 rounded-lg transition"
+              style="color:var(--text-muted)" onmouseover="this.style.background='var(--surface-alt)'" onmouseout="this.style.background='transparent'">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+
+      <!-- Page title -->
+      <h1 class="flex-1 text-sm font-semibold truncate" style="color:var(--text)">
+        {% block page_title %}Dashboard{% endblock %}
+      </h1>
+
+      <!-- Status pills + controls -->
+      <div class="flex items-center gap-2 flex-shrink-0">
+
+        <!-- Market regime & trading controls -->
+        {% if user_role != 'superadmin' %}
+        {% if regime == 'BULL' %}<span class="badge badge-bull hidden sm:inline-flex">🟢 BULL</span>
+        {% elif regime == 'CAUTION' %}<span class="badge badge-caution hidden sm:inline-flex">🟡 CAUTION</span>
+        {% elif regime == 'BEAR' %}<span class="badge badge-bear hidden sm:inline-flex">🔴 BEAR</span>
+        {% else %}<span class="badge hidden sm:inline-flex" style="background:var(--surface-alt);color:var(--text-subtle);border-color:var(--border)">⚪ Not set</span>
+        {% endif %}
+
+        <!-- Trading status -->
+        {% if not trading_active %}
+          {% if worker_status != 'online' %}
+          <span class="badge hidden sm:inline-flex" style="background:var(--neg-bg);color:var(--neg);border-color:var(--bear-border)">
+            {% if worker_status == 'starting' %}⏳ Starting{% else %}⚠ Worker offline{% endif %}
+          </span>
+          {% elif trading_paused %}
+          <span class="badge badge-paused hidden sm:inline-flex">⏸ Paused</span>
+          {% endif %}
+        {% endif %}
+
+        <!-- Pause/Resume -->
+        {% if trading_active %}
+        <form method="post" action="/action/pause" class="hidden sm:block">
+          <button type="submit" class="btn-ghost py-1 px-3 text-xs">Pause</button>
+        </form>
+        {% elif trading_paused and worker_status == 'online' %}
+        <form method="post" action="/action/resume" class="hidden sm:block">
+          <button type="submit" class="btn-primary py-1 px-3 text-xs">Resume</button>
+        </form>
+        {% endif %}
+        {% endif %}
+
+        <!-- Org Selector (Super Admins only) -->
+        {% if user_role == 'superadmin' and all_orgs %}
+        <form action="/superadmin/switch-org" method="post" class="mr-2">
+          <select name="organization_id" onchange="this.form.submit()" class="input py-1 px-2 text-xs w-48 font-semibold" style="background:var(--surface);color:var(--text);border-color:var(--border);border-radius:0.375rem">
+            {% for org in all_orgs %}
+              <option value="{{ org.id }}" {% if org.id == current_org_id %}selected{% endif %}>🏢 {{ org.name }}</option>
+            {% endfor %}
+          </select>
+        </form>
+        {% endif %}
+
+        <!-- Theme toggle -->
+        <button onclick="toggleTheme()" id="theme-btn" title="Toggle theme"
+                class="p-1.5 rounded-lg transition"
+                style="color:var(--text-muted);background:transparent"
+                onmouseover="this.style.background='var(--surface-alt)'" onmouseout="this.style.background='transparent'">
+          <!-- Moon (shown in light mode) -->
+          <svg id="icon-moon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+          </svg>
+          <!-- Sun (shown in dark mode) -->
+          <svg id="icon-sun" class="w-4 h-4 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Flash messages from redirects -->
+  {% if request.query_params.get('msg') == 'screen' %}
+  <div class="mx-4 mt-4 alert-success">
+    <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+    Screener queued — results appear below within a few minutes once the worker processes the task.
+  </div>
+  {% elif request.query_params.get('msg') == 'regime' %}
+  <div class="mx-4 mt-4 alert-info">
+    <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+    Market regime evaluation queued — results appear within ~1 minute.
+  </div>
+  {% elif request.query_params.get('msg') == 'ping' %}
+  <div class="mx-4 mt-4 alert-success">
+    <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+    Worker ping sent. Refresh in 10 seconds to see updated status.
+  </div>
+  {% elif request.query_params.get('msg') == 'data' %}
+  <div class="mx-4 mt-4 alert-info">
+    <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+    Price data refresh queued. This may take a few minutes for the full ASX universe.
+  </div>
+  {% endif %}
+
+  <!-- Page content -->
+  <main class="flex-1 p-4 lg:p-6">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="px-6 py-3 text-xs flex items-center justify-between" style="border-top:1px solid var(--border);color:var(--text-subtle)">
+    <span>VCPilot · Minervini SEPA · ASX</span>
+    <span>Heartbeat: {{ heartbeat }}</span>
+  </footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.3.0/flowbite.min.js"></script>
+
+<script>
+  /* Theme toggle */
+  function toggleTheme() {
+    var root = document.getElementById('html-root');
+    var isDark = root.classList.toggle('dark');
+    localStorage.setItem('vcpilot-theme', isDark ? 'dark' : 'light');
+    updateIcons(isDark);
+  }
+  function updateIcons(isDark) {
+    document.getElementById('icon-moon').classList.toggle('hidden', isDark);
+    document.getElementById('icon-sun').classList.toggle('hidden', !isDark);
+  }
+  // Sync icons with current state on load
+  updateIcons(document.getElementById('html-root').classList.contains('dark'));
+</script>
+
+{% block extra_scripts %}{% endblock %}
+</body>
+</html>

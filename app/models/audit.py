@@ -4,11 +4,13 @@ Never update or delete rows in this table.
 """
 import enum
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Enum, Text, JSON
+from sqlalchemy import Column, Integer, String, DateTime, Enum, Text, JSON, ForeignKey
+from sqlalchemy.orm import relationship
 from app.database import Base
 
 
 class AuditAction(str, enum.Enum):
+
     # Config changes
     CONFIG_CHANGED      = "CONFIG_CHANGED"
     RULE_TOGGLED        = "RULE_TOGGLED"
@@ -28,6 +30,7 @@ class AuditAction(str, enum.Enum):
 
     # System events
     SCREENER_RUN        = "SCREENER_RUN"
+    SCREENER_TICKER     = "SCREENER_TICKER"   # Per-ticker result row (verbose mode)
     MARKET_REGIME_CHANGE= "MARKET_REGIME_CHANGE"
     TRADING_PAUSED      = "TRADING_PAUSED"
     TRADING_RESUMED     = "TRADING_RESUMED"
@@ -46,12 +49,17 @@ class AuditLog(Base):
     """
     __tablename__ = "audit_logs"
 
-    id          = Column(Integer, primary_key=True)
-    action      = Column(Enum(AuditAction), nullable=False, index=True)
-    actor       = Column(String(64), default="system")   # system | admin | agent | celery
-    entity_type = Column(String(64), nullable=True)       # e.g. "RuleConfig", "Position"
-    entity_id   = Column(String(64), nullable=True)       # e.g. rule_id or position id
-    ticker      = Column(String(16), nullable=True, index=True)
+    id              = Column(Integer, primary_key=True)
+    action          = Column(Enum(AuditAction), nullable=False, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
+    actor           = Column(String(64), default="system")   # system | admin | agent | celery
+    entity_type     = Column(String(64), nullable=True)       # e.g. "RuleConfig", "Position"
+    entity_id       = Column(String(64), nullable=True)       # e.g. rule_id or position id
+    ticker          = Column(String(16), nullable=True, index=True)
+
+    # Relationships
+    organization    = relationship("Organization")
+
 
     # Before/after for config changes
     before_value= Column(Text, nullable=True)

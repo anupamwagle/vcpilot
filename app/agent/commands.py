@@ -36,8 +36,9 @@ class AgentCommandHandler:
     Each method returns a response string sent back to the user.
     """
 
-    def __init__(self, notifier: WhatsAppNotifier = None):
-        self.notifier = notifier or WhatsAppNotifier()
+    def __init__(self, organization_id: int = None, notifier: WhatsAppNotifier = None):
+        self.organization_id = organization_id
+        self.notifier = notifier or WhatsAppNotifier(organization_id=organization_id)
 
     def handle(self, message: str, sender_jid: str) -> str:
         """
@@ -88,8 +89,14 @@ class AgentCommandHandler:
     def cmd_status(self, args) -> str:
         with get_db() as db:
             trading_paused = self._get_config(db, "trading_paused", "false").lower() == "true"
-            open_positions = db.query(Position).filter(Position.status == TradeStatus.OPEN).count()
-            today_signals  = db.query(Signal).filter(Signal.signal_date == date.today()).count()
+            open_positions = db.query(Position).filter(
+                Position.status == TradeStatus.OPEN,
+                Position.organization_id == self.organization_id
+            ).count()
+            today_signals  = db.query(Signal).filter(
+                Signal.signal_date == date.today(),
+                Signal.organization_id == self.organization_id
+            ).count()
 
         status = "⏸ PAUSED" if trading_paused else "▶️ ACTIVE"
         return (
@@ -102,7 +109,10 @@ class AgentCommandHandler:
 
     def cmd_positions(self, args) -> str:
         with get_db() as db:
-            positions = db.query(Position).filter(Position.status == TradeStatus.OPEN).all()
+            positions = db.query(Position).filter(
+                Position.status == TradeStatus.OPEN,
+                Position.organization_id == self.organization_id
+            ).all()
         if not positions:
             return "No open positions."
         lines = ["📋 *Open Positions*"]
@@ -111,15 +121,16 @@ class AgentCommandHandler:
                 if p.current_price and p.entry_price else 0
             lines.append(
                 f"• *{p.ticker}*: {p.qty} shares @ ${p.entry_price:.3f} "
-                f"| Now ${p.current_price:.3f if p.current_price else 0:.3f} "
-                f"({pnl_pct:+.1f}%) | Stop ${p.current_stop:.3f}"
+                f"| Now ${(p.current_price or 0.0):.3f} "
+                f"({pnl_pct:+.1f}%) | Stop ${(p.current_stop or 0.0):.3f}"
             )
         return "\n".join(lines)
 
     def cmd_signals(self, args) -> str:
         with get_db() as db:
             signals = db.query(Signal).filter(
-                Signal.signal_date == date.today()
+                Signal.signal_date == date.today(),
+                Signal.organization_id == self.organization_id
             ).all()
         if not signals:
             return "No signals generated today."
@@ -135,7 +146,8 @@ class AgentCommandHandler:
         from app.models.signal import Watchlist, WatchlistStatus
         with get_db() as db:
             items = db.query(Watchlist).filter(
-                Watchlist.status == WatchlistStatus.WATCHING
+                Watchlist.status == WatchlistStatus.WATCHING,
+                Watchlist.organization_id == self.organization_id
             ).all()
         if not items:
             return "Watchlist is empty."
@@ -162,7 +174,7 @@ class AgentCommandHandler:
     def cmd_report(self, args) -> str:
         from app.tasks.reporting import generate_daily_report
         try:
-            report = generate_daily_report()
+            report = generate_daily_report(organization_id=self.organization_id)
             return (
                 f"📊 *Daily Report — {report.get('date')}*\n"
                 f"Market: {report.get('market_regime')}\n"
@@ -183,6 +195,7 @@ class AgentCommandHandler:
                 Signal.ticker == ticker,
                 Signal.signal_date == date.today(),
                 Signal.status == SignalStatus.PENDING,
+                Signal.organization_id == self.organization_id
             ).first()
             if signal:
                 signal.status = SignalStatus.SKIPPED
@@ -201,7 +214,8 @@ class AgentCommandHandler:
         with get_db() as db:
             pos = db.query(Position).filter(
                 Position.ticker == ticker,
-                Position.status == TradeStatus.OPEN
+                Position.status == TradeStatus.OPEN,
+                Position.organization_id == self.organization_id
             ).first()
             if not pos:
                 return f"No open position for {ticker}."
@@ -223,7 +237,8 @@ class AgentCommandHandler:
         with get_db() as db:
             pos = db.query(Position).filter(
                 Position.ticker == ticker,
-                Position.status == TradeStatus.OPEN
+                Position.status == TradeStatus.OPEN,
+                Position.organization_id == self.organization_id
             ).first()
             if not pos:
                 return f"No open position for {ticker}."
@@ -243,7 +258,10 @@ class AgentCommandHandler:
             return "State must be ON or OFF"
         enabled = (state == "ON")
         with get_db() as db:
-            rule = db.query(RuleConfig).filter(RuleConfig.rule_id == rule_id).first()
+            rule = db.query(RuleConfig).filter(
+                RuleConfig.rule_id == rule_id,
+                RuleConfig.organization_id == self.organization_id
+            ).first()
             if not rule:
                 return f"Rule '{rule_id}' not found."
             if rule.is_mandatory and not enabled:
@@ -262,7 +280,10 @@ class AgentCommandHandler:
         key   = args[0].lower()
         value = " ".join(args[1:])
         with get_db() as db:
-            cfg = db.query(SystemConfig).filter(SystemConfig.key == key).first()
+            cfg = db.query(SystemConfig).filter(
+                SystemConfig.key == key,
+                SystemConfig.organization_id == self.organization_id
+            ).first()
             if not cfg:
                 return f"Config key '{key}' not found."
             old = cfg.value
@@ -296,24 +317,40 @@ class AgentCommandHandler:
     # =========================================================================
 
     def _get_config(self, db, key: str, default: str = "") -> str:
-        cfg = db.query(SystemConfig).filter(SystemConfig.key == key).first()
+        is_global_key = key in ('last_market_regime', 'last_regime_check', 'last_heartbeat')
+        org_filter = None if is_global_key else self.organization_id
+        cfg = db.query(SystemConfig).filter(
+            SystemConfig.key == key,
+            SystemConfig.organization_id == org_filter
+        ).first()
         return cfg.value if cfg else default
 
     def _set_config(self, key: str, value: str, actor: str = "agent"):
+        is_global_key = key in ('last_market_regime', 'last_regime_check', 'last_heartbeat')
+        org_filter = None if is_global_key else self.organization_id
         with get_db() as db:
-            cfg = db.query(SystemConfig).filter(SystemConfig.key == key).first()
+            cfg = db.query(SystemConfig).filter(
+                SystemConfig.key == key,
+                SystemConfig.organization_id == org_filter
+            ).first()
             if cfg:
                 cfg.value = value
                 cfg.updated_by = actor
                 db.add(cfg)
 
     def _is_paper(self) -> bool:
-        from app.config import settings
-        return settings.ibkr_paper_mode
+        with get_db() as db:
+            return self._get_config(db, "ibkr_paper_mode", "true").lower() == "true"
 
     def _audit(self, action: AuditAction, ticker: str = None, **kwargs):
         try:
             with get_db() as db:
-                db.add(AuditLog(action=action, actor="agent", ticker=ticker, **kwargs))
+                db.add(AuditLog(
+                    action=action,
+                    actor="agent",
+                    ticker=ticker,
+                    organization_id=self.organization_id,
+                    **kwargs
+                ))
         except Exception as e:
             logger.warning(f"Agent audit log failed: {e}")

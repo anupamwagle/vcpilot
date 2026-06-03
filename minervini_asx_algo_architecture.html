@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+  body { background: transparent; color: var(--text-primary, #1a1a1a); padding: 16px; }
+  
+  .arch { display: flex; flex-direction: column; gap: 10px; max-width: 860px; }
+  
+  .layer { border: 1.5px solid var(--border, #e0e0e0); border-radius: 10px; overflow: hidden; }
+  .layer-header { 
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 14px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .layer-body { display: flex; gap: 8px; padding: 10px; flex-wrap: wrap; }
+  
+  .card {
+    border-radius: 7px; padding: 9px 12px; flex: 1; min-width: 130px;
+    border: 1px solid rgba(0,0,0,0.07);
+  }
+  .card-title { font-size: 12px; font-weight: 700; margin-bottom: 3px; }
+  .card-sub { font-size: 11px; opacity: 0.65; line-height: 1.4; }
+  .badge { 
+    display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 6px;
+    border-radius: 4px; margin-top: 5px;
+  }
+
+  /* Layer colours */
+  .l-data .layer-header { background: #EEF4FF; color: #3B5BDB; }
+  .l-data .card { background: #F8FAFF; }
+  .l-data .badge { background: #DCEAFF; color: #2C4FCB; }
+
+  .l-screen .layer-header { background: #F3FBF0; color: #2E7D32; }
+  .l-screen .card { background: #F8FDF6; }
+  .l-screen .badge { background: #D4EDDA; color: #205C24; }
+
+  .l-signal .layer-header { background: #FFF8E1; color: #F57C00; }
+  .l-signal .card { background: #FFFDF5; }
+  .l-signal .badge { background: #FFE9B0; color: #C46000; }
+
+  .l-risk .layer-header { background: #FCF3FF; color: #7B1FA2; }
+  .l-risk .card { background: #FDF8FF; }
+  .l-risk .badge { background: #EDD5FA; color: #681B8C; }
+
+  .l-exec .layer-header { background: #FFF3F3; color: #C62828; }
+  .l-exec .card { background: #FFF8F8; }
+  .l-exec .badge { background: #FFD6D6; color: #A82020; }
+
+  .l-infra .layer-header { background: #F0F0F0; color: #424242; }
+  .l-infra .card { background: #F7F7F7; }
+  .l-infra .badge { background: #E0E0E0; color: #333; }
+
+  .arrow { text-align: center; font-size: 18px; opacity: 0.35; line-height: 1; }
+
+  .cost-bar { 
+    display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px;
+    padding: 10px 14px; border-top: 1px solid var(--border, #e0e0e0);
+    background: var(--bg-subtle, #fafafa);
+  }
+  .cost-item { 
+    font-size: 11px; display: flex; align-items: center; gap: 5px;
+  }
+  .cost-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .cost-item strong { font-weight: 700; }
+
+  .phase-bar {
+    display: flex; gap: 8px; margin-top: 4px;
+  }
+  .phase {
+    flex: 1; border-radius: 8px; padding: 10px 12px;
+    border: 1.5px solid;
+  }
+  .phase-title { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 5px; }
+  .phase-items { font-size: 11px; line-height: 1.7; opacity: 0.8; }
+  
+  .p1 { border-color: #B0C8FF; background: #F0F5FF; color: #2945A8; }
+  .p2 { border-color: #A5D6A7; background: #F1FBF1; color: #1B5E20; }
+  .p3 { border-color: #FFCC80; background: #FFFBF0; color: #7A4800; }
+
+  .rule-grid { display: flex; gap: 8px; flex-wrap: wrap; padding: 10px; }
+  .rule { 
+    flex: 1; min-width: 140px; border-radius: 7px; padding: 8px 11px;
+    background: #FAFAFA; border: 1px solid #E8E8E8;
+    font-size: 11px; line-height: 1.5;
+  }
+  .rule strong { font-size: 11.5px; display: block; margin-bottom: 2px; }
+</style>
+</head>
+<body>
+<div class="arch">
+
+  <!-- PHASE ROADMAP -->
+  <div class="phase-bar">
+    <div class="phase p1">
+      <div class="phase-title">Phase 1 · Local (Now)</div>
+      <div class="phase-items">Python screener + backtest<br>Manual IBKR verification<br>Docker Compose stack<br>Streamlit dashboard</div>
+    </div>
+    <div class="phase p2">
+      <div class="phase-title">Phase 2 · Automated (4–8 wks)</div>
+      <div class="phase-items">Live screening → signals<br>Auto order placement<br>Stop-loss management<br>Telegram alerts</div>
+    </div>
+    <div class="phase p3">
+      <div class="phase-title">Phase 3 · Cloud/SaaS</div>
+      <div class="phase-items">Deploy to Railway / DO<br>Multi-strategy support<br>Web UI + auth<br>Expand capital</div>
+    </div>
+  </div>
+
+  <!-- DATA LAYER -->
+  <div class="layer l-data">
+    <div class="layer-header">📡 Layer 1 · Data Ingestion</div>
+    <div class="layer-body">
+      <div class="card">
+        <div class="card-title">Price & Volume</div>
+        <div class="card-sub">yfinance (ASX tickers)<br>Daily OHLCV, MA, RS</div>
+        <span class="badge">Free</span>
+      </div>
+      <div class="card">
+        <div class="card-title">Fundamentals</div>
+        <div class="card-sub">Financial Modeling Prep<br>EPS, Sales, ROE, margins</div>
+        <span class="badge">~$15/mo</span>
+      </div>
+      <div class="card">
+        <div class="card-title">ASX Announcements</div>
+        <div class="card-sub">ASX API / scraper<br>Earnings, guidance</div>
+        <span class="badge">Free</span>
+      </div>
+      <div class="card">
+        <div class="card-title">Market Index</div>
+        <div class="card-sub">ASX 200 benchmark<br>RS calculation base</div>
+        <span class="badge">yfinance Free</span>
+      </div>
+    </div>
+    <div class="cost-bar">
+      <div class="cost-item"><div class="cost-dot" style="background:#3B5BDB"></div> TimescaleDB (PostgreSQL) for all OHLCV time-series — local Docker volume</div>
+    </div>
+  </div>
+
+  <div class="arrow">↓</div>
+
+  <!-- SCREENING LAYER -->
+  <div class="layer l-screen">
+    <div class="layer-header">🔍 Layer 2 · Minervini Screener</div>
+    <div class="rule-grid">
+      <div class="rule"><strong>Stage 2 only</strong>Price &gt; 50MA &gt; 150MA &gt; 200MA. 200MA rising ≥1 month.</div>
+      <div class="rule"><strong>Relative Strength</strong>RS vs ASX200 ≥ 70th percentile. Outperforming the index.</div>
+      <div class="rule"><strong>52-week range</strong>Within 25% of 52-wk high. ≥30% above 52-wk low.</div>
+      <div class="rule"><strong>Fundamentals</strong>EPS growth ≥25% (2+ qtrs). Sales growth ≥25%. High ROE.</div>
+      <div class="rule"><strong>VCP Pattern</strong>Volatility contraction: 3–4 tightening pivots. Volume dry-up.</div>
+      <div class="rule"><strong>Volume confirm</strong>Breakout on 2× avg volume. Pivot buy point identified.</div>
+    </div>
+  </div>
+
+  <div class="arrow">↓</div>
+
+  <!-- SIGNAL LAYER -->
+  <div class="layer l-signal">
+    <div class="layer-header">⚡ Layer 3 · Signal Engine (APScheduler / Prefect)</div>
+    <div class="layer-body">
+      <div class="card">
+        <div class="card-title">Daily Screen</div>
+        <div class="card-sub">Runs after ASX close (4pm AEST). Filters full universe → watchlist.</div>
+        <span class="badge">Prefect / APScheduler</span>
+      </div>
+      <div class="card">
+        <div class="card-title">Backtest Gate</div>
+        <div class="card-sub">Vectorbt validates each setup vs 3-yr historical. Min Sharpe &gt;1.2 to pass.</div>
+        <span class="badge">Vectorbt</span>
+      </div>
+      <div class="card">
+        <div class="card-title">Entry Signal</div>
+        <div class="card-sub">Intraday check at market open. Price within 1% of pivot buy point.</div>
+        <span class="badge">Live trigger</span>
+      </div>
+      <div class="card">
+        <div class="card-title">Alert</div>
+        <div class="card-sub">Telegram bot push. Signal details, entry, stop, size.</div>
+        <span class="badge">Free</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow">↓</div>
+
+  <!-- RISK LAYER -->
+  <div class="layer l-risk">
+    <div class="layer-header">🛡️ Layer 4 · Risk & Position Sizing</div>
+    <div class="layer-body">
+      <div class="card">
+        <div class="card-title">1-2% Rule</div>
+        <div class="card-sub">Max 2% of total capital at risk per trade. With $1k: ~$20 max loss/trade.</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Stop Loss</div>
+        <div class="card-sub">Hard stop at pivot low / 7–10% below entry. Auto bracket order on IBKR.</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Position Size</div>
+        <div class="card-sub">Size = (Capital × Risk%) ÷ (Entry − Stop). Auto-calculated per signal.</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Portfolio Limit</div>
+        <div class="card-sub">Max 3–5 open positions. No single stock &gt;30% of capital. Pyramid only on winners.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow">↓</div>
+
+  <!-- EXECUTION LAYER -->
+  <div class="layer l-exec">
+    <div class="layer-header">⚙️ Layer 5 · Execution (IBKR via ib_insync)</div>
+    <div class="layer-body">
+      <div class="card">
+        <div class="card-title">IBKR Gateway</div>
+        <div class="card-sub">Runs in Docker. ib_insync connects. No TWS GUI needed in production.</div>
+        <span class="badge">Free (commissions only)</span>
+      </div>
+      <div class="card">
+        <div class="card-title">Order Types</div>
+        <div class="card-sub">Limit entry + bracket (stop + target). MKT on strong breakouts.</div>
+        <span class="badge">ASX ~$6 min/trade</span>
+      </div>
+      <div class="card">
+        <div class="card-title">Trade Log</div>
+        <div class="card-sub">All fills → PostgreSQL. P&L, slippage, hold time tracked per trade.</div>
+        <span class="badge">PostgreSQL</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow">↓</div>
+
+  <!-- DASHBOARD + INFRA -->
+  <div class="layer l-infra">
+    <div class="layer-header">🖥️ Layer 6 · Dashboard & Infrastructure</div>
+    <div class="layer-body">
+      <div class="card">
+        <div class="card-title">Streamlit UI</div>
+        <div class="card-sub">Watchlist, open positions, P&L curve, signal history. Local first.</div>
+        <span class="badge">Free</span>
+      </div>
+      <div class="card">
+        <div class="card-title">Docker Compose</div>
+        <div class="card-sub">4 containers: app, db, ibkr-gateway, scheduler. Single command spin-up.</div>
+        <span class="badge">Free</span>
+      </div>
+      <div class="card">
+        <div class="card-title">Cloud Deploy</div>
+        <div class="card-sub">Railway or DigitalOcean ($6–12/mo). Push Compose → done.</div>
+        <span class="badge">~$10/mo later</span>
+      </div>
+    </div>
+    <div class="cost-bar">
+      <div class="cost-item"><div class="cost-dot" style="background:#555"></div> <strong>Total tech cost Phase 1:</strong> ~$15/mo (FMP API) &nbsp;|&nbsp; <strong>Phase 2+:</strong> ~$25–30/mo</div>
+      <div class="cost-item"><div class="cost-dot" style="background:#C62828"></div> <strong>IBKR commissions (ASX):</strong> $6 min or 0.08% per trade &nbsp;|&nbsp; <strong>Monthly minimum:</strong> waived if &gt;$10 commissions generated</div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

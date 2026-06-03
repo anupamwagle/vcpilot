@@ -14,20 +14,35 @@ from app.models.config import SystemConfig
 from app.notifications.whatsapp import WhatsAppNotifier
 
 
-def generate_daily_report() -> dict:
-    """Generate daily report dict. Called by task and by agent."""
+def generate_daily_report(organization_id: int = None) -> dict:
+    """Generate daily report dict. Scoped by organization if provided."""
     today = date.today()
     with get_db() as db:
-        signals_today = db.query(Signal).filter(Signal.signal_date == today).count()
-        open_positions = db.query(Position).filter(Position.status == TradeStatus.OPEN).count()
-
-        # Today's closed trades P&L
-        today_trades = db.query(Trade).filter(Trade.exit_date == today).all()
-        pnl_today = sum(float(t.net_pnl_aud or 0) for t in today_trades)
-
-        # All-time P&L
-        all_trades = db.query(Trade).all()
-        pnl_total = sum(float(t.net_pnl_aud or 0) for t in all_trades)
+        if organization_id:
+            signals_today = db.query(Signal).filter(
+                Signal.signal_date == today,
+                Signal.organization_id == organization_id
+            ).count()
+            open_positions = db.query(Position).filter(
+                Position.status == TradeStatus.OPEN,
+                Position.organization_id == organization_id
+            ).count()
+            today_trades = db.query(Trade).filter(
+                Trade.exit_date == today,
+                Trade.organization_id == organization_id
+            ).all()
+            pnl_today = sum(float(t.net_pnl_aud or 0) for t in today_trades)
+            all_trades = db.query(Trade).filter(
+                Trade.organization_id == organization_id
+            ).all()
+            pnl_total = sum(float(t.net_pnl_aud or 0) for t in all_trades)
+        else:
+            signals_today = db.query(Signal).filter(Signal.signal_date == today).count()
+            open_positions = db.query(Position).filter(Position.status == TradeStatus.OPEN).count()
+            today_trades = db.query(Trade).filter(Trade.exit_date == today).all()
+            pnl_today = sum(float(t.net_pnl_aud or 0) for t in today_trades)
+            all_trades = db.query(Trade).all()
+            pnl_total = sum(float(t.net_pnl_aud or 0) for t in all_trades)
 
         regime_cfg = db.query(SystemConfig).filter(
             SystemConfig.key == "last_market_regime"
@@ -46,22 +61,31 @@ def generate_daily_report() -> dict:
 
 @app.task(name="app.tasks.reporting.send_daily_report", bind=True)
 def send_daily_report(self):
-    """Send daily P&L report via WhatsApp."""
-    logger.info("Generating daily report...")
+    """Send daily P&L report via WhatsApp to each active organization."""
+    logger.info("Generating daily reports for all organizations...")
+    from app.models.account import Organization
     try:
-        report = generate_daily_report()
-        notifier = WhatsAppNotifier()
-        notifier.send_daily_report(report)
-
         with get_db() as db:
-            db.add(AuditLog(
-                action=AuditAction.HEALTH_CHECK,
-                message="Daily report sent",
-                detail=report,
-            ))
-        logger.info(f"Daily report sent: {report}")
+            orgs = db.query(Organization).filter(Organization.is_active == True).all()
+
+        for org in orgs:
+            try:
+                report = generate_daily_report(organization_id=org.id)
+                notifier = WhatsAppNotifier(organization_id=org.id)
+                if notifier.whatsapp_enabled and notifier.admin_jid:
+                    notifier.send_daily_report(report)
+                    with get_db() as db:
+                        db.add(AuditLog(
+                            action=AuditAction.HEALTH_CHECK,
+                            message=f"Daily report sent to Org {org.name}",
+                            detail=report,
+                            organization_id=org.id
+                        ))
+                    logger.info(f"Daily report sent to Org {org.name} (ID: {org.id}): {report}")
+            except Exception as org_err:
+                logger.error(f"Failed sending daily report for Org {org.name} (ID: {org.id}): {org_err}")
     except Exception as e:
-        logger.error(f"Daily report failed: {e}")
+        logger.error(f"Daily report loop failed: {e}")
 
 
 @app.task(name="app.tasks.reporting.health_check", bind=True)

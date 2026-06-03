@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}Super Admin · Organisations{% endblock %}
+{% block page_title %}Organisations Manager{% endblock %}
+
+{% block content %}
+
+{% set saved = request.query_params.get('saved', '') %}
+{% if saved == '1' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Organisation created and admin user assigned successfully.
+</div>
+{% endif %}
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+  
+  <!-- Create Organisation Form -->
+  <div class="card p-4 lg:col-span-1">
+    <p class="section-title mb-4">🆕 Create Organisation</p>
+    <form method="post" action="/superadmin/organizations/create" class="space-y-4">
+      <div>
+        <label class="field-label mb-1.5" for="name">Organisation Name</label>
+        <input type="text" id="name" name="name" class="input w-full" placeholder="e.g. Alpha Trading" required />
+      </div>
+      
+      <div>
+        <label class="field-label mb-1.5" for="tier">Service Tier</label>
+        <select id="tier" name="tier" class="input w-full">
+          <option value="BRONZE">🥉 Bronze Tier</option>
+          <option value="SILVER">🥈 Silver Tier</option>
+          <option value="GOLD" selected>🥇 Gold Tier</option>
+        </select>
+      </div>
+
+      <div class="border-t pt-3" style="border-color:var(--border)">
+        <p class="text-xs font-semibold mb-2" style="color:var(--a-accent)">Organisation Admin User</p>
+        
+        <div class="space-y-3">
+          <div>
+            <label class="field-label mb-1.5" for="admin_name">Admin Name</label>
+            <input type="text" id="admin_name" name="admin_name" class="input w-full text-xs" placeholder="e.g. John Doe" required />
+          </div>
+          <div>
+            <label class="field-label mb-1.5" for="admin_email">Admin Email</label>
+            <input type="email" id="admin_email" name="admin_email" class="input w-full text-xs" placeholder="e.g. admin@alpha.com" required />
+          </div>
+        </div>
+      </div>
+
+      <button type="submit" class="btn-primary w-full text-xs py-2 mt-2">Create & Bootstrap</button>
+    </form>
+  </div>
+
+  <!-- Organisations List -->
+  <div class="card lg:col-span-2 overflow-hidden">
+    <div class="section-head px-4 py-3">
+      <p class="section-title">🏢 Existing Tenants</p>
+      <span class="text-xs" style="color:var(--text-subtle)">{{ organizations|length }} active organisations</span>
+    </div>
+    
+    {% if organizations %}
+    <div class="overflow-x-auto">
+      <table class="w-full text-left border-collapse">
+        <thead>
+          <tr style="background:var(--surface-alt);border-bottom:1px solid var(--border)">
+            <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Organisation</th>
+            <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Tier</th>
+            <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Status</th>
+            <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Created</th>
+            <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for org in organizations %}
+          <tr class="tbl-row border-b last:border-0" style="border-color:var(--border)">
+            <td class="p-3">
+              <a href="/superadmin/organizations/{{ org.id }}" class="text-sm font-bold block hover:underline" style="color:var(--text)">{{ org.name }}</a>
+              <span class="text-xs block" style="color:var(--text-muted)">Org ID: {{ org.id }}</span>
+            </td>
+            <td class="p-3">
+              {% if org.tier.value == 'GOLD' %}
+                <span class="text-xs font-semibold px-2 py-0.5 rounded" style="background:#fef3c7;color:#d97706">🥇 Gold</span>
+              {% elif org.tier.value == 'SILVER' %}
+                <span class="text-xs font-semibold px-2 py-0.5 rounded" style="background:#e2e8f0;color:#475569">🥈 Silver</span>
+              {% else %}
+                <span class="text-xs font-semibold px-2 py-0.5 rounded" style="background:#ffedd5;color:#c2410c">🥉 Bronze</span>
+              {% endif %}
+            </td>
+            <td class="p-3">
+              {% if org.is_active %}
+                <span class="text-xs font-bold" style="color:var(--pos)">🟢 Active</span>
+              {% else %}
+                <span class="text-xs font-bold" style="color:var(--neg)">🔴 Disabled</span>
+              {% endif %}
+            </td>
+            <td class="p-3 text-xs font-mono" style="color:var(--text-subtle)">
+              {{ org.created_at.strftime('%Y-%m-%d') if org.created_at else 'N/A' }}
+            </td>
+            <td class="p-3">
+              <a href="/superadmin/organizations/{{ org.id }}" class="btn-ghost text-xs px-2 py-1 hover:underline" style="color:var(--a-accent)">View Details →</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="p-8 text-center text-xs" style="color:var(--text-subtle)">
+      No organisations registered yet. Fill in the form on the left to create one.
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+
+{% endblock %}

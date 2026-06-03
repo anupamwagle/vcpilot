@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Watchlist{% endblock %}
+{% block page_title %}Watchlist{% endblock %}
+
+{% block content %}
+
+{% if request.query_params.get('msg') == 'added' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Manual addition queued for immediate screening! Results will populate on this page or signals tab shortly.
+</div>
+{% endif %}
+
+<!-- How watchlist works -->
+<div class="alert-info mb-5">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+  <div>
+    <strong>Watchlist is built automatically.</strong> After each daily screen (5:30pm AEST), stocks passing 6+ of 8 Minervini trend criteria — but not yet a full VCP signal — are added here automatically. You don't approve them; the system watches them daily and upgrades them to a <strong>Signal</strong> once the VCP pattern completes and all rules pass. You can also add stocks manually below.
+  </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+  <!-- Watchlist cards -->
+  <div class="lg:col-span-2 space-y-4" style="display:flex;flex-direction:column;gap:1rem">
+    <div class="card overflow-hidden p-4">
+      <h2 class="section-title">In Formation ({{ watchlist|length }})</h2>
+    </div>
+    {% if watchlist %}
+    {% for w in watchlist %}
+    <div class="card overflow-hidden">
+      <!-- Card header -->
+      <div class="section-head">
+        <div style="display:flex;align-items:center;gap:.625rem;flex-wrap:wrap">
+          <div style="display:flex;flex-direction:column">
+            <span class="mono font-bold text-base" style="color:var(--text);line-height:1.2">{{ w.ticker }}</span>
+            {% if w.company_name %}
+            <span style="font-size:.7rem;color:var(--text-subtle);font-weight:normal;line-height:1.2">{{ w.company_name }}</span>
+            {% endif %}
+          </div>
+          <span class="tag">{{ 'Auto' if w.by == 'screener' else w.by }}</span>
+          {% if w.rules_total > 0 %}
+          <span class="tag">Rules {{ w.rules_passed }}/{{ w.rules_total }}</span>
+          {% endif %}
+        </div>
+        <div style="display:flex;align-items:center;gap:.5rem">
+          <form method="post" action="/watchlist/{{ w.id }}/promote">
+            <button type="submit" class="btn-primary text-xs py-1 px-2.5" style="background:var(--pos);color:white">Promote</button>
+          </form>
+          <form method="post" action="/watchlist/{{ w.id }}/remove">
+            <button type="submit" class="btn-ghost text-xs py-1 px-2" style="color:var(--neg)">Remove</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Overview text -->
+      <div class="px-4 py-2 text-xs" style="color:var(--text-subtle); border-bottom:1px solid var(--border)">
+        Added {{ w.added }}{% if w.notes %} · <strong>Note:</strong> {{ w.notes }}{% endif %}
+      </div>
+
+      <!-- Key metrics -->
+      {% if w.stats %}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));border-bottom:1px solid var(--border)">
+        {% for label, val, color in [
+          ('Close',    '$'~"%.2f"|format(w.stats.close),  'var(--text)'),
+          ('50MA',     '$'~"%.2f"|format(w.stats.ma_50),   'var(--pos)' if w.stats.close > w.stats.ma_50 else 'var(--neg)'),
+          ('150MA',    '$'~"%.2f"|format(w.stats.ma_150),  'var(--text)'),
+          ('200MA',    '$'~"%.2f"|format(w.stats.ma_200),  'var(--text)'),
+          ('52w High', '$'~"%.2f"|format(w.stats.high_52w), 'var(--text)'),
+          ('52w Low',  '$'~"%.2f"|format(w.stats.low_52w),  'var(--text)'),
+          ('RS Rating',w.stats.rs_rating|int|string,       'var(--t-accent)'),
+        ] %}
+        <div style="padding:.5rem .75rem;border-right:1px solid var(--border)">
+          <p class="field-label" style="font-size:.65rem">{{ label }}</p>
+          <p style="font-family:'SF Mono',monospace;font-size:.8rem;font-weight:700;color:{{ color }}">{{ val }}</p>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if w.rule_results %}
+      <!-- Rule badges -->
+      <div style="padding:.75rem 1rem;display:flex;flex-wrap:wrap;gap:.375rem">
+        {% for r in w.rule_results %}
+        <span title="{{ r.detail }}" style="font-size:.65rem;font-family:'SF Mono',monospace;padding:.15rem .5rem;border-radius:.3rem;font-weight:600;
+          {% if r.passed %}background:var(--pos-bg);color:var(--pos);border:1px solid var(--bull-border)
+          {% else %}background:var(--neg-bg);color:var(--neg);border:1px solid var(--bear-border){% endif %}">
+          {{ '✓' if r.passed else '✗' }} {{ r.label }}{% if r.detail %}: <span style="font-weight:normal;color:inherit">{{ r.detail }}</span>{% endif %}
+        </span>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="px-4 py-3 text-xs" style="color:var(--text-subtle)">
+        Added manually — rules details will populate after the next screener run.
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="card px-4 py-10 text-center">
+      <p class="text-sm" style="color:var(--text-muted)">No stocks being watched yet</p>
+      <p class="text-xs mt-1" style="color:var(--text-subtle)">Screener automatically populates this after 5:30pm AEST</p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Add form -->
+  <div class="card p-5 h-fit">
+    <h3 class="text-sm font-semibold mb-4" style="color:var(--text)">Add Manually</h3>
+    <form method="post" action="/watchlist/add" class="space-y-3">
+      <div>
+        <label class="block text-xs font-medium mb-1.5" style="color:var(--text-muted)">ASX Code</label>
+        <input type="text" name="ticker" required placeholder="BHP" maxlength="10"
+               class="input uppercase"/>
+      </div>
+      <div>
+        <label class="block text-xs font-medium mb-1.5" style="color:var(--text-muted)">Notes (optional)</label>
+        <textarea name="notes" rows="2" placeholder="VCP forming, watch for breakout..."
+                  class="input resize-none"></textarea>
+      </div>
+      <button type="submit" class="btn-primary w-full justify-center">
+        Add to Watchlist
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}

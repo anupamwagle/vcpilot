@@ -49,18 +49,29 @@ class RuleEngine:
     Instantiate once per screener run; rules are cached for the run duration.
     """
 
-    def __init__(self, tier: str = "ADMIN"):
+    def __init__(self, organization_id: Optional[int] = None, tier: str = "GOLD"):
+        self.organization_id = organization_id
         self.tier = tier
         self._rules: dict[str, RuleConfig] = {}
         self._load_rules()
 
     def _load_rules(self):
         with get_db() as db:
-            rules = db.query(RuleConfig).filter(
-                RuleConfig.enabled_globally == True
-            ).order_by(RuleConfig.sort_order).all()
+            query = db.query(RuleConfig)
+            if self.organization_id is not None:
+                rules = query.filter(
+                    RuleConfig.organization_id == self.organization_id
+                ).order_by(RuleConfig.sort_order).all()
+                if not rules:
+                    rules = query.filter(
+                        RuleConfig.organization_id == None
+                    ).order_by(RuleConfig.sort_order).all()
+            else:
+                rules = query.filter(
+                    RuleConfig.organization_id == None
+                ).order_by(RuleConfig.sort_order).all()
             self._rules = {r.rule_id: r for r in rules}
-        logger.debug(f"RuleEngine loaded {len(self._rules)} active rules for tier={self.tier}")
+        logger.debug(f"RuleEngine loaded {len(self._rules)} rules for org={self.organization_id}, tier={self.tier}")
 
     def is_enabled(self, rule_id: str) -> bool:
         rule = self._rules.get(rule_id)

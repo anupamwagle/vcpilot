@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block page_title %}Trading Dashboard{% endblock %}
+
+{% block content %}
+<!-- ── Stat cards ─────────────────────────────────────────────── -->
+<div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3 mb-6">
+
+  <div class="stat-card">
+    <p class="field-label">Market</p>
+    {% if regime == 'BULL' %}<p class="text-lg font-bold" style="color:var(--bull)">🟢 BULL</p>
+    {% elif regime == 'CAUTION' %}<p class="text-lg font-bold" style="color:var(--caution)">🟡 CAUTION</p>
+    {% elif regime == 'BEAR' %}<p class="text-lg font-bold" style="color:var(--bear)">🔴 BEAR</p>
+    {% else %}<p class="text-sm font-semibold" style="color:var(--text-muted)">Not set</p>{% endif %}
+  </div>
+
+  <div class="stat-card">
+    <p class="field-label">Capital</p>
+    <p class="text-xl font-bold" style="color:var(--text)">${{ "{:,.0f}".format(capital) }}</p>
+    <p class="text-xs" style="color:var(--text-subtle)">AUD</p>
+  </div>
+
+  <div class="stat-card">
+    <p class="field-label">Positions</p>
+    <p class="text-xl font-bold" style="color:var(--text)">{{ positions|length }}</p>
+    <p class="text-xs" style="color:var(--text-subtle)">open</p>
+  </div>
+
+  <div class="stat-card">
+    <p class="field-label">Portfolio Heat</p>
+    <p class="text-xl font-bold {% if portfolio_heat > 15 %}pnl-neg{% elif portfolio_heat > 10 %}text-warning{% else %}pnl-pos{% endif %}"
+       style="{% if portfolio_heat > 10 and portfolio_heat <= 15 %}color:var(--warn){% endif %}">
+      {{ portfolio_heat }}%
+    </p>
+    <p class="text-xs" style="color:var(--text-subtle)">at risk</p>
+  </div>
+
+  <div class="stat-card">
+    <p class="field-label">Today P&L</p>
+    <p class="text-xl font-bold {% if today_pnl >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}">
+      ${{ "{:+,.0f}".format(today_pnl) }}
+    </p>
+  </div>
+
+  <div class="stat-card">
+    <p class="field-label">Total P&L</p>
+    <p class="text-xl font-bold {% if total_pnl >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}">
+      ${{ "{:+,.0f}".format(total_pnl) }}
+    </p>
+    <p class="text-xs" style="color:var(--text-subtle)">{{ trade_count }} trades</p>
+  </div>
+</div>
+
+<!-- ── Quick actions ──────────────────────────────────────────── -->
+<div style="display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1.5rem">
+  <form method="post" action="/action/force-screen">
+    <button type="submit" class="btn-primary">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+      </svg>Run Screener
+    </button>
+  </form>
+  <form method="post" action="/action/send-report">
+    <button type="submit" class="btn-ghost">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+      </svg>WhatsApp Report
+    </button>
+  </form>
+  {% if trading_active %}
+  <form method="post" action="/action/pause" class="sm:hidden">
+    <button type="submit" class="btn-ghost">⏸ Pause</button>
+  </form>
+  {% elif trading_paused and worker_status == 'online' %}
+  <form method="post" action="/action/resume" class="sm:hidden">
+    <button type="submit" class="btn-primary">▶ Resume</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+
+  <!-- ── Today's signals ────────────────────────────────────────── -->
+  <div class="card overflow-hidden">
+    <div class="section-head">
+      <h2 class="section-title" style="display:flex;align-items:center;gap:.5rem">
+        <span style="width:.5rem;height:.5rem;border-radius:9999px;background:var(--t-accent);display:inline-block"></span>
+        Today's Signals
+      </h2>
+      <a href="/signals" class="text-xs font-medium" style="color:var(--t-accent)">View all →</a>
+    </div>
+    {% if signals %}
+    {% for s in signals %}
+    <div class="tbl-row" style="display:flex;align-items:center;gap:.75rem;padding:.75rem 1rem">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:.5rem">
+          <span class="mono font-bold" style="font-size:.875rem;color:var(--text)">{{ s.ticker }}</span>
+          <span style="font-size:.7rem;color:var(--text-muted)">{{ s.vcp }}</span>
+          {% if s.status == 'TRIGGERED' %}<span class="tag-pos" style="font-size:.65rem">Triggered</span>
+          {% elif s.status == 'SKIPPED' %}<span class="tag" style="font-size:.65rem">Skipped</span>
+          {% else %}<span class="tag-blue" style="font-size:.65rem">Pending</span>{% endif %}
+        </div>
+        <p style="font-size:.75rem;color:var(--text-muted);margin-top:.2rem">
+          Pivot ${{ "%.3f"|format(s.pivot) }} · Stop ${{ "%.3f"|format(s.stop) }} · RS {{ s.rs|int }}
+        </p>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <p style="font-size:.75rem;font-weight:600;color:var(--text)">{{ s.size }} shares</p>
+        <p style="font-size:.7rem;color:var(--text-muted)">Risk ${{ s.risk_aud|int }}</p>
+      </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="empty">
+      <p class="empty-title">No signals today</p>
+      <p class="empty-sub">Screener runs at 5:30pm AEST · Use "Run Screener" above</p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ── Open positions ─────────────────────────────────────────── -->
+  <div class="card overflow-hidden">
+    <div class="section-head">
+      <h2 class="section-title" style="display:flex;align-items:center;gap:.5rem">
+        <span style="width:.5rem;height:.5rem;border-radius:9999px;background:var(--a-accent);display:inline-block"></span>
+        Open Positions
+      </h2>
+      <a href="/positions" class="text-xs font-medium" style="color:var(--a-accent)">Manage →</a>
+    </div>
+    {% if positions %}
+    {% for p in positions %}
+    <div class="tbl-row" style="display:flex;align-items:center;gap:.75rem;padding:.75rem 1rem">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:.5rem">
+          <span class="mono font-bold" style="font-size:.875rem;color:var(--text)">{{ p.ticker }}</span>
+          {% if p.is_paper %}<span class="badge badge-paper" style="font-size:.65rem">PAPER</span>{% endif %}
+        </div>
+        <p style="font-size:.75rem;color:var(--text-muted);margin-top:.2rem">
+          {{ p.qty }} sh · Entry ${{ "%.3f"|format(p.entry) }} · Stop ${{ "%.3f"|format(p.stop) }} · {{ p.days }}d
+        </p>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <p class="font-bold {% if p.pnl_pct >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}" style="font-size:.875rem">
+          {{ "{:+.1f}".format(p.pnl_pct) }}%
+        </p>
+        <p class="{% if p.pnl_aud >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}" style="font-size:.75rem">
+          ${{ "{:+.0f}".format(p.pnl_aud) }}
+        </p>
+      </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="empty">
+      <p class="empty-title">No open positions</p>
+      <p class="empty-sub">Positions appear after order fills</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}Super Admin · Global Rules Config{% endblock %}
+{% block page_title %}Global Rules Config per Tier{% endblock %}
+
+{% block content %}
+
+{% set saved = request.query_params.get('saved', '') %}
+{% if saved == '1' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Rules configuration updated successfully.
+</div>
+{% endif %}
+
+<div class="card overflow-hidden mb-6">
+  <div class="px-4 py-3 flex items-center justify-between" style="background:var(--surface-alt);border-bottom:1px solid var(--border)">
+    <p class="text-xs" style="color:var(--text-subtle)">
+      💡 Modify settings below to configure rule inheritance across service tiers. 
+      Bronze, Silver, and Gold accounts inherit thresholds and enabled statuses dynamically.
+    </p>
+    <span class="text-xs font-semibold px-2 py-0.5 rounded-full" style="background:var(--border);color:var(--text)">
+      {{ total_rules }} Rules
+    </span>
+  </div>
+  
+  <div class="p-4 space-y-8">
+    {% for cat, label in category_labels.items() %}
+    <div>
+      <div class="flex items-center gap-2 mb-3 pb-1.5 border-b" style="border-color:var(--border)">
+        <span class="text-lg">{{ category_icons.get(cat, '⚙️') }}</span>
+        <span class="text-sm font-bold uppercase tracking-wider" style="color:var(--text)">{{ label }}</span>
+      </div>
+
+      <div class="space-y-4">
+        {% for r in rules_by_category.get(cat, []) %}
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 p-3 rounded" style="background:var(--surface-alt)">
+          
+          <!-- Rule Info -->
+          <div class="flex-1">
+            <div class="flex items-center gap-2">
+              <span class="text-sm font-semibold" style="color:var(--text)">{{ r.label }}</span>
+              {% if r.is_mandatory %}
+                <span class="text-[10px] font-bold px-1.5 py-0.5 rounded" style="background:var(--border);color:var(--text-subtle)">Mandatory</span>
+              {% endif %}
+            </div>
+            <p class="text-xs mt-0.5" style="color:var(--text-subtle)">{{ r.description or '' }}</p>
+            {% if r.minervini_ref %}
+              <p class="text-[10px] mt-1 italic font-mono" style="color:var(--text-muted)">Book Ref: {{ r.minervini_ref }}</p>
+            {% endif %}
+          </div>
+
+          <!-- Controls (Global + Tiers) -->
+          <div class="flex flex-wrap items-center gap-4 border-l pl-4" style="border-color:var(--border)">
+            
+            <!-- Global Enable -->
+            <div class="text-center">
+              <p class="text-[10px] font-bold uppercase" style="color:var(--text-muted)">Global</p>
+              <form method="post" action="/superadmin/rules/{{ r.rule_id }}/toggle-global">
+                <button type="submit" class="text-xs px-2.5 py-1 rounded font-bold border mt-1 w-20"
+                        style="background:{% if r.enabled %}var(--pos-bg, #dcfce7){% else %}var(--surface){% endif %};
+                               border-color:{% if r.enabled %}var(--pos){% else %}var(--border){% endif %};
+                               color:{% if r.enabled %}var(--pos){% else %}var(--text-subtle){% endif %}"
+                        {% if r.is_mandatory %}disabled{% endif %}>
+                  {% if r.enabled %}Active{% else %}Disabled{% endif %}
+                </button>
+              </form>
+            </div>
+
+            <!-- Tier Toggles / Thresholds -->
+            {% for tier in ['BRONZE', 'SILVER', 'GOLD'] %}
+            <div class="text-center border-l pl-4" style="border-color:var(--border)">
+              <p class="text-[10px] font-bold uppercase" style="color:var(--text-muted)">{{ tier }}</p>
+              
+              {% set overrides = r.tier_overrides or {} %}
+              {% set tier_override = overrides.get(tier, {}) %}
+              {% set tier_enabled = tier_override.get('enabled', True) %}
+              {% set tier_threshold = tier_override.get('threshold', r.threshold) %}
+
+              <div class="flex items-center gap-1.5 mt-1">
+                <!-- Toggle Button -->
+                <form method="post" action="/superadmin/rules/{{ r.rule_id }}/toggle-tier">
+                  <input type="hidden" name="tier" value="{{ tier }}" />
+                  <button type="submit" class="text-[11px] px-2 py-0.5 rounded border"
+                          style="background:{% if tier_enabled %}var(--surface){% else %}var(--neg-bg, #fee2e2){% endif %};
+                                 border-color:{% if tier_enabled %}var(--border){% else %}var(--neg){% endif %};
+                                 color:{% if tier_enabled %}var(--text-subtle){% else %}var(--neg){% endif %}"
+                          {% if r.is_mandatory %}disabled{% endif %}>
+                    {% if tier_enabled %}On{% else %}Off{% endif %}
+                  </button>
+                </form>
+
+                <!-- Threshold Form (only if rule has numerical threshold) -->
+                {% if r.threshold_label %}
+                <form method="post" action="/superadmin/rules/{{ r.rule_id }}/threshold" class="flex items-center gap-1">
+                  <input type="hidden" name="tier" value="{{ tier }}" />
+                  <input type="number" step="0.01" name="threshold" value="{{ tier_threshold or '' }}"
+                         class="input text-center font-mono py-0.5 px-1 w-16 text-xs" 
+                         min="{{ r.threshold_min or 0 }}" max="{{ r.threshold_max or 9999 }}" required />
+                  <button type="submit" class="btn-ghost p-1 text-xs">✓</button>
+                </form>
+                {% endif %}
+              </div>
+            </div>
+            {% endfor %}
+
+          </div>
+
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+{% endblock %}

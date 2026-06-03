@@ -25,9 +25,44 @@ class IBKRBroker:
     Use as a context manager or call connect()/disconnect() explicitly.
     """
 
-    def __init__(self):
+    def __init__(self, organization_id=None):
+        self.organization_id = organization_id
         self._ib: Optional[object] = None
         self._connected = False
+        
+        # Load credentials dynamically based on organization
+        self.host = settings.ibkr_host
+        self.port = settings.ibkr_port
+        self.client_id = settings.ibkr_client_id
+        self.account = settings.ibkr_account
+        self.paper_mode = settings.ibkr_paper_mode
+        
+        if organization_id:
+            try:
+                from app.database import SessionLocal
+                from app.models.config import SystemConfig
+                db = SessionLocal()
+                try:
+                    def cfg(key):
+                        c = db.query(SystemConfig).filter(
+                            SystemConfig.key == key, 
+                            SystemConfig.organization_id == organization_id
+                        ).first()
+                        return c.value if c else None
+                        
+                    acc_val = cfg("ibkr_account")
+                    if acc_val:
+                        self.account = acc_val
+                        
+                    paper_val = cfg("ibkr_paper_mode")
+                    if paper_val is not None:
+                        self.paper_mode = paper_val.lower() in ("true", "1", "yes")
+                        self.port = 4002 if self.paper_mode else 4001
+                finally:
+                    db.close()
+            except Exception:
+                pass
+
 
     def connect(self) -> bool:
         if not IB_AVAILABLE:
@@ -36,16 +71,16 @@ class IBKRBroker:
         try:
             self._ib = IB()
             self._ib.connect(
-                host=settings.ibkr_host,
-                port=settings.ibkr_port,
-                clientId=settings.ibkr_client_id,
+                host=self.host,
+                port=self.port,
+                clientId=self.client_id,
                 timeout=20,
                 readonly=False,
             )
             self._connected = True
             logger.info(
-                f"IBKR connected: host={settings.ibkr_host} port={settings.ibkr_port} "
-                f"paper={settings.ibkr_paper_mode}"
+                f"IBKR connected: host={self.host} port={self.port} "
+                f"paper={self.paper_mode}"
             )
             return True
         except Exception as e:
@@ -77,7 +112,7 @@ class IBKRBroker:
         if not self.is_connected:
             return {}
         try:
-            account = settings.ibkr_account or ""
+            account = self.account or ""
             summary = self._ib.accountSummary(account)
             return {item.tag: item.value for item in summary}
         except Exception as e:

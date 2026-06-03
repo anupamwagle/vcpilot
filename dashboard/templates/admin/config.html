@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}System Config{% endblock %}
+{% block page_title %}System Configuration{% endblock %}
+
+{% block content %}
+{% if saved %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Configuration saved and audit-logged.
+</div>
+{% endif %}
+
+<div style="display:flex;flex-direction:column;gap:1.5rem">
+{% for group, configs in configs_by_group.items() %}
+<div class="card overflow-hidden">
+  <div class="section-head">
+    <p class="section-title" style="text-transform:capitalize">{{ group }}</p>
+    <span class="tag">{{ configs|length }} keys</span>
+  </div>
+  {% for cfg in configs %}
+  <form method="post" action="/admin/config/{{ cfg.id }}/update"
+        style="display:flex;align-items:center;gap:1rem;padding:.875rem 1rem;{% if not loop.last %}border-bottom:1px solid var(--border){% endif %}">
+    <div style="flex:1;min-width:0">
+      <p style="font-size:.875rem;font-weight:500;color:var(--text)">{{ cfg.label }}</p>
+      {% if cfg.description %}<p style="font-size:.75rem;color:var(--text-muted);margin-top:.125rem">{{ cfg.description }}</p>{% endif %}
+      <p class="code" style="margin-top:.25rem;display:inline-block">{{ cfg.key }}</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:.5rem;flex-shrink:0">
+      {% if cfg.value_type == 'BOOLEAN' %}
+      <input type="hidden" name="value" id="val-{{ cfg.id }}" value="{{ cfg.value }}"/>
+      <label class="toggle-wrap" style="margin-right:1rem">
+        <input type="checkbox" class="toggle-inp"
+               {% if cfg.value.lower() == 'true' %}checked{% endif %}
+               onchange="document.getElementById('val-{{ cfg.id }}').value = this.checked ? 'true' : 'false'; this.form.submit();"/>
+        <div class="toggle-track"></div>
+        <div class="toggle-thumb"></div>
+      </label>
+      {% else %}
+      <input type="{% if cfg.is_secret %}password{% else %}text{% endif %}"
+             name="value"
+             value="{{ cfg.value if not cfg.is_secret else '' }}"
+             placeholder="{{ '••••••' if cfg.is_secret else ((cfg.value or '')[:24] if (cfg.value or '')|length > 24 else (cfg.value or '')) }}"
+             class="input" style="width:12rem;font-family:'SF Mono',monospace;font-size:.75rem"/>
+      <button type="submit" class="btn-admin text-xs" style="white-space:nowrap;padding:.5rem .875rem">Save</button>
+      {% endif %}
+    </div>
+  </form>
+  {% endfor %}
+</div>
+{% endfor %}
+</div>
+{% endblock %}
