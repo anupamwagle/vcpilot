@@ -238,6 +238,34 @@
     html.dark select.input { color-scheme: dark; background:var(--surface-alt); color:var(--text); }
     html.dark select.input option { background:var(--surface-alt); color:var(--text); }
     /* =====================================================================
+       SIDEBAR LAYOUT — CSS-driven, no JS flash on page load
+    ===================================================================== */
+    /* Mobile default: sidebar hidden off-screen */
+    #vcpilot-sidebar {
+      transform: translateX(-100%);
+    }
+    /* Desktop default: sidebar always visible, content offset */
+    @media (min-width: 1024px) {
+      #vcpilot-sidebar {
+        transform: translateX(0) !important;
+      }
+      #main-content {
+        margin-left: 16rem !important;
+      }
+      /* Desktop collapsed state — toggled by hamburger */
+      body.sb-collapsed #vcpilot-sidebar {
+        transform: translateX(-100%) !important;
+      }
+      body.sb-collapsed #main-content {
+        margin-left: 0 !important;
+      }
+    }
+    /* Mobile open state — added by JS */
+    #vcpilot-sidebar.mobile-open {
+      transform: translateX(0);
+    }
+
+    /* =====================================================================
        MOBILE RESPONSIVE OVERRIDES
     ===================================================================== */
     /* Wider tap targets on touch devices */
@@ -286,7 +314,7 @@
 ===================================================================== -->
 <aside id="vcpilot-sidebar"
   style="position:fixed;top:0;left:0;z-index:40;width:16rem;height:100dvh;
-         display:flex;flex-direction:column;transform:translateX(-100%);
+         display:flex;flex-direction:column;
          transition:transform .25s ease;background:var(--sidebar);
          border-right:1px solid var(--border)">
 
@@ -422,14 +450,14 @@
      MAIN WRAPPER
 ===================================================================== -->
 <div id="main-content" class="min-h-screen flex flex-col"
-     style="transition:margin-left .25s ease">
+     style="transition:margin-left .25s ease;margin-left:0">
 
   <!-- Top navbar -->
   <header id="vcpilot-navbar" style="position:sticky;top:0;z-index:20;background:var(--surface);border-bottom:1px solid var(--border);box-shadow:var(--shadow)">
     <div style="display:flex;align-items:center;gap:.75rem;padding:.75rem 1rem">
 
       <!-- Hamburger (all sizes — sidebar is always a drawer) -->
-      <button onclick="openSidebar()" type="button" aria-label="Open menu"
+      <button onclick="toggleSidebar()" type="button" aria-label="Toggle menu"
               class="p-2 rounded-lg flex-shrink-0 transition"
               style="color:var(--text-muted);background:transparent"
               onmouseover="this.style.background='var(--surface-alt)'" onmouseout="this.style.background='transparent'">
@@ -549,59 +577,59 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.3.0/flowbite.min.js"></script>
 
 <script>
-  /* ── Sidebar open/close ──────────────────────────────────────── */
-  var DESKTOP = 1024;
+  /* ── Sidebar — CSS controls desktop visibility, JS handles mobile + toggle ── */
 
-  function isMobile() { return window.innerWidth < DESKTOP; }
+  // Restore desktop collapsed state from previous session
+  (function() {
+    if (localStorage.getItem('sb-collapsed') === '1' && window.innerWidth >= 1024) {
+      document.body.classList.add('sb-collapsed');
+    }
+  })();
 
-  function openSidebar() {
-    document.getElementById('vcpilot-sidebar').style.transform = 'translateX(0)';
+  function isMobile() { return window.innerWidth < 1024; }
+
+  function toggleSidebar() {
     if (isMobile()) {
-      document.getElementById('sidebar-overlay').style.display = 'block';
-      document.body.style.overflow = 'hidden';
+      // Mobile: toggle the mobile drawer
+      var overlay = document.getElementById('sidebar-overlay');
+      if (overlay.style.display === 'block') {
+        _mobileClose();
+      } else {
+        _mobileOpen();
+      }
+    } else {
+      // Desktop: toggle collapsed class — CSS handles the rest
+      document.body.classList.toggle('sb-collapsed');
+      localStorage.setItem('sb-collapsed', document.body.classList.contains('sb-collapsed') ? '1' : '0');
     }
   }
 
-  function closeSidebar() {
-    if (!isMobile()) return;   // never close on desktop
-    document.getElementById('vcpilot-sidebar').style.transform = 'translateX(-100%)';
+  function _mobileOpen() {
+    document.getElementById('vcpilot-sidebar').classList.add('mobile-open');
+    document.getElementById('sidebar-overlay').style.display = 'block';
+    document.body.style.overflow = 'hidden';
+  }
+
+  function _mobileClose() {
+    document.getElementById('vcpilot-sidebar').classList.remove('mobile-open');
     document.getElementById('sidebar-overlay').style.display = 'none';
     document.body.style.overflow = '';
   }
 
-  function closeIfMobile() {
-    if (isMobile()) closeSidebar();
-  }
+  function closeSidebar() { if (isMobile()) _mobileClose(); }
+  function closeIfMobile() { if (isMobile()) _mobileClose(); }
 
-  /* Close on Escape (mobile only) */
+  // Close mobile drawer on Escape
   document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') closeIfMobile();
+    if (e.key === 'Escape' && isMobile()) _mobileClose();
   });
 
-  /* Responsive layout — called on load, resize, and bfcache restore */
-  function checkBreakpoint() {
-    var sidebar = document.getElementById('vcpilot-sidebar');
-    var main    = document.getElementById('main-content');
-    var overlay = document.getElementById('sidebar-overlay');
-    if (!sidebar || !main) return;
+  // On resize: close mobile overlay if switching to desktop
+  window.addEventListener('resize', function() {
     if (!isMobile()) {
-      sidebar.style.transform = 'translateX(0)';
-      main.style.marginLeft   = '16rem';
-      overlay.style.display   = 'none';
+      document.getElementById('sidebar-overlay').style.display = 'none';
       document.body.style.overflow = '';
-    } else {
-      main.style.marginLeft = '0';
-      // On mobile, only close if overlay is not already showing (i.e. not user-opened)
-      if (overlay.style.display !== 'block') {
-        sidebar.style.transform = 'translateX(-100%)';
-      }
     }
-  }
-  checkBreakpoint();
-  window.addEventListener('resize', checkBreakpoint);
-  /* Re-run on browser back/forward (bfcache restore) */
-  window.addEventListener('pageshow', function(e) {
-    if (e.persisted) checkBreakpoint();
   });
 
   /* ── Theme toggle ────────────────────────────────────────────── */
