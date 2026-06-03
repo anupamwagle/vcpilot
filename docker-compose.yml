@@ -1,0 +1,201 @@
+version: "3.9"
+
+# =============================================================================
+# VCPilot — Docker Compose
+# Services: db, redis, app, celery-worker, celery-beat, dashboard, waha, ibkr-gateway
+# =============================================================================
+
+x-app-env: &app-env
+  env_file: .env
+  environment:
+    - DATABASE_URL=${DATABASE_URL}
+    - REDIS_URL=${REDIS_URL}
+
+networks:
+  vcpilot-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  waha-data:
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # TimescaleDB (PostgreSQL + time-series extension)
+  # ---------------------------------------------------------------------------
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: vcpilot-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    networks:
+      - vcpilot-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Redis — Celery broker + result backend
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: vcpilot-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - vcpilot-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # App — Main Python service (screener, broker, risk, data)
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+    container_name: vcpilot-app
+    restart: unless-stopped
+    <<: *app-env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app
+      - ./scripts:/app/scripts
+      - ./migrations:/app/migrations
+    networks:
+      - vcpilot-net
+    command: python -m scripts.init_db
+
+  # ---------------------------------------------------------------------------
+  # Celery Worker
+  # ---------------------------------------------------------------------------
+  celery-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+    container_name: vcpilot-worker
+    restart: unless-stopped
+    <<: *app-env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app
+    networks:
+      - vcpilot-net
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4 -Q default,screening,trading,reporting
+    healthcheck:
+      test: ["CMD", "celery", "-A", "app.tasks.celery_app", "inspect", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # Celery Beat — Scheduler
+  # ---------------------------------------------------------------------------
+  celery-beat:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+    container_name: vcpilot-beat
+    restart: unless-stopped
+    <<: *app-env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app
+    networks:
+      - vcpilot-net
+    command: celery -A app.tasks.celery_app beat --loglevel=info --scheduler celery.beat.PersistentScheduler
+
+  # ---------------------------------------------------------------------------
+  # Streamlit Dashboard — Admin UI
+  # ---------------------------------------------------------------------------
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dashboard
+    container_name: vcpilot-dashboard
+    restart: unless-stopped
+    <<: *app-env
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${DASHBOARD_PORT:-8501}:8501"
+    volumes:
+      - ./dashboard:/app/dashboard
+      - ./app:/app/app
+    networks:
+      - vcpilot-net
+    command: streamlit run /app/dashboard/Home.py --server.port=8501 --server.address=0.0.0.0
+
+  # ---------------------------------------------------------------------------
+  # WAHA — WhatsApp HTTP API (self-hosted, no Meta approval needed)
+  # ---------------------------------------------------------------------------
+  waha:
+    image: devlikeapro/waha:latest
+    container_name: vcpilot-waha
+    restart: unless-stopped
+    environment:
+      WHATSAPP_API_KEY: ${WAHA_API_KEY}
+      WHATSAPP_DEFAULT_ENGINE: WEBJS
+    ports:
+      - "3000:3000"
+    volumes:
+      - waha-data:/app/.sessions
+    networks:
+      - vcpilot-net
+
+  # ---------------------------------------------------------------------------
+  # IBKR Gateway — Interactive Brokers Gateway (paper by default)
+  # Start this manually when ready to trade: docker compose up ibkr-gateway
+  # ---------------------------------------------------------------------------
+  ibkr-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:latest
+    container_name: vcpilot-ibkr
+    restart: unless-stopped
+    environment:
+      TWS_USERID: ${IBKR_USERNAME}
+      TWS_PASSWORD: ${IBKR_PASSWORD}
+      TRADING_MODE: ${IBKR_PAPER_MODE:-paper}   # paper | live
+      TWS_SETTINGS_PATH: /root/Jts
+      READ_ONLY_API: "no"
+      VNC_SERVER_PASSWORD: changeme
+    ports:
+      - "4001:4001"   # Live
+      - "4002:4002"   # Paper
+      - "5900:5900"   # VNC (optional debug)
+    volumes:
+      - ./docker/ibkr:/root/Jts
+    networks:
+      - vcpilot-net
+    profiles:
+      - trading          # Only starts with: docker compose --profile trading up

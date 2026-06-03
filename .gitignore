@@ -216,3 +216,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# VCPilot specific
+.env
+*.pem
+*.key
+*.p12
+data/cache/
+*.parquet
+*.csv.gz
+docker/ibkr/*.jts
+logs/

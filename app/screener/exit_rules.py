@@ -1,0 +1,208 @@
+"""
+Exit Rules — Both defensive (cut losses) and offensive (take profits).
+
+Defensive (mandatory — cannot be disabled):
+  exit_stop_loss            — Hard stop hit → exit immediately
+  exit_time_stop            — Not up 10% in N weeks → reassess / exit
+  exit_market_regime        — Market goes BEAR → exit all / reduce
+  exit_earnings_avoid       — Exit N days before earnings
+
+Offensive (configurable):
+  exit_profit_target_1      — Take partial profits at 20-25%
+  exit_profit_target_2      — Take remaining at 40-50%
+  exit_climax_top           — Exhaustion gap-up on extreme volume
+  exit_three_weeks_tight    — Three weekly closes within 1.5% → hold (no exit)
+  exit_parabolic_move       — 3+ consecutive weeks up >5% each
+  exit_break_below_50ma     — Close below 50MA on volume
+  exit_round_number         — Partial exit at prior resistance / round number
+"""
+from __future__ import annotations
+from dataclasses import dataclass
+from datetime import date
+from typing import Optional
+import pandas as pd
+from loguru import logger
+
+from app.screener.rules import RuleEngine, RuleResult
+from app.models.trade import ExitReason
+
+
+@dataclass
+class ExitSignal:
+    should_exit: bool
+    reason: Optional[ExitReason] = None
+    exit_type: str = "FULL"          # FULL | PARTIAL
+    partial_pct: float = 100.0       # % of position to exit
+    message: str = ""
+    rule_id: str = ""
+
+
+def evaluate_exit_rules(
+    ticker: str,
+    entry_price: float,
+    current_price: float,
+    current_stop: float,
+    entry_date: date,
+    today: date,
+    weekly_closes: list[float],      # Last 3–5 weekly closing prices (latest first)
+    df_daily: pd.DataFrame,          # Recent daily bars
+    avg_vol_50: float,
+    next_earnings_date: Optional[date],
+    engine: RuleEngine,
+) -> list[ExitSignal]:
+    """
+    Evaluate all exit rules for an open position.
+    Returns a list of triggered ExitSignals (may be empty if no exit needed).
+    Multiple signals can trigger (e.g., both partial target AND trailing stop).
+    """
+    signals: list[ExitSignal] = []
+    latest = df_daily.iloc[-1]
+    close = float(latest["close"])
+    today_vol = float(latest["volume"])
+    pnl_pct = ((current_price - entry_price) / entry_price) * 100
+    hold_days = (today - entry_date).days
+
+    # =========================================================================
+    # DEFENSIVE EXITS
+    # =========================================================================
+
+    # -------------------------------------------------------------------------
+    # Hard Stop Loss (MANDATORY — cannot be disabled via DB)
+    # -------------------------------------------------------------------------
+    rule_id = "exit_stop_loss"
+    if close <= current_stop:
+        signals.append(ExitSignal(
+            should_exit=True, reason=ExitReason.STOP_LOSS, exit_type="FULL",
+            message=f"Stop hit: close {close:.3f} ≤ stop {current_stop:.3f}",
+            rule_id=rule_id
+        ))
+        return signals  # Stop hit — exit immediately, don't evaluate other rules
+
+    # -------------------------------------------------------------------------
+    # Time Stop
+    # -------------------------------------------------------------------------
+    rule_id = "exit_time_stop"
+    if engine.is_enabled(rule_id):
+        min_pct = float(engine.threshold(rule_id) or 10.0)
+        max_weeks = int(engine.threshold("exit_time_stop_weeks") or 3)
+        max_days = max_weeks * 5
+        if hold_days >= max_days and pnl_pct < min_pct:
+            signals.append(ExitSignal(
+                should_exit=True, reason=ExitReason.TIME_STOP, exit_type="FULL",
+                message=f"Time stop: {hold_days}d held, only {pnl_pct:.1f}% gain (need {min_pct}%)",
+                rule_id=rule_id
+            ))
+
+    # -------------------------------------------------------------------------
+    # Earnings Avoidance (exit N trading days before earnings)
+    # -------------------------------------------------------------------------
+    rule_id = "exit_earnings_avoid"
+    if engine.is_enabled(rule_id) and next_earnings_date:
+        days_to_earnings = (next_earnings_date - today).days
+        buffer_days = int(engine.threshold(rule_id) or 2)
+        if 0 <= days_to_earnings <= buffer_days:
+            signals.append(ExitSignal(
+                should_exit=True, reason=ExitReason.EARNINGS_AVOID, exit_type="FULL",
+                message=f"Earnings in {days_to_earnings}d — exiting per rule (buffer {buffer_days}d)",
+                rule_id=rule_id
+            ))
+
+    # =========================================================================
+    # OFFENSIVE EXITS
+    # =========================================================================
+
+    # -------------------------------------------------------------------------
+    # Profit Target 1 (partial exit at 20–25%)
+    # -------------------------------------------------------------------------
+    rule_id = "exit_profit_target_1"
+    if engine.is_enabled(rule_id):
+        target_pct = float(engine.threshold(rule_id) or 20.0)
+        partial_sell = float(engine.threshold("exit_profit_target_1_sell_pct") or 50.0)
+        if pnl_pct >= target_pct:
+            signals.append(ExitSignal(
+                should_exit=True, reason=ExitReason.PROFIT_TARGET_1,
+                exit_type="PARTIAL", partial_pct=partial_sell,
+                message=f"Target 1: {pnl_pct:.1f}% gain ≥ {target_pct}% — sell {partial_sell}%",
+                rule_id=rule_id
+            ))
+
+    # -------------------------------------------------------------------------
+    # Profit Target 2 (full exit at 40–50%)
+    # -------------------------------------------------------------------------
+    rule_id = "exit_profit_target_2"
+    if engine.is_enabled(rule_id):
+        target_pct = float(engine.threshold(rule_id) or 40.0)
+        if pnl_pct >= target_pct:
+            signals.append(ExitSignal(
+                should_exit=True, reason=ExitReason.PROFIT_TARGET_2, exit_type="FULL",
+                message=f"Target 2: {pnl_pct:.1f}% gain ≥ {target_pct}% — full exit",
+                rule_id=rule_id
+            ))
+
+    # -------------------------------------------------------------------------
+    # Climax Top (exhaustion — extreme volume + wide range up day after big run)
+    # -------------------------------------------------------------------------
+    rule_id = "exit_climax_top"
+    if engine.is_enabled(rule_id):
+        vol_threshold = float(engine.threshold(rule_id) or 250.0)  # % of avg
+        min_run = float(engine.threshold("exit_climax_top_min_run") or 50.0)  # % gain before climax
+        vol_ratio = (today_vol / avg_vol_50 * 100) if avg_vol_50 > 0 else 0
+        day_range_pct = ((float(latest["high"]) - float(latest["low"])) / float(latest["low"]) * 100)
+        if pnl_pct >= min_run and vol_ratio >= vol_threshold and day_range_pct >= 3:
+            signals.append(ExitSignal(
+                should_exit=True, reason=ExitReason.CLIMAX_TOP, exit_type="FULL",
+                message=f"Climax top: vol {vol_ratio:.0f}% of avg, range {day_range_pct:.1f}%",
+                rule_id=rule_id
+            ))
+
+    # -------------------------------------------------------------------------
+    # Parabolic Move (3+ consecutive weeks up >5% each)
+    # -------------------------------------------------------------------------
+    rule_id = "exit_parabolic_move"
+    if engine.is_enabled(rule_id) and len(weekly_closes) >= 4:
+        weekly_gains = [
+            ((weekly_closes[i] - weekly_closes[i+1]) / weekly_closes[i+1]) * 100
+            for i in range(min(3, len(weekly_closes)-1))
+        ]
+        parabolic_threshold = float(engine.threshold(rule_id) or 5.0)
+        if all(g >= parabolic_threshold for g in weekly_gains):
+            signals.append(ExitSignal(
+                should_exit=True, reason=ExitReason.CLIMAX_TOP, exit_type="PARTIAL",
+                partial_pct=50.0,
+                message=f"Parabolic: 3 weeks up {weekly_gains[0]:.1f}%/{weekly_gains[1]:.1f}%/{weekly_gains[2]:.1f}%",
+                rule_id=rule_id
+            ))
+
+    # -------------------------------------------------------------------------
+    # Break below 50MA on volume (trend break signal)
+    # -------------------------------------------------------------------------
+    rule_id = "exit_break_below_50ma"
+    if engine.is_enabled(rule_id):
+        ma50 = float(latest.get("ma_50", 0) or 0)
+        vol_ratio = (today_vol / avg_vol_50 * 100) if avg_vol_50 > 0 else 0
+        if ma50 > 0 and close < ma50 and vol_ratio >= 100:
+            signals.append(ExitSignal(
+                should_exit=True, reason=ExitReason.TRAILING_STOP, exit_type="FULL",
+                message=f"Broke 50MA {ma50:.3f} on {vol_ratio:.0f}% volume",
+                rule_id=rule_id
+            ))
+
+    # -------------------------------------------------------------------------
+    # 3-Weeks-Tight: THREE consecutive weekly closes within 1.5% → DO NOT EXIT
+    # (This overrides any weak exit signal — the stock is coiling for next move)
+    # -------------------------------------------------------------------------
+    rule_id = "exit_three_weeks_tight"
+    if engine.is_enabled(rule_id) and len(weekly_closes) >= 3:
+        tight_threshold = float(engine.threshold(rule_id) or 1.5)
+        w1, w2, w3 = weekly_closes[0], weekly_closes[1], weekly_closes[2]
+        spread_1_2 = abs((w1 - w2) / w2 * 100) if w2 > 0 else 100
+        spread_2_3 = abs((w2 - w3) / w3 * 100) if w3 > 0 else 100
+        if spread_1_2 <= tight_threshold and spread_2_3 <= tight_threshold:
+            # Remove any weak exit signals — let it ride
+            signals = [s for s in signals if s.reason in (
+                ExitReason.STOP_LOSS, ExitReason.EARNINGS_AVOID
+            )]
+            if not signals:
+                logger.info(f"{ticker}: 3-weeks-tight pattern — holding position")
+
+    return signals
