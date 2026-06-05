@@ -3258,7 +3258,45 @@ async def superadmin_user_reset_password(user_id: int, request: Request, db: Ses
         return RedirectResponse(f"/superadmin/users?saved=reset_manual&token={token}&email={encoded_email}", 302)
 
 
+@app.post("/superadmin/users/{user_id}/delete")
+async def superadmin_user_delete(user_id: int, request: Request, db: Session = Depends(get_db)):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    if request.session.get("user_role") != "superadmin":
+        return RedirectResponse("/", 302)
+
+    from app.models.auth import User
+    from app.models.audit import AuditLog, AuditAction
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return RedirectResponse("/superadmin/users?error=User+not+found", 302)
+
+    # Prevent self-deletion
+    current_user_id = request.session.get("user_id")
+    current_email = request.session.get("email")
+    if user.id == current_user_id or (current_email and user.email.strip().lower() == current_email.strip().lower()):
+        return RedirectResponse("/superadmin/users?error=Cannot+delete+currently+logged-in+user", 302)
+
+    email_to_delete = user.email
+    db.delete(user)
+    
+    # Audit log
+    db.add(AuditLog(
+        action=AuditAction.CONFIG_CHANGED,
+        actor=request.session.get("email", "superadmin"),
+        organization_id=None,
+        message=f"User '{email_to_delete}' was deleted by superadmin.",
+    ))
+    
+    db.commit()
+    import urllib.parse
+    encoded_email = urllib.parse.quote(email_to_delete)
+    return RedirectResponse(f"/superadmin/users?saved=deleted&email={encoded_email}", 302)
+
+
 # ===========================================================================
+
 # SUPER ADMIN DATA VIEW — universe + price data + custom stocks
 # ===========================================================================
 

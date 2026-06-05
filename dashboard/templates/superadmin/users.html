@@ -44,6 +44,11 @@
     {{ request.url.scheme }}://{{ request.headers.get('host', 'localhost:8501') }}/reset-password?token={{ request.query_params.get('token') }}
   </code>
 </div>
+{% elif saved == 'deleted' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  User account <strong>{{ request.query_params.get('email', '') }}</strong> has been deleted successfully.
+</div>
 {% endif %}
 
 {% if error %}
@@ -177,6 +182,14 @@
               <form method="post" action="/superadmin/users/{{ u.id }}/reset-password" class="block">
                 <button type="submit" class="btn-ghost text-[10px] px-1 py-0.5 hover:underline text-amber-600 dark:text-amber-400">
                   🔑 Reset Password
+                </button>
+              </form>
+
+              <!-- Delete User form -->
+              <form method="post" action="/superadmin/users/{{ u.id }}/delete"
+                    onsubmit="return confirm('Are you sure you want to permanently delete user {{ u.name or u.email }}?\n\nThis action cannot be undone.')" class="block">
+                <button type="submit" class="btn-ghost text-[10px] px-1 py-0.5 hover:underline text-red-600 dark:text-red-400">
+                  🗑 Delete User
                 </button>
               </form>
             </td>
