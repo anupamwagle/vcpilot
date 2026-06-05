@@ -100,6 +100,15 @@ app.conf.update(
         },
 
         # =================================================================
+        # Position synchronization with IBKR (every 5 min during hours)
+        # =================================================================
+        "sync-positions": {
+            "task": "app.tasks.trading.sync_ibkr_positions_task",
+            "schedule": crontab(hour="10-16", minute="*/5", day_of_week="mon-fri"),
+            "options": {"queue": "trading"},
+        },
+
+        # =================================================================
         # Stop loss sync with IBKR (every 15 min during hours)
         # =================================================================
         "sync-stops": {

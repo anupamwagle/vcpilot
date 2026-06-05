@@ -1,6 +1,6 @@
 # VCPilot — Operational Status
 
-> Last updated: 3 June 2026 19:50 AEST. Update this file when major milestones are reached.
+> Last updated: 5 June 2026 AEST. Update this file when major milestones are reached.
 
 ---
 
@@ -8,7 +8,25 @@
 
 ### ✅ Done
 
+- **Performance & Error Page Enhancements (4 Jun 2026):**
+  - Optimized the `/watchlist` page load from seconds to milliseconds by using a Redis-cached universe lookup (`get_cached_stock_names`) and eager-loading labels with SQLAlchemy's `joinedload(Watchlist.label)`.
+  - Implemented Redis-based caching for latest `PriceBar` stats (`latest_price_bar:{ticker}`) with a 5-minute expiration, used in both the watchlist view and `_enrich_rule_results` rule evaluation to prevent N+1 queries.
+  - Registered a custom FastAPI `RequestValidationError` exception handler mapping validation errors to the premium Flowbite-styled `error.html` template.
+  - Relocated the `🛠️ SIMULATOR` badge in `base.html` outside of role checks, rendering it for all roles (including superadmins) at the top of the app when `IBKR_SIMULATE=true` is enabled.
+
 - **SaaS / Multi-tenancy Core & Security:**
+  - **Signals Overrides & Entry Check Improvements (4 Jun 2026):**
+    - Updated the Signals page rule results and breakout check badges to display overridden/disabled rules in orange (`var(--warn-bg)`, `var(--warn)`) with a `➔ ✗` arrow indicator.
+    - Refactored `has_overrides` calculation: the active override warning badge now automatically hides if all rules pass naturally (reverting when there are no failed rules overridden).
+    - Added a `⚡ Promoted` label to the Signals page for signals manually promoted from the watchlist.
+    - Aligned entry check and exit check Celery task logs to print timestamps in the local `Australia/Sydney` (AEST) timezone.
+    - Prevented "No entry check yet" UI confusion by logging detailed audit checks per signal when tasks bypass execution due to BEAR regime, max positions, or paused states.
+    - **Sidebar Market Regime Indicator**: Moved Bull/Bear/Caution regime badge from the top navbar to the sidebar logo area so it's always visible next to "VCPilot".
+    - **Company Name Labels on Signals**: Fixed missing company names on signals by adding lazy backfill from yfinance when a stock's name is not yet populated in the DB. Also added auto-population during watchlist-to-signal promotion.
+    - **Production & Cloudflare Tunnel Readiness**:
+      - Configured Uvicorn inside `docker/Dockerfile.dashboard` and `docker-compose.yml` with `--proxy-headers` and `--forwarded-allow-ips='*'` to correctly handle reverse proxies and SSL termination at the edge (Cloudflare).
+      - Set up dynamic reloading: Uvicorn auto-reload is enabled in development mode and automatically disabled when `APP_ENV=production` is set.
+      - Fixed hardcoded reset-password URL schemes in `dashboard/templates/superadmin/users.html` to respect the request's dynamic schema (`http`/`https`).
   - Multi-tenant model layout: `Organization`, `OrganizationTier` (Bronze, Silver, Gold), and RBAC (`User`, `Role`, `Permission`).
   - Database schema migrated and seeded via `migrate_saas.py` mapping default single-tenant records to a `Default Org` and generating a tenant operator `admin@vcpilot.com`.
   - Scoped data queries by `organization_id` for all models (`Account`, `SystemConfig`, `Signal`, `Watchlist`, `Position`, `Trade`, `AuditLog`).
@@ -88,6 +106,11 @@
   - **Unskip signal:** Added `POST /signals/{signal_id}/unskip` route and `↩ Unskip` button in `signals.html` for SKIPPED signals. Added `UNSKIP <TICKER>` WhatsApp command to `AgentCommandHandler`. Signal is restored to `PENDING` so it can be triggered in the intraday entry check.
   - **`promoted` flash message:** `signals.html` now shows a success banner when redirected from watchlist promote (`?msg=promoted`).
 
+- **Features + fixes (4 Jun 2026 — Session 6):**
+  - **Watchlist Labels/Tags:** Multi-label watchlist grouping system. New `WatchlistLabel` model with colour picker (8-shade palette). Default labels seeded per org: Favourites (amber), High Priority (red), VCP Forming (blue), Under Review (violet). Coloured filter chips at the top of the Watchlist page let you filter by label instantly. Each stock card shows a colour dot + label badge. Inline label selector per card (select → auto-submit). New label panel accessible via "+ New label" button. "Add Manually" form now includes a label selector. `screen_single_ticker` Celery task accepts `label_id` so manual adds land in the correct group. Migration adds `watchlist_labels` table + `label_id` FK on `watchlist`.
+  - **Background job visibility fixed:** `check_entry_triggers` and `check_exit_rules_task` now write a `TASK_RUN` audit log entry on every invocation — even when the market is closed or there are no positions. Previously these tasks fired silently (only `logger.debug`) when the market was shut, so the Task Log showed nothing except heartbeats. Now every 5-min run appears in the log with a timestamp and status message.
+  - **Per-org timezone config:** Added `org_timezone` `SystemConfig` key defaulting to `Australia/Sydney` (AEST). Seeded in `seed_config.py` and `migrate_saas.py`. Appears in `/admin/config` under the General group. Celery Beat schedules remain global on AEST (correct for ASX), but each org can store a different timezone for use in reports and WhatsApp alert timestamps.
+
 - **Bug fixes + improvements (4 Jun 2026 — Session 5):**
   - **Manual triggers now org-scoped:** `_run_screen_force` and `send_daily_report` Celery tasks now accept an optional `organization_id` parameter. When triggered manually from the dashboard, they pass the current user's org so only that org's data is processed. Scheduled Beat tasks still loop all active orgs (no org_id passed). `evaluate_market_regime_task` and `refresh_price_data` remain global (shared data). `force-screen`, `run-screener`, and `send-report` action routes now all pass `org_id`.
   - **`user_id` added to AuditLog:** New `user_id` FK column (nullable, `ON DELETE SET NULL`) on `audit_logs` table. Added via `migrate_saas.py`. All manual dashboard actions (pause, resume, skip, unskip, close position, promote watchlist) now write `user_id` and the user's email as `actor` instead of the generic `"dashboard"` string.
@@ -102,6 +125,24 @@
     - iOS scroll locking when drawer is open (`overflow:hidden` on body).
   - **Company name pipeline fixed:** `get_fundamentals()` now returns `company_name`, `sector`, `industry` from yfinance `info.longName` (zero extra API calls). Both `_run_screen_force` and `run_daily_screen` persist these to `Stock.name`/`.sector`/`.industry` for every stock that passes trend template. Home, positions, signals, and watchlist pages all show the company name below the ticker code.
   - **WAHA Plus + per-org sessions:** Switched to `devlikeapro/waha-plus:latest` so each org uses its own session (`org_1`, `org_2`, …). Session names seeded as `org_{id}` on org creation and migration. App startup no longer auto-starts any session — each org admin triggers their own QR scan via `/admin/whatsapp`.
+
+- **Data Log + Superadmin Market Data (5 Jun 2026):**
+  - **`entry_check_logs` DB table:** New structured table capturing per-org, per-signal intraday metric snapshots on every 5-min entry check run (price, pivot, volume ratio, MAs, RS, per-rule pass/fail JSON, data source, delay metadata).
+  - **Intraday price fetcher:** `get_intraday_price()` in `fetcher.py` — tries IBKR real-time snapshot (`get_market_snapshot()`) first; falls back to yfinance 15-min interval bars (ASX free tier ≈ 15-20 min delayed); last-resort EOD close fallback. Returns `data_source`, `delay_mins`, `bar_timestamp`.
+  - **`check_entry_triggers` upgraded:** Now uses intraday price instead of prior EOD close for breakout confirmation. Writes structured rows to `entry_check_logs` in addition to AuditLog. Entry price used for position sizing is now the intraday price.
+  - **IBKR `get_market_snapshot()`:** New method on `IBKRBroker` using `reqMktData(snapshot=True)` for real-time last/bid/ask/volume. Returns `None` gracefully when IBKR not connected or simulation mode.
+  - **Admin Data Log (`/admin/data-log`):** New page showing live intraday entry check snapshots per signal. Per-rule green ✓ / red ✗ badges. Time filter chips (Latest / −15 / −30 / −60 min / Today). Ticker dropdown filter. Confirmed-only toggle. Auto-refresh every 30s via `/admin/data-log/poll` JSON endpoint. Click any row to expand full rule detail panel. yfinance delay banner warns users of data latency. Data source badge: ⚡ IBKR Live / 🕐 ~20min delay / 📉 EOD Close.
+  - **Superadmin Market Data (`/superadmin/data`):** Two-tab page under SaaS Management. Tab 1 (ASX Universe): all active stocks with latest PriceBar metrics — sortable by ticker/RS/price/volume/market cap, searchable, sector filter, pagination (50/page), MA50/150/200 colour-coded vs close price, RS badge coloured by tier (≥80 green, 60-80 amber, <60 red). Tab 2 (Custom Stocks): per-org stocks not in ASX200 universe added via Watchlist, with org count badge for stocks tracked by multiple orgs.
+  - **Sidebar:** Added "Data Log" link under Admin section; added "Market Data" link under SaaS Management section.
+  - **`main.py` truncation fixed:** Recovered all missing superadmin routes (`/superadmin/organizations/{org_id}`, `/superadmin/rules/*`, `/superadmin/users/*`) that were truncated in the committed file. Also completed the `reset_password_post` function which was also truncated. File is now complete at 3130 lines.
+
+- **Bug fixes (5 Jun 2026):**
+  - **`ibkr_simulate` badge now DB-driven:** `IBKR_SIMULATE` env var is now mirrored in `SystemConfig` as a global key (`organization_id=NULL`). `settings.ibkr_simulate_live` property checks DB first, falls back to env. `_global()` reads it via `cfg()` so the badge updates immediately when toggled from the UI — no container restart needed.
+  - **Superadmin simulation panel wired up:** `POST /superadmin/config/simulation` route added. The mock clock / regime / simulator form on `/superadmin/rules` was POSTing to a missing endpoint (404). Route now saves `mock_time_enabled`, `mock_current_time`, `last_market_regime`, and `ibkr_simulate` to global `SystemConfig` rows and writes an audit log. IBKR Simulation Mode toggle added to the form.
+  - **`_global()` passes mock context to all templates:** `mock_time_enabled`, `mock_current_time`, `mock_market_regime` (= `last_market_regime`) added to the global template context so the simulation panel renders correct current values.
+  - **Admin config Apply fixed for global configs:** `POST /admin/config/{config_id}/update` was filtering by `organization_id == org_id` — if a superadmin viewed global configs (mock clock, regime, `ibkr_simulate`) with `org_id=None`, the row lookup matched but if `org_id` differed from `organization_id=NULL` it silently failed. Route now fetches by ID only, then enforces a role-based ownership check (superadmins can save any row; org users restricted to their own org).
+  - **Superadmin can see `system` group configs:** Admin config page now shows `group="system"` entries (mock clock, ibkr_simulate, etc.) to superadmins; still hidden for regular org users.
+  - **Global system configs seeded by migration:** `migrate_saas.py` now seeds `mock_time_enabled`, `mock_current_time`, `ibkr_simulate` as global rows on startup if missing.
 
 ### 🔄 In Progress / Next Steps
 
@@ -164,7 +205,7 @@
 |---|---|---|
 | Old Streamlit files in `dashboard/` | Low | Delete manually from WSL |
 | `sync_stop_orders` is a placeholder | Medium | Implement IBKR modify order API |
-| Entry triggers use last EOD close, not live price | Medium | Add intraday price check in Phase 2 |
+| ~~Entry triggers use last EOD close, not live price~~ | ~~Medium~~ | ✅ Fixed — `get_intraday_price()` uses IBKR real-time or yfinance 15-min; EOD is last-resort fallback |
 | ~~WhatsApp webhook not wired~~ | ~~High~~ | ✅ Fixed |
 | `evaluate_market_regime_task` needs price bars in DB | Medium | Documented on health page; run Full Setup first |
 | ~~Screener button silently did nothing on non-trading days~~ | ~~High~~ | ✅ Fixed — now uses `_run_screen_force` |

@@ -41,6 +41,10 @@ class AuditAction(str, enum.Enum):
     AGENT_COMMAND       = "AGENT_COMMAND"
     MANUAL_OVERRIDE     = "MANUAL_OVERRIDE"
 
+    # Task execution tracking
+    TASK_RUN            = "TASK_RUN"     # Periodic task fired + summary
+    TASK_ERROR          = "TASK_ERROR"   # Error inside a task
+
 
 class AuditLog(Base):
     """

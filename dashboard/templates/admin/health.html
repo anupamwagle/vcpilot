@@ -55,6 +55,9 @@ Price data refresh queued — takes a few minutes for the full universe.</div>
       <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full animate-pulse" style="background:var(--pos)"></span>
       <span class="text-sm font-bold" style="color:var(--pos)">Online</span></div>
       <p class="text-xs mt-1" style="color:var(--text-subtle)">{{ heartbeat }}</p>
+      <p class="text-xs mt-0.5" style="color:var(--text-subtle);opacity:.55">
+        tz: {{ display_tz }} · <a href="/admin/config" style="color:inherit;text-decoration:underline">change</a>
+      </p>
     {% elif worker_status == 'starting' %}
       <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full animate-pulse" style="background:var(--warn)"></span>
       <span class="text-sm font-bold" style="color:var(--warn)">Starting…</span></div>
@@ -63,6 +66,9 @@ Price data refresh queued — takes a few minutes for the full universe.</div>
       <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full" style="background:var(--neg)"></span>
       <span class="text-sm font-bold" style="color:var(--neg)">Offline</span></div>
       <p class="text-xs mt-1" style="color:var(--text-subtle)">Last: {{ heartbeat }}</p>
+      <p class="text-xs mt-0.5" style="color:var(--text-subtle);opacity:.55">
+        tz: {{ display_tz }} · <a href="/admin/config" style="color:inherit;text-decoration:underline">change</a>
+      </p>
     {% endif %}
   </div>
 

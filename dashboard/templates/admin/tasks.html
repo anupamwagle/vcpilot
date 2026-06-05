@@ -4,76 +4,129 @@
 
 {% block content %}
 
-{# ── Status bar ───────────────────────────────────────────────── #}
+{% set msg = request.query_params.get('msg') %}
+{% if msg == 'cleared' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Task run entries cleared from the database.
+</div>
+{% elif msg == 'breakout' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Intraday breakout check triggered on the worker.
+</div>
+{% elif msg == 'exit_check' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Intraday exit rules evaluation triggered on the worker.
+</div>
+{% elif msg == 'positions' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Position synchronization with IBKR triggered.
+</div>
+{% elif msg == 'stops' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Stop orders synchronization with IBKR triggered.
+</div>
+{% endif %}
+
+{# ── Status bar ────────────────────────────────────────────────────── #}
 <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem;margin-bottom:1.25rem">
   <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
     <span id="stream-badge" style="display:inline-flex;align-items:center;gap:.375rem;font-size:.75rem;font-weight:600;padding:.25rem .625rem;border-radius:9999px;background:var(--pos-bg);color:var(--pos);border:1px solid var(--bull-border)">
-      <span class="w-1.5 h-1.5 rounded-full animate-pulse" style="display:inline-block;width:.5rem;height:.5rem;border-radius:9999px;background:var(--pos)"></span>
+      <span style="display:inline-block;width:.5rem;height:.5rem;border-radius:9999px;background:var(--pos)"></span>
       Live
     </span>
-    <span style="font-size:.8125rem;color:var(--text-muted)">Streaming audit events from the database · auto-updates every 3s</span>
+    <span style="font-size:.8125rem;color:var(--text-muted)">Auto-updates every 3s · times in {{ display_tz }}</span>
   </div>
-  <div style="display:flex;gap:.5rem">
-    <button onclick="clearLog()" class="btn-ghost text-xs py-1 px-3">Clear view</button>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+    <button onclick="clearView()" class="btn-ghost text-xs py-1 px-3">Clear view</button>
     <button onclick="togglePause()" id="pause-btn" class="btn-ghost text-xs py-1 px-3">⏸ Pause</button>
+    <form method="post" action="/admin/tasks/clear-log"
+          onsubmit="return confirm('Delete all TASK_RUN entries from the database? Other audit events are kept.')">
+      <button type="submit" class="btn-ghost text-xs py-1 px-3" style="color:var(--neg);border-color:var(--neg)">🗑 Clear DB log</button>
+    </form>
   </div>
 </div>
 
-{# ── Data state counters (refreshed via JS) ───────────────────── #}
+{# ── Data counters ─────────────────────────────────────────────────── #}
 <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
-  <div class="stat-card">
-    <p class="field-label">ASX Universe</p>
+  <div class="stat-card"><p class="field-label">ASX Universe</p>
     <p id="cnt-stocks" class="text-xl font-bold" style="color:var(--text)">{{ stock_count }}</p>
-    <p class="text-xs" style="color:var(--text-subtle)">stocks loaded</p>
-  </div>
-  <div class="stat-card">
-    <p class="field-label">Price Bars</p>
+    <p class="text-xs" style="color:var(--text-subtle)">stocks loaded</p></div>
+  <div class="stat-card"><p class="field-label">Price Bars</p>
     <p id="cnt-bars" class="text-xl font-bold" style="color:var(--text)">{{ "{:,}".format(price_bar_count) }}</p>
-    <p class="text-xs" style="color:var(--text-subtle)">total OHLCV rows</p>
-  </div>
-  <div class="stat-card">
-    <p class="field-label">Today's Signals</p>
+    <p class="text-xs" style="color:var(--text-subtle)">total OHLCV rows</p></div>
+  <div class="stat-card"><p class="field-label">Today's Signals</p>
     <p id="cnt-signals" class="text-xl font-bold" style="color:var(--t-accent)">{{ signal_count }}</p>
-    <p class="text-xs" style="color:var(--text-subtle)">from screener</p>
-  </div>
-  <div class="stat-card">
-    <p class="field-label">Watchlist</p>
+    <p class="text-xs" style="color:var(--text-subtle)">from screener</p></div>
+  <div class="stat-card"><p class="field-label">Watchlist</p>
     <p id="cnt-watchlist" class="text-xl font-bold" style="color:var(--a-accent)">{{ watchlist_count }}</p>
-    <p class="text-xs" style="color:var(--text-subtle)">being watched</p>
-  </div>
+    <p class="text-xs" style="color:var(--text-subtle)">being watched</p></div>
 </div>
 
-{# ── Quick triggers ───────────────────────────────────────────── #}
-<div class="card p-3 mb-5" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
-  <span style="font-size:.75rem;font-weight:600;color:var(--text-muted);margin-right:.25rem">Quick trigger:</span>
+{# ── Quick triggers ────────────────────────────────────────────────── #}
+<div class="card p-3 mb-4" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
+  <span style="font-size:.75rem;font-weight:600;color:var(--text-muted);margin-right:.25rem">Screener Tasks:</span>
   <form method="post" action="/action/full-setup"><button class="btn-primary text-xs py-1.5">🚀 Full Setup</button></form>
-  <form method="post" action="/action/refresh-data"><button class="btn-ghost text-xs py-1.5">🔄 Refresh Price Data</button></form>
+  <form method="post" action="/action/refresh-data"><button class="btn-ghost text-xs py-1.5">🔄 Refresh Data</button></form>
   <form method="post" action="/action/force-screen"><button class="btn-ghost text-xs py-1.5">🔍 Force Screen</button></form>
-  <form method="post" action="/action/evaluate-regime"><button class="btn-ghost text-xs py-1.5">🌡 Evaluate Regime</button></form>
-  <form method="post" action="/action/ping-worker"><button class="btn-ghost text-xs py-1.5">⚡ Ping Worker</button></form>
+  <form method="post" action="/action/evaluate-regime"><button class="btn-ghost text-xs py-1.5">🌡 Regime</button></form>
+  <form method="post" action="/action/ping-worker"><button class="btn-ghost text-xs py-1.5">⚡ Ping</button></form>
 </div>
 
-{# ── Live log feed ────────────────────────────────────────────── #}
+<div class="card p-3 mb-5" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
+  <span style="font-size:.75rem;font-weight:600;color:var(--text-muted);margin-right:.25rem">Intraday Trading Tasks:</span>
+  <form method="post" action="/action/force-breakout-check"><button class="btn-ghost text-xs py-1.5">🎯 Breakout Check</button></form>
+  <form method="post" action="/action/force-exit-check"><button class="btn-ghost text-xs py-1.5">🛑 Exit Check</button></form>
+  <form method="post" action="/action/force-position-sync"><button class="btn-ghost text-xs py-1.5">⚖️ Position Sync</button></form>
+  <form method="post" action="/action/force-stop-sync"><button class="btn-ghost text-xs py-1.5">⚙️ Stop Sync</button></form>
+</div>
+
+{# ── Live feed ─────────────────────────────────────────────────────── #}
 <div class="card overflow-hidden">
   <div class="section-head">
     <div style="display:flex;align-items:center;gap:.625rem">
       <p class="section-title">Audit Event Stream</p>
       <span id="event-count" style="font-size:.7rem;font-weight:600;padding:.15rem .5rem;border-radius:.3rem;background:var(--surface-alt);color:var(--text-muted);border:1px solid var(--border)">0 new</span>
     </div>
-    <span style="font-size:.75rem;color:var(--text-subtle)">Newest first</span>
+    <span style="font-size:.75rem;color:var(--text-subtle)">Newest first · click a row to expand</span>
   </div>
 
-  {# Seed with server-side rows (last 40) #}
-  <div id="log-feed" style="font-family:'SF Mono',Monaco,monospace;font-size:.75rem;max-height:60vh;overflow-y:auto">
+  <div id="log-feed" style="font-size:.75rem;max-height:65vh;overflow-y:auto">
     {% if seed_logs %}
-    {% for log in seed_logs %}
-    <div class="log-row tbl-row" style="display:grid;grid-template-columns:5rem 9rem 6rem 1fr;gap:.5rem 1rem;padding:.5rem 1rem;align-items:baseline">
-      <span style="color:var(--text-subtle);font-size:.7rem">{{ log.time }}</span>
-      <span style="font-weight:700;color:{{ log.color }}">{{ log.action }}</span>
-      <span style="color:var(--text-muted)">{{ log.ticker }}</span>
-      <span style="color:var(--text-subtle);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ log.message }}</span>
-    </div>
-    {% endfor %}
+      {% for log in seed_logs %}
+      {# ── Server-rendered seed row ── #}
+      <div class="log-row" style="border-bottom:1px solid var(--border);{% if log.action == 'SCREENER_TICKER' %}background:var(--surface-alt){% endif %}">
+        <div class="log-header" style="display:grid;grid-template-columns:11rem 10rem 5rem 1fr auto;gap:.4rem .75rem;padding:.45rem 1rem;align-items:center;{% if log.detail %}cursor:pointer{% endif %}">
+          <span style="color:var(--text-subtle);font-size:.7rem;font-family:'SF Mono',monospace">{{ log.time }}</span>
+          <span style="font-weight:700;color:{{ log.color }};font-size:.7rem;font-family:'SF Mono',monospace">{{ log.action }}</span>
+          <span style="color:var(--text-muted);font-size:.7rem;font-family:'SF Mono',monospace">{{ log.ticker }}</span>
+          <span style="color:{{ log.color }};font-size:.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'SF Mono',monospace" title="{{ log.message }}">{{ log.message }}</span>
+          <span class="chev" style="color:var(--text-subtle);font-size:.65rem;flex-shrink:0">{% if log.detail %}▶{% endif %}</span>
+        </div>
+        {% if log.detail %}
+        <div class="log-detail" style="display:none;padding:.625rem 1rem .75rem;background:var(--surface-alt);border-top:1px solid var(--border)">
+          {# Rule breakdown badges #}
+          {% if log.detail.rules is defined and log.detail.rules is mapping %}
+          <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.5rem">
+            {% for rid, rd in log.detail.rules.items() %}
+            <span style="font-size:.65rem;padding:.15rem .5rem;border-radius:.3rem;font-weight:600;font-family:'SF Mono',monospace;
+                  {% if rd.passed %}background:var(--pos-bg);color:var(--pos);border:1px solid var(--bull-border)
+                  {% else %}background:var(--neg-bg);color:var(--neg);border:1px solid var(--bear-border){% endif %}"
+                  title="{{ rd.message }}">
+              {{ '✓' if rd.passed else '✗' }} {{ rid.replace('_',' ') }}: {{ rd.message }}
+            </span>
+            {% endfor %}
+          </div>
+          {% endif %}
+          <pre style="font-size:.62rem;color:var(--text-subtle);white-space:pre-wrap;margin:0;line-height:1.4;font-family:'SF Mono',monospace">{{ log.detail | tojson(indent=2) }}</pre>
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
     {% else %}
     <div id="empty-state" style="padding:3rem 1rem;text-align:center;color:var(--text-subtle);font-size:.8125rem">
       No events yet — trigger a task above to see activity here.
@@ -86,141 +139,149 @@
 
 {% block extra_scripts %}
 <script>
-  // ── Config ──────────────────────────────────────────────────────────────
-  const POLL_MS   = 3000;   // how often to fetch new events
-  const MAX_ROWS  = 300;    // max rows to keep in DOM
+const POLL_MS  = 3000;
+const MAX_ROWS = 300;
 
-  // Colour map for action types
-  const ACTION_COLOURS = {
-    SCREENER_RUN:          'var(--t-accent)',
-    SCREENER_TICKER:       'var(--text-subtle)',  // overridden per-message below
-    MARKET_REGIME_CHANGE:  'var(--warn)',
-    SIGNAL_GENERATED:      'var(--pos)',
-    ORDER_PLACED:          'var(--pos)',
-    ORDER_FILLED:          'var(--pos)',
-    POSITION_CLOSED:       'var(--neg)',
-    TRADING_PAUSED:        'var(--warn)',
-    TRADING_RESUMED:       'var(--pos)',
-    RULE_TOGGLED:          'var(--a-accent)',
-    RULE_THRESHOLD_SET:    'var(--a-accent)',
-    CONFIG_CHANGED:        'var(--a-accent)',
-    SYSTEM_STARTED:        'var(--text-muted)',
-    HEALTH_CHECK:          'var(--text-subtle)',
-  };
+const ACTION_COLOURS = {
+  SCREENER_RUN:'var(--t-accent)',SCREENER_TICKER:'var(--text-subtle)',
+  MARKET_REGIME_CHANGE:'var(--warn)',SIGNAL_GENERATED:'var(--pos)',
+  ORDER_PLACED:'var(--pos)',ORDER_FILLED:'var(--pos)',ORDER_SUBMITTED:'var(--pos)',
+  POSITION_CLOSED:'var(--neg)',TRADING_PAUSED:'var(--warn)',TRADING_RESUMED:'var(--pos)',
+  RULE_TOGGLED:'var(--a-accent)',RULE_THRESHOLD_SET:'var(--a-accent)',
+  CONFIG_CHANGED:'var(--a-accent)',MANUAL_OVERRIDE:'var(--a-accent)',
+  SYSTEM_STARTED:'var(--text-muted)',HEALTH_CHECK:'var(--text-subtle)',
+  TASK_RUN:'var(--t-accent)',TASK_ERROR:'var(--neg)',
+};
 
-  // For SCREENER_TICKER rows, colour by emoji prefix in the message
-  function tickerColour(msg) {
+function msgColour(action, msg) {
+  if (action === 'SCREENER_TICKER' || action === 'TASK_RUN') {
     if (!msg) return 'var(--text-subtle)';
-    if (msg.startsWith('🟢')) return 'var(--pos)';
+    if (msg.startsWith('✅')||msg.startsWith('🟢')) return 'var(--pos)';
+    if (msg.startsWith('❌')||msg.startsWith('🔴')||msg.startsWith('⚠')) return 'var(--neg)';
     if (msg.startsWith('🔵')) return 'var(--t-accent)';
     if (msg.startsWith('🟡')) return 'var(--warn)';
-    if (msg.startsWith('🔴')) return 'var(--neg)';
-    if (msg.startsWith('⚠'))  return 'var(--neg)';
-    return 'var(--text-subtle)';  // ⚪ skip
   }
+  return ACTION_COLOURS[action] || 'var(--text-muted)';
+}
 
-  let paused     = false;
-  let newCount   = 0;
-  let lastId     = {{ last_log_id }};  // seed from server so we only fetch NEW events
-  let pollTimer  = null;
-
-  const feed       = document.getElementById('log-feed');
-  const countBadge = document.getElementById('event-count');
-  const pauseBtn   = document.getElementById('pause-btn');
-
-  function rowHtml(log) {
-    const isTicker = log.action === 'SCREENER_TICKER';
-    const colour = isTicker
-      ? tickerColour(log.message)
-      : (ACTION_COLOURS[log.action] || 'var(--text-muted)');
-    const bgStyle = isTicker ? 'background:var(--surface-alt);' : '';
-    return `<div class="log-row tbl-row" style="${bgStyle}display:grid;grid-template-columns:5rem 10rem 5rem 1fr;gap:.5rem 1rem;padding:.4rem 1rem;align-items:baseline;animation:fadeIn .3s ease">
-      <span style="color:var(--text-subtle);font-size:.7rem">${log.time}</span>
-      <span style="font-weight:700;color:${colour};font-size:.7rem">${log.action}</span>
-      <span style="color:var(--text-muted);font-size:.7rem">${log.ticker || '—'}</span>
-      <span style="color:${colour};font-size:.72rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${log.message || ''}">${log.message || ''}</span>
-    </div>`;
-  }
-
-  async function poll() {
-    if (paused) return;
-    try {
-      const res  = await fetch(`/admin/tasks/poll?after=${lastId}`);
-      if (!res.ok) return;
-      const data = await res.json();
-
-      // Update counters
-      if (data.counts) {
-        document.getElementById('cnt-stocks').textContent    = data.counts.stocks;
-        document.getElementById('cnt-bars').textContent      = Number(data.counts.bars).toLocaleString();
-        document.getElementById('cnt-signals').textContent   = data.counts.signals;
-        document.getElementById('cnt-watchlist').textContent = data.counts.watchlist;
-      }
-
-      if (data.logs && data.logs.length > 0) {
-        // Remove empty state
-        const empty = document.getElementById('empty-state');
-        if (empty) empty.remove();
-
-        // Prepend new rows (newest first)
-        const fragment = document.createDocumentFragment();
-        for (const log of data.logs) {
-          const div = document.createElement('div');
-          div.innerHTML = rowHtml(log);
-          fragment.appendChild(div.firstChild);
-          lastId = Math.max(lastId, log.id);
-        }
-        feed.insertBefore(fragment, feed.firstChild);
-        newCount += data.logs.length;
-
-        // Trim to MAX_ROWS
-        const rows = feed.querySelectorAll('.log-row');
-        for (let i = MAX_ROWS; i < rows.length; i++) rows[i].remove();
-
-        // Update badge
-        countBadge.textContent = `+${newCount} new`;
-        countBadge.style.background = 'var(--t-accent-bg)';
-        countBadge.style.color      = 'var(--t-accent)';
-        countBadge.style.borderColor= 'var(--t-accent-mid)';
-      }
-    } catch (e) {
-      console.warn('Poll error:', e);
+function buildDetailHtml(detail) {
+  if (!detail || !Object.keys(detail).length) return '';
+  let h = '<div class="log-detail" style="display:none;padding:.625rem 1rem .75rem;background:var(--surface-alt);border-top:1px solid var(--border)">';
+  if (detail.rules && typeof detail.rules === 'object' && !Array.isArray(detail.rules)) {
+    h += '<div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.5rem">';
+    for (const [rid, rd] of Object.entries(detail.rules)) {
+      const p   = rd.passed;
+      const col = p ? 'var(--pos)' : 'var(--neg)';
+      const bg  = p ? 'var(--pos-bg)' : 'var(--neg-bg)';
+      const bdr = p ? 'var(--bull-border)' : 'var(--bear-border)';
+      const msg = (rd.message||'').replace(/</g,'&lt;');
+      h += `<span style="font-size:.65rem;padding:.15rem .5rem;border-radius:.3rem;font-weight:600;font-family:'SF Mono',monospace;background:${bg};color:${col};border:1px solid ${bdr}" title="${msg}">${p?'✓':'✗'} ${rid.replace(/_/g,' ')}: ${msg}</span>`;
     }
+    h += '</div>';
   }
+  h += `<pre style="font-size:.62rem;color:var(--text-subtle);white-space:pre-wrap;margin:0;line-height:1.4;font-family:'SF Mono',monospace">${JSON.stringify(detail,null,2)}</pre>`;
+  h += '</div>';
+  return h;
+}
 
-  function startPolling() {
-    pollTimer = setInterval(poll, POLL_MS);
-    poll(); // immediate first tick
-  }
+function rowHtml(log) {
+  const col     = msgColour(log.action, log.message);
+  const isTick  = log.action === 'SCREENER_TICKER';
+  const hasDet  = log.detail && Object.keys(log.detail).length > 0;
+  const bgStyle = isTick ? 'background:var(--surface-alt);' : '';
+  const cur     = hasDet ? 'cursor:pointer;' : '';
+  const msg     = (log.message||'').replace(/</g,'&lt;');
+  let h = `<div class="log-row" style="border-bottom:1px solid var(--border);${bgStyle}animation:fadeIn .25s ease">`;
+  h    += `<div class="log-header" style="display:grid;grid-template-columns:11rem 10rem 5rem 1fr auto;gap:.4rem .75rem;padding:.45rem 1rem;align-items:center;${cur}">`;
+  h    += `<span style="color:var(--text-subtle);font-size:.7rem;font-family:'SF Mono',monospace">${log.time}</span>`;
+  h    += `<span style="font-weight:700;color:${col};font-size:.7rem;font-family:'SF Mono',monospace">${log.action}</span>`;
+  h    += `<span style="color:var(--text-muted);font-size:.7rem;font-family:'SF Mono',monospace">${log.ticker||'—'}</span>`;
+  h    += `<span style="color:${col};font-size:.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'SF Mono',monospace" title="${msg}">${msg}</span>`;
+  h    += `<span class="chev" style="color:var(--text-subtle);font-size:.65rem;flex-shrink:0">${hasDet?'▶':''}</span>`;
+  h    += '</div>';
+  if (hasDet) h += buildDetailHtml(log.detail);
+  h    += '</div>';
+  return h;
+}
 
-  function togglePause() {
-    paused = !paused;
-    pauseBtn.textContent = paused ? '▶ Resume' : '⏸ Pause';
-    const badge = document.getElementById('stream-badge');
-    badge.style.background   = paused ? 'var(--warn-bg)'  : 'var(--pos-bg)';
-    badge.style.color        = paused ? 'var(--warn)'     : 'var(--pos)';
-    badge.style.borderColor  = paused ? 'var(--caution-border)' : 'var(--bull-border)';
-    badge.querySelector('span').style.background = paused ? 'var(--warn)' : 'var(--pos)';
-    badge.childNodes[1].textContent = paused ? ' Paused' : ' Live';
-  }
+function toggleRow(headerEl) {
+  const row  = headerEl.closest('.log-row');
+  const det  = row && row.querySelector('.log-detail');
+  const chev = headerEl.querySelector('.chev');
+  if (!det) return;
+  const open = det.style.display !== 'none';
+  det.style.display = open ? 'none' : 'block';
+  if (chev) chev.textContent = open ? '▶' : '▼';
+}
 
-  function clearLog() {
-    feed.querySelectorAll('.log-row').forEach(r => r.remove());
-    newCount = 0;
-    countBadge.textContent   = '0 new';
-    countBadge.style.background   = 'var(--surface-alt)';
-    countBadge.style.color        = 'var(--text-muted)';
-    countBadge.style.borderColor  = 'var(--border)';
-    if (!feed.querySelector('#empty-state')) {
-      feed.innerHTML = '<div id="empty-state" style="padding:3rem 1rem;text-align:center;color:var(--text-subtle);font-size:.8125rem">Log cleared. New events will appear here.</div>';
+// Wire seed rows on load
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.log-header').forEach(hdr => {
+    if (hdr.style.cursor === 'pointer') hdr.addEventListener('click', () => toggleRow(hdr));
+  });
+});
+
+let paused=false, newCount=0, lastId={{ last_log_id }};
+const feed=document.getElementById('log-feed');
+const cntBadge=document.getElementById('event-count');
+
+async function poll() {
+  if (paused) return;
+  try {
+    const res  = await fetch(`/admin/tasks/poll?after=${lastId}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.counts) {
+      document.getElementById('cnt-stocks').textContent    = data.counts.stocks;
+      document.getElementById('cnt-bars').textContent      = Number(data.counts.bars).toLocaleString();
+      document.getElementById('cnt-signals').textContent   = data.counts.signals;
+      document.getElementById('cnt-watchlist').textContent = data.counts.watchlist;
     }
-  }
+    if (data.logs && data.logs.length) {
+      document.getElementById('empty-state')?.remove();
+      const frag = document.createDocumentFragment();
+      for (const log of data.logs) {
+        const wrap = document.createElement('div');
+        wrap.innerHTML = rowHtml(log);
+        const node = wrap.firstChild;
+        const hdr  = node.querySelector('.log-header');
+        if (hdr && node.querySelector('.log-detail')) hdr.addEventListener('click', () => toggleRow(hdr));
+        frag.appendChild(node);
+        lastId = Math.max(lastId, log.id);
+      }
+      feed.insertBefore(frag, feed.firstChild);
+      newCount += data.logs.length;
+      const rows = feed.querySelectorAll('.log-row');
+      for (let i = MAX_ROWS; i < rows.length; i++) rows[i].remove();
+      cntBadge.textContent   = `+${newCount} new`;
+      cntBadge.style.color   = 'var(--t-accent)';
+      cntBadge.style.borderColor = 'var(--t-accent)';
+    }
+  } catch(e) { console.warn('Poll err:',e); }
+}
 
-  // Fade-in animation for new rows
-  const style = document.createElement('style');
-  style.textContent = '@keyframes fadeIn { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:none; } }';
-  document.head.appendChild(style);
+function togglePause() {
+  paused = !paused;
+  document.getElementById('pause-btn').textContent = paused ? '▶ Resume' : '⏸ Pause';
+  const b = document.getElementById('stream-badge');
+  b.style.background  = paused ? 'var(--warn-bg)'  : 'var(--pos-bg)';
+  b.style.color       = paused ? 'var(--warn)'     : 'var(--pos)';
+  b.style.borderColor = paused ? 'var(--caution-border)' : 'var(--bull-border)';
+  b.querySelector('span').style.background = paused ? 'var(--warn)' : 'var(--pos)';
+  b.childNodes[1].textContent = paused ? ' Paused' : ' Live';
+}
 
-  startPolling();
+function clearView() {
+  feed.querySelectorAll('.log-row').forEach(r => r.remove());
+  newCount = 0;
+  cntBadge.textContent = '0 new';
+  cntBadge.style.color = 'var(--text-muted)';
+  cntBadge.style.borderColor = 'var(--border)';
+  feed.innerHTML = '<div id="empty-state" style="padding:3rem 1rem;text-align:center;color:var(--text-subtle);font-size:.8125rem">Cleared. New events will appear here.</div>';
+}
+
+document.head.insertAdjacentHTML('beforeend','<style>@keyframes fadeIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}</style>');
+setInterval(poll, POLL_MS);
+poll();
 </script>
 {% endblock %}

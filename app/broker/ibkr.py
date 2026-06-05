@@ -65,8 +65,8 @@ class IBKRBroker:
 
 
     def connect(self) -> bool:
-        if not IB_AVAILABLE:
-            logger.info("ib_insync unavailable — running in simulation mode")
+        if settings.ibkr_simulate or not IB_AVAILABLE:
+            logger.info("IBKR sandbox/simulation mode enabled (either forced or ib_insync unavailable)")
             return False
         try:
             self._ib = IB()
@@ -219,6 +219,59 @@ class IBKRBroker:
         except Exception as e:
             logger.error(f"Positions fetch failed: {e}")
             return []
+
+    def get_open_orders(self) -> list[dict]:
+        """Fetch open orders on IBKR."""
+        if not self.is_connected:
+            return []
+        try:
+            trades = self._ib.openTrades()
+            return [
+                {
+                    "ibkr_order_id": t.order.orderId,
+                    "ticker": t.contract.symbol,
+                    "action": t.order.action,
+                    "qty": t.order.totalQuantity,
+                    "status": t.orderStatus.status,
+                }
+                for t in trades
+            ]
+        except Exception as e:
+            logger.error(f"Orders fetch failed: {e}")
+            return []
+
+    def get_market_snapshot(self, ticker: str) -> Optional[dict]:
+        """
+        Request a one-shot real-time market data snapshot for a single ASX ticker.
+        Returns {last, bid, ask, volume, timestamp} or None if unavailable.
+        Requires IBKR market data subscription for ASX equities.
+        """
+        if not self.is_connected or not IB_AVAILABLE:
+            return None
+        try:
+            from ib_insync import Stock as IBStock
+            from datetime import datetime as _dt
+            contract = IBStock(ticker.replace(".AX", ""), "ASX", "AUD")
+            self._ib.qualifyContracts(contract)
+            # reqMktData with snapshot=True returns a Ticker object immediately
+            ticker_data = self._ib.reqMktData(contract, "", True, False)
+            self._ib.sleep(2)  # Wait for data to arrive
+            last  = ticker_data.last or ticker_data.close or None
+            bid   = ticker_data.bid  or None
+            ask   = ticker_data.ask  or None
+            vol   = ticker_data.volume or 0
+            if last:
+                return {
+                    "last": float(last),
+                    "bid": float(bid) if bid else None,
+                    "ask": float(ask) if ask else None,
+                    "volume": int(vol),
+                    "timestamp": _dt.utcnow(),
+                }
+            return None
+        except Exception as e:
+            logger.debug(f"Market snapshot failed for {ticker}: {e}")
+            return None
 
 
 def _simulate_order(ticker, action, qty, entry_price, stop_price, order_ref) -> dict:

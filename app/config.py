@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     ibkr_username_env: str = Field(default="", validation_alias="ibkr_username")
     ibkr_password_env: str = Field(default="", validation_alias="ibkr_password")
     ibkr_paper_mode_env: bool = Field(default=True, validation_alias="ibkr_paper_mode")
+    ibkr_simulate: bool = Field(default=False, validation_alias="ibkr_simulate")
+    mock_time_enabled_env: bool = Field(default=False, validation_alias="mock_time_enabled")
+    mock_current_time_env: str = Field(default="", validation_alias="mock_current_time")
 
     # Data APIs
     fmp_api_key_env: str = Field(default="", validation_alias="fmp_api_key")
@@ -74,7 +77,7 @@ class Settings(BaseSettings):
     # Trading defaults (overridden by DB SystemConfig)
     trading_universe: str = "ASX200"
     base_currency: str = "AUD"
-    weekly_capital_injection_env: float = Field(default=1000.0, validation_alias="weekly_capital_injection")
+    working_capital_env: float = Field(default=5000.0, validation_alias="working_capital")
 
     def _get_db_config(self, key: str) -> Optional[str]:
         """Fetch config value directly from database to avoid circular import issues."""
@@ -135,14 +138,21 @@ class Settings(BaseSettings):
         return val if val is not None else self.whatsapp_admin_number_env
 
     @property
-    def weekly_capital_injection(self) -> float:
-        val = self._get_db_config("weekly_injection_aud")
+    def working_capital(self) -> float:
+        val = self._get_db_config("working_capital_aud")
+        if val is None:
+            val = self._get_db_config("weekly_injection_aud")
         if val is not None:
             try:
                 return float(val)
             except ValueError:
                 pass
-        return self.weekly_capital_injection_env
+        return self.working_capital_env
+
+    @property
+    def weekly_capital_injection(self) -> float:
+        """Deprecated: use working_capital instead."""
+        return self.working_capital
 
     @property
     def admin_jid(self) -> str:
@@ -166,6 +176,30 @@ class Settings(BaseSettings):
     @property
     def is_paper_trading(self) -> bool:
         return self.ibkr_paper_mode
+
+    @property
+    def mock_time_enabled(self) -> bool:
+        val = self._get_db_config("mock_time_enabled")
+        if val is not None:
+            return val.lower() in ("true", "1", "yes")
+        return self.mock_time_enabled_env
+
+    @property
+    def mock_current_time(self) -> str:
+        val = self._get_db_config("mock_current_time")
+        return val if val is not None else self.mock_current_time_env
+
+    @property
+    def ibkr_simulate_live(self) -> bool:
+        """
+        DB-aware simulation flag — reads from global SystemConfig first so the
+        superadmin can toggle simulation from the UI without restarting containers.
+        Falls back to the startup env var value.
+        """
+        val = self._get_db_config("ibkr_simulate")
+        if val is not None:
+            return val.lower() in ("true", "1", "yes")
+        return self.ibkr_simulate
 
 
 # Singleton — import this throughout the app

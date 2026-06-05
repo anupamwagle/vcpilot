@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 from datetime import date
 from loguru import logger
+from app.utils.time_helper import get_current_date
 
 from app.database import get_db
 from app.models.config import SystemConfig, RuleConfig
@@ -96,7 +97,7 @@ class AgentCommandHandler:
                 Position.organization_id == self.organization_id
             ).count()
             today_signals  = db.query(Signal).filter(
-                Signal.signal_date == date.today(),
+                Signal.signal_date == get_current_date(),
                 Signal.organization_id == self.organization_id
             ).count()
 
@@ -131,12 +132,12 @@ class AgentCommandHandler:
     def cmd_signals(self, args) -> str:
         with get_db() as db:
             signals = db.query(Signal).filter(
-                Signal.signal_date == date.today(),
+                Signal.signal_date == get_current_date(),
                 Signal.organization_id == self.organization_id
             ).all()
         if not signals:
             return "No signals generated today."
-        lines = [f"📈 *Today's Signals ({date.today()})*"]
+        lines = [f"📈 *Today's Signals ({get_current_date()})*"]
         for s in signals:
             lines.append(
                 f"• *{s.ticker}* — pivot ${s.pivot_price:.3f} | "
@@ -195,7 +196,7 @@ class AgentCommandHandler:
         with get_db() as db:
             signal = db.query(Signal).filter(
                 Signal.ticker == ticker,
-                Signal.signal_date == date.today(),
+                Signal.signal_date == get_current_date(),
                 Signal.status == SignalStatus.PENDING,
                 Signal.organization_id == self.organization_id
             ).first()
@@ -215,7 +216,7 @@ class AgentCommandHandler:
         with get_db() as db:
             signal = db.query(Signal).filter(
                 Signal.ticker == ticker,
-                Signal.signal_date == date.today(),
+                Signal.signal_date == get_current_date(),
                 Signal.status == SignalStatus.SKIPPED,
                 Signal.organization_id == self.organization_id
             ).first()

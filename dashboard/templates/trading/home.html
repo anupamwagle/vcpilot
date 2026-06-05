@@ -6,48 +6,144 @@
 <!-- ── Stat cards ─────────────────────────────────────────────── -->
 <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3 mb-6">
 
-  <div class="stat-card">
-    <p class="field-label">Market</p>
-    {% if regime == 'BULL' %}<p class="text-lg font-bold" style="color:var(--bull)">🟢 BULL</p>
-    {% elif regime == 'CAUTION' %}<p class="text-lg font-bold" style="color:var(--caution)">🟡 CAUTION</p>
-    {% elif regime == 'BEAR' %}<p class="text-lg font-bold" style="color:var(--bear)">🔴 BEAR</p>
-    {% else %}<p class="text-sm font-semibold" style="color:var(--text-muted)">Not set</p>{% endif %}
+  <!-- Market Card -->
+  <div class="stat-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md border-t-2" 
+       style="border-top-color: {% if regime == 'BULL' %}var(--bull){% elif regime == 'CAUTION' %}var(--caution){% elif regime == 'BEAR' %}var(--bear){% else %}var(--border){% endif %}; 
+              background-image: linear-gradient(to bottom right, var(--surface), {% if regime == 'BULL' %}rgba(16, 185, 129, 0.04){% elif regime == 'CAUTION' %}rgba(245, 158, 11, 0.04){% elif regime == 'BEAR' %}rgba(239, 68, 68, 0.04){% else %}var(--surface){% endif %});
+              box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03), inset 0 -3px 0 0 {% if regime == 'BULL' %}rgba(16, 185, 129, 0.08){% elif regime == 'CAUTION' %}rgba(245, 158, 11, 0.08){% elif regime == 'BEAR' %}rgba(239, 68, 68, 0.08){% else %}transparent{% endif %};
+              position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; min-height: 80px; padding: 0.85rem 1rem;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
+      <div>
+        <p class="field-label mb-0.5" style="font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;">Market</p>
+        {% if regime == 'BULL' %}
+        <p class="text-base font-bold flex items-center gap-1.5" style="color:var(--bull)">
+          <span class="flex h-2 w-2 relative">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+          </span>
+          BULL
+        </p>
+        {% elif regime == 'CAUTION' %}
+        <p class="text-base font-bold flex items-center gap-1.5" style="color:var(--caution)">
+          <span class="flex h-2 w-2 relative">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+          </span>
+          CAUTION
+        </p>
+        {% elif regime == 'BEAR' %}
+        <p class="text-base font-bold flex items-center gap-1.5" style="color:var(--bear)">
+          <span class="flex h-2 w-2 relative">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
+          </span>
+          BEAR
+        </p>
+        {% else %}
+        <p class="text-sm font-semibold" style="color:var(--text-muted)">Not set</p>
+        {% endif %}
+      </div>
+      <span class="text-gray-400 dark:text-gray-600 opacity-60">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+      </span>
+    </div>
+    {% if regime_is_simulated %}
+      <span style="font-size:0.58rem;font-weight:600;color:var(--text-subtle);display:block;margin-top:0.15rem">CLOCK SIMULATED</span>
+    {% else %}
+      <span style="font-size:0.58rem;font-weight:600;color:var(--text-subtle);display:block;margin-top:0.15rem">LIVE ASX FEED</span>
+    {% endif %}
   </div>
 
-  <div class="stat-card">
-    <p class="field-label">Capital</p>
-    <p class="text-xl font-bold" style="color:var(--text)">${{ "{:,.0f}".format(capital) }}</p>
-    <p class="text-xs" style="color:var(--text-subtle)">AUD</p>
+  <!-- Capital Card -->
+  <div class="stat-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md border-t-2" 
+       style="border-top-color: var(--t-accent); 
+              background-image: linear-gradient(to bottom right, var(--surface), rgba(29, 78, 216, 0.03));
+              position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; min-height: 80px; padding: 0.85rem 1rem;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
+      <div>
+        <p class="field-label mb-0.5" style="font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;">Working Capital</p>
+        <p class="text-base font-bold" style="color:var(--text)">${{ "{:,.0f}".format(capital) }}</p>
+      </div>
+      <span class="text-gray-400 dark:text-gray-600 opacity-60">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
+      </span>
+    </div>
+    <span style="font-size:0.58rem;font-weight:600;color:var(--text-subtle);display:block;margin-top:0.15rem">AUD · BALANCE</span>
   </div>
 
-  <div class="stat-card">
-    <p class="field-label">Positions</p>
-    <p class="text-xl font-bold" style="color:var(--text)">{{ positions|length }}</p>
-    <p class="text-xs" style="color:var(--text-subtle)">open</p>
+  <!-- Positions Card -->
+  <div class="stat-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md border-t-2" 
+       style="border-top-color: var(--a-accent); 
+              background-image: linear-gradient(to bottom right, var(--surface), rgba(109, 40, 217, 0.03));
+              position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; min-height: 80px; padding: 0.85rem 1rem;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
+      <div>
+        <p class="field-label mb-0.5" style="font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;">Open Positions</p>
+        <p class="text-base font-bold" style="color:var(--text)">{{ positions|length }}</p>
+      </div>
+      <span class="text-gray-400 dark:text-gray-600 opacity-60">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+      </span>
+    </div>
+    <span style="font-size:0.58rem;font-weight:600;color:var(--text-subtle);display:block;margin-top:0.15rem">ACTIVE RISK UNITS</span>
   </div>
 
-  <div class="stat-card">
-    <p class="field-label">Portfolio Heat</p>
-    <p class="text-xl font-bold {% if portfolio_heat > 15 %}pnl-neg{% elif portfolio_heat > 10 %}text-warning{% else %}pnl-pos{% endif %}"
-       style="{% if portfolio_heat > 10 and portfolio_heat <= 15 %}color:var(--warn){% endif %}">
-      {{ portfolio_heat }}%
-    </p>
-    <p class="text-xs" style="color:var(--text-subtle)">at risk</p>
+  <!-- Portfolio Heat Card -->
+  <div class="stat-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md border-t-2" 
+       style="border-top-color: {% if portfolio_heat > 15 %}var(--neg){% elif portfolio_heat > 10 %}var(--warn){% else %}var(--pos){% endif %}; 
+              background-image: linear-gradient(to bottom right, var(--surface), {% if portfolio_heat > 15 %}rgba(220, 38, 38, 0.04){% elif portfolio_heat > 10 %}rgba(217, 119, 6, 0.04){% else %}rgba(5, 150, 105, 0.04){% endif %});
+              position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; min-height: 80px; padding: 0.85rem 1rem;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
+      <div>
+        <p class="field-label mb-0.5" style="font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;">Portfolio Heat</p>
+        <p class="text-base font-bold {% if portfolio_heat > 15 %}pnl-neg{% elif portfolio_heat > 10 %}text-warning{% else %}pnl-pos{% endif %}"
+           style="{% if portfolio_heat > 10 and portfolio_heat <= 15 %}color:var(--warn){% endif %}">
+          {{ portfolio_heat }}%
+        </p>
+      </div>
+      <span class="text-gray-400 dark:text-gray-600 opacity-60">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+      </span>
+    </div>
+    <span style="font-size:0.58rem;font-weight:600;color:var(--text-subtle);display:block;margin-top:0.15rem">MAX SIZES AT RISK</span>
   </div>
 
-  <div class="stat-card">
-    <p class="field-label">Today P&L</p>
-    <p class="text-xl font-bold {% if today_pnl >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}">
-      ${{ "{:+,.0f}".format(today_pnl) }}
-    </p>
+  <!-- Today's P&L Card -->
+  <div class="stat-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md border-t-2" 
+       style="border-top-color: {% if today_pnl >= 0 %}var(--pos){% else %}var(--neg){% endif %}; 
+              background-image: linear-gradient(to bottom right, var(--surface), {% if today_pnl >= 0 %}rgba(5, 150, 105, 0.04){% else %}rgba(220, 38, 38, 0.04){% endif %});
+              position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; min-height: 80px; padding: 0.85rem 1rem;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
+      <div>
+        <p class="field-label mb-0.5" style="font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;">Today P&L</p>
+        <p class="text-base font-bold {% if today_pnl >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}">
+          ${{ "{:+,.0f}".format(today_pnl) }}
+        </p>
+      </div>
+      <span class="text-gray-400 dark:text-gray-600 opacity-60">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      </span>
+    </div>
+    <span style="font-size:0.58rem;font-weight:600;color:var(--text-subtle);display:block;margin-top:0.15rem">DAILY UNREALIZED</span>
   </div>
 
-  <div class="stat-card">
-    <p class="field-label">Total P&L</p>
-    <p class="text-xl font-bold {% if total_pnl >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}">
-      ${{ "{:+,.0f}".format(total_pnl) }}
-    </p>
-    <p class="text-xs" style="color:var(--text-subtle)">{{ trade_count }} trades</p>
+  <!-- Total P&L Card -->
+  <div class="stat-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md border-t-2" 
+       style="border-top-color: {% if total_pnl >= 0 %}var(--pos){% else %}var(--neg){% endif %}; 
+              background-image: linear-gradient(to bottom right, var(--surface), {% if total_pnl >= 0 %}rgba(5, 150, 105, 0.04){% else %}rgba(220, 38, 38, 0.04){% endif %});
+              position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; min-height: 80px; padding: 0.85rem 1rem;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
+      <div>
+        <p class="field-label mb-0.5" style="font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;">Total P&L</p>
+        <p class="text-base font-bold {% if total_pnl >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}">
+          ${{ "{:+,.0f}".format(total_pnl) }}
+        </p>
+      </div>
+      <span class="text-gray-400 dark:text-gray-600 opacity-60">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+      </span>
+    </div>
+    <span style="font-size:0.58rem;font-weight:600;color:var(--text-subtle);display:block;margin-top:0.15rem">{{ trade_count }} CLOSED TRADES</span>
   </div>
 </div>
 
@@ -94,7 +190,16 @@
     <div class="tbl-row" style="display:flex;align-items:center;gap:.75rem;padding:.75rem 1rem">
       <div style="flex:1;min-width:0">
         <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
-          <span class="mono font-bold" style="font-size:.875rem;color:var(--text)">{{ s.ticker }}</span>
+          <span class="mono font-bold" style="font-size:.875rem;color:var(--text);display:inline-flex;align-items:center;gap:.25rem">
+            <form method="post" action="/watchlist/toggle-favourite" style="display:inline">
+              <input type="hidden" name="ticker" value="{{ s.ticker }}">
+              <input type="hidden" name="redirect_url" value="{{ path }}">
+              <button type="submit" class="focus:outline-none" style="color:#f59e0b;background:none;border:none;padding:0;cursor:pointer;font-size:1rem;line-height:1" title="Toggle Favourite">
+                {% if s.ticker in favourited_tickers %}★{% else %}☆{% endif %}
+              </button>
+            </form>
+            {{ s.ticker }}
+          </span>
           {% if s.company_name %}<span style="font-size:.7rem;color:var(--text-subtle)">{{ s.company_name }}</span>{% endif %}
           <span style="font-size:.7rem;color:var(--text-muted)">{{ s.vcp }}</span>
           {% if s.status == 'TRIGGERED' %}<span class="tag-pos" style="font-size:.65rem">Triggered</span>
@@ -133,7 +238,16 @@
     <div class="tbl-row" style="display:flex;align-items:center;gap:.75rem;padding:.75rem 1rem">
       <div style="flex:1;min-width:0">
         <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
-          <span class="mono font-bold" style="font-size:.875rem;color:var(--text)">{{ p.ticker }}</span>
+          <span class="mono font-bold" style="font-size:.875rem;color:var(--text);display:inline-flex;align-items:center;gap:.25rem">
+            <form method="post" action="/watchlist/toggle-favourite" style="display:inline">
+              <input type="hidden" name="ticker" value="{{ p.ticker }}">
+              <input type="hidden" name="redirect_url" value="{{ path }}">
+              <button type="submit" class="focus:outline-none" style="color:#f59e0b;background:none;border:none;padding:0;cursor:pointer;font-size:1rem;line-height:1" title="Toggle Favourite">
+                {% if p.ticker in favourited_tickers %}★{% else %}☆{% endif %}
+              </button>
+            </form>
+            {{ p.ticker }}
+          </span>
           {% if p.company_name %}<span style="font-size:.7rem;color:var(--text-subtle)">{{ p.company_name }}</span>{% endif %}
           {% if p.is_paper %}<span class="badge badge-paper" style="font-size:.65rem">PAPER</span>{% endif %}
         </div>
@@ -157,6 +271,201 @@
       <p class="empty-sub">Positions appear after order fills</p>
     </div>
     {% endif %}
+  </div>
+</div>
+
+<!-- ── Automated System Checks ──────────────────────────────────── -->
+<div class="card overflow-hidden mt-6">
+  <div class="section-head">
+    <h2 class="section-title" style="display:flex;align-items:center;gap:.5rem">
+      <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+      </svg>
+      Automated System Checks
+    </h2>
+  </div>
+  <div class="table-responsive">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>Task / Check Name</th>
+          <th>Schedule / Frequency</th>
+          <th>Last Run Time</th>
+          <th>Details & Results</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for check in checks %}
+        <tr class="tbl-row">
+          <td class="tbl-cell font-semibold">{{ check.name }}</td>
+          <td class="tbl-cell text-xs" style="color:var(--text-muted)">{{ check.frequency }}</td>
+          <td class="tbl-cell text-xs font-mono">
+            {% if check.log %}
+              {{ check.log.created_at|fmt_dt(display_tz) }}
+            {% else %}
+              <span style="color:var(--text-subtle)">Never</span>
+            {% endif %}
+          </td>
+          <td class="tbl-cell text-xs">
+            {% if check.log %}
+              <span class="tag {% if 'confirm' in check.log.message.lower() or 'success' in check.log.message.lower() or 'done' in check.log.message.lower() or 'complete' in check.log.message.lower() or 'ok' in check.log.message.lower() or 'refreshed' in check.log.message.lower() %}tag-pos{% else %}tag-blue{% endif %}">
+                {{ check.log.message }}
+              </span>
+            {% else %}
+              <span style="color:var(--text-subtle)">No run details recorded.</span>
+            {% endif %}
+            {% if check.active_regime %}
+              <span style="margin-left:.5rem;padding:.1rem .4rem;border-radius:.25rem;font-size:.65rem;font-weight:700;
+                {% if check.active_regime == 'BULL' %}background:rgba(16,185,129,.15);color:var(--bull)
+                {% elif check.active_regime == 'BEAR' %}background:rgba(239,68,68,.15);color:var(--bear)
+                {% else %}background:rgba(245,158,11,.15);color:var(--caution){% endif %}">
+                {{ check.active_regime }}{% if check.regime_is_simulated %} (Simulated){% endif %}
+              </span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── Watchlist Market Data ───────────────────────────────────── -->
+<div id="watchlist-card" class="card overflow-hidden mt-6">
+  <div class="section-head" style="flex-wrap:wrap;gap:.75rem">
+    <h2 class="section-title" style="display:flex;align-items:center;gap:.5rem">
+      <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
+      </svg>
+      Watchlist Market Data
+    </h2>
+    <!-- Filters -->
+    <div style="display:flex;align-items:center;gap:.5rem;margin-left:auto;flex-wrap:wrap">
+      <!-- Label chips/links — use JS to navigate without scrolling to top -->
+      <a href="javascript:void(0)" onclick="wlFilter('')"
+         style="padding:.2rem .6rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
+         {% if wl_active_label is none %}background:var(--t-accent);color:white;border-color:var(--t-accent)
+         {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
+        All
+      </a>
+      {% for lbl in wl_labels %}
+      <a href="javascript:void(0)" onclick="wlFilter('label={{ lbl.id }}{% if wl_only_custom %}&custom=true{% endif %}')"
+         style="padding:.2rem .6rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
+         {% if wl_active_label == lbl.id %}background:{{ lbl.color }};color:white;border-color:{{ lbl.color }}
+         {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
+        {{ lbl.name }}
+      </a>
+      {% endfor %}
+
+      <span style="border-left:1px solid var(--border);height:1.25rem;margin:0 .25rem"></span>
+
+      <!-- Custom stocks only toggle -->
+      <a href="javascript:void(0)" onclick="wlFilter('{% if wl_active_label %}label={{ wl_active_label }}&{% endif %}custom={% if wl_only_custom %}false{% else %}true{% endif %}')"
+         class="btn-ghost" style="padding:.2rem .6rem;font-size:.7rem;height:auto;border-radius:999px;font-weight:600;
+         {% if wl_only_custom %}background:var(--t-accent-bg);color:var(--t-accent);border-color:var(--t-accent-mid){% endif %}">
+        Custom Stocks {% if wl_only_custom %}🟢{% else %}⚪{% endif %}
+      </a>
+    </div>
+  </div>
+
+  <script>
+  function wlFilter(params) {
+    var url = '/' + (params ? '?' + params : '');
+    var scrollY = window.scrollY;
+    fetch(url)
+      .then(function(r) { return r.text(); })
+      .then(function(html) {
+        var parser = new DOMParser();
+        var doc = parser.parseFromString(html, 'text/html');
+        // Replace watchlist section: the card containing the table
+        var newCard = doc.getElementById('watchlist-card');
+        var oldCard = document.getElementById('watchlist-card');
+        if (newCard && oldCard) {
+          oldCard.innerHTML = newCard.innerHTML;
+        } else {
+          // fallback: push state and full reload preserving scroll
+          history.pushState(null, '', url);
+          window.location.reload();
+          return;
+        }
+        history.pushState(null, '', url);
+        window.scrollTo(0, scrollY);
+      })
+      .catch(function() {
+        window.location.href = url;
+      });
+  }
+  </script>
+
+  <div class="table-responsive">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>Ticker</th>
+          <th>Company Name</th>
+          <th>Sector</th>
+          <th>Price</th>
+          <th>50MA</th>
+          <th>150MA</th>
+          <th>200MA</th>
+          <th>Vol Ratio</th>
+          <th>RS Rating</th>
+          <th>52w High</th>
+          <th>Data Date</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if watchlist_rows %}
+          {% for row in watchlist_rows %}
+          <tr class="tbl-row">
+            <td class="tbl-cell font-mono font-bold">
+              <span style="display:inline-flex;align-items:center;gap:.35rem">
+                <form method="post" action="/watchlist/toggle-favourite" style="display:inline">
+                  <input type="hidden" name="ticker" value="{{ row.ticker }}">
+                  <input type="hidden" name="redirect_url" value="{{ path }}">
+                  <button type="submit" class="focus:outline-none" style="color:#f59e0b;background:none;border:none;padding:0;cursor:pointer;font-size:1rem;line-height:1" title="Toggle Favourite">
+                    {% if row.ticker in favourited_tickers %}★{% else %}☆{% endif %}
+                  </button>
+                </form>
+                {% if row.label %}
+                <span title="{{ row.label.name }}" style="width:.45rem;height:.45rem;border-radius:50%;background:{{ row.label.color }};display:inline-block"></span>
+                {% endif %}
+                {{ row.ticker }}
+              </span>
+              {% if row.is_custom %}
+                <span class="tag text-[9px] py-0 px-1 ml-1 tag-admin">CUSTOM</span>
+              {% endif %}
+            </td>
+            <td class="tbl-cell text-xs" style="color:var(--text-muted)">{{ row.company_name }}</td>
+            <td class="tbl-cell text-xs">{{ row.sector }}</td>
+            <td class="tbl-cell font-mono">${{ "%.2f"|format(row.close) if row.close is not none else '—' }}</td>
+            <td class="tbl-cell font-mono text-xs {% if row.close and row.ma_50 and row.close > row.ma_50 %}pnl-pos{% else %}pnl-neg{% endif %}">
+              ${{ "%.2f"|format(row.ma_50) if row.ma_50 is not none else '—' }}
+            </td>
+            <td class="tbl-cell font-mono text-xs">${{ "%.2f"|format(row.ma_150) if row.ma_150 is not none else '—' }}</td>
+            <td class="tbl-cell font-mono text-xs">${{ "%.2f"|format(row.ma_200) if row.ma_200 is not none else '—' }}</td>
+            <td class="tbl-cell font-mono text-xs {% if row.vol_ratio and row.vol_ratio >= 1.5 %}pnl-pos font-semibold{% endif %}">
+              {{ "%.2f"|format(row.vol_ratio) if row.vol_ratio is not none else '—' }}x
+            </td>
+            <td class="tbl-cell font-mono text-xs font-bold {% if row.rs_rating and row.rs_rating >= 70 %}pnl-pos{% else %}pnl-neg{% endif %}">
+              {{ row.rs_rating|int if row.rs_rating is not none else '—' }}
+            </td>
+            <td class="tbl-cell font-mono text-xs {% if row.pct_from_52w_high and row.pct_from_52w_high >= -5 %}pnl-pos font-semibold{% endif %}">
+              {{ "%.1f"|format(row.pct_from_52w_high) if row.pct_from_52w_high is not none else '—' }}%
+            </td>
+            <td class="tbl-cell text-xs font-mono text-gray-500">{{ row.bar_date }}</td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr>
+            <td colspan="11" class="empty">
+              <p class="empty-title">No watchlist stocks match the selected filters</p>
+              <p class="empty-sub">Add stocks on the <a href="/watchlist" style="color:var(--t-accent)">Watchlist page</a></p>
+            </td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
   </div>
 </div>
 {% endblock %}

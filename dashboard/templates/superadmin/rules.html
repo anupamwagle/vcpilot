@@ -1,6 +1,6 @@
 {% extends "base.html" %}
-{% block title %}Super Admin · Global Rules Config{% endblock %}
-{% block page_title %}Global Rules Config per Tier{% endblock %}
+{% block title %}Super Admin · Global Config{% endblock %}
+{% block page_title %}Global Config per Tier{% endblock %}
 
 {% block content %}
 
@@ -14,6 +14,88 @@
   {% if synced %}Propagated to {{ synced }} org rule copies ({{ skipped }} org-customised rows skipped).{% endif %}
 </div>
 {% endif %}
+
+{# ── Simulation & Time-Travel Controls ──────────────────────────────────── #}
+<div class="card p-4 mb-4">
+  <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:1rem">
+    <span class="text-lg">🛠️</span>
+    <p class="text-sm font-bold" style="color:var(--text)">Simulation & Time-Travel Controls (Super Admin)</p>
+  </div>
+  
+  <form method="post" action="/superadmin/config/simulation" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 items-end">
+    <!-- Toggle Switch -->
+    <div>
+      <label class="block text-xs font-semibold mb-1.5" style="color:var(--text-subtle)">Mock Clock Status</label>
+      <select name="mock_time_enabled" class="input py-1.5 px-3 w-full text-xs">
+        <option value="false" {% if not mock_time_enabled %}selected{% endif %}>🔴 Real-time Sydney Clock</option>
+        <option value="true" {% if mock_time_enabled %}selected{% endif %}>🟢 Mock Time-Travel Enabled</option>
+      </select>
+    </div>
+
+    <!-- Mock Time Input -->
+    <div>
+      <label class="block text-xs font-semibold mb-1.5" style="color:var(--text-subtle)">Simulated DateTime (AEST)</label>
+      <input type="text" name="mock_current_time" value="{{ mock_current_time or '' }}" 
+             placeholder="e.g. 2026-06-04 11:30:00" class="input py-1.5 px-3 w-full font-mono text-xs" />
+    </div>
+
+    <!-- Simulated Market Regime -->
+    <div>
+      <label class="block text-xs font-semibold mb-1.5" style="color:var(--text-subtle)">Simulated Market Regime</label>
+      <select name="mock_market_regime" class="input py-1.5 px-3 w-full text-xs">
+        <option value="BULL" {% if mock_market_regime == 'BULL' %}selected{% endif %}>🟢 BULL (Trading Allowed)</option>
+        <option value="CAUTION" {% if mock_market_regime == 'CAUTION' %}selected{% endif %}>🟡 CAUTION (Half Risk Size)</option>
+        <option value="BEAR" {% if mock_market_regime == 'BEAR' %}selected{% endif %}>🔴 BEAR (Blocked/Exit Only)</option>
+      </select>
+    </div>
+
+    <!-- IBKR Simulate Toggle -->
+    <div>
+      <label class="block text-xs font-semibold mb-1.5" style="color:var(--text-subtle)">IBKR Simulation Mode</label>
+      <label class="flex items-center gap-2 cursor-pointer" style="height:2.25rem">
+        <input type="hidden" name="ibkr_simulate" id="sim-hidden" value="{{ 'true' if ibkr_simulate else 'false' }}"/>
+        <div class="relative">
+          <input type="checkbox" id="sim-toggle" class="sr-only"
+                 {% if ibkr_simulate %}checked{% endif %}
+                 onchange="document.getElementById('sim-hidden').value=this.checked?'true':'false'">
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb"></div>
+        </div>
+        <span class="text-xs" style="color:var(--text-muted)" id="sim-label">
+          {% if ibkr_simulate %}🛠️ Simulator ON{% else %}✅ Live Orders{% endif %}
+        </span>
+      </label>
+    </div>
+    <!-- Actions -->
+    <div style="display:flex;gap:.5rem;align-items:flex-end">
+      <button type="submit" class="btn-admin text-xs py-2 px-4 flex-1">Apply</button>
+      {% if mock_time_enabled or mock_current_time or ibkr_simulate %}
+      <button type="button" onclick="resetSimulation()" class="btn-ghost text-xs py-2 px-4 flex-shrink-0" style="color:var(--neg);border-color:var(--neg)">Reset</button>
+      {% endif %}
+    </div>
+  </form>
+  <script>
+  document.getElementById('sim-toggle').addEventListener('change', function() {
+    document.getElementById('sim-label').textContent = this.checked ? '🛠️ Simulator ON' : '✅ Live Orders';
+  });
+  </script>
+</div>
+
+<script>
+function resetSimulation() {
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = '/superadmin/config/simulation';
+  const fields = {mock_time_enabled:'false', mock_current_time:'', mock_market_regime:'BULL', ibkr_simulate:'false'};
+  for (const [name, value] of Object.entries(fields)) {
+    const inp = document.createElement('input');
+    inp.type = 'hidden'; inp.name = name; inp.value = value;
+    form.appendChild(inp);
+  }
+  document.body.appendChild(form);
+  form.submit();
+}
+</script>
 
 {# ── Sync toolbar ──────────────────────────────────────────────────────── #}
 <div class="card p-4 mb-4" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem">

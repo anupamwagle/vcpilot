@@ -2,8 +2,9 @@
 Screening tasks — run after ASX close to generate signals for next day.
 """
 from __future__ import annotations
-from datetime import date
+from datetime import date, datetime
 from loguru import logger
+from app.utils.time_helper import get_current_date, get_current_time
 from celery import shared_task
 
 from app.tasks.celery_app import app
@@ -52,6 +53,33 @@ def serialize_rule_results(rule_results: dict) -> dict:
             "message": msg
         }
     return serialized
+
+
+def _safe_float(val):
+    if val is None:
+        return None
+    try:
+        import math
+        f = float(val)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_int(val):
+    if val is None:
+        return None
+    try:
+        import math
+        f = float(val)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return int(f)
+    except (ValueError, TypeError):
+        return None
+
 
 
 
@@ -111,7 +139,7 @@ def refresh_price_data(self):
         rs_ratings = compute_rs_ratings(all_prices)
 
         # Store latest bar for each stock
-        today = date.today()
+        today = get_current_date()
         with get_db() as db:
             for ticker, df in all_prices.items():
                 if df is None or df.empty:
@@ -131,18 +159,32 @@ def refresh_price_data(self):
                 else:
                     bar = existing
 
-                bar.open      = float(latest.get("open", 0) or 0)
-                bar.high      = float(latest.get("high", 0) or 0)
-                bar.low       = float(latest.get("low", 0) or 0)
-                bar.close     = float(latest.get("close", 0) or 0)
-                bar.adj_close = float(latest.get("adj_close", 0) or 0)
-                bar.volume    = int(latest.get("volume", 0) or 0)
-                bar.ma_50     = float(latest.get("ma_50") or 0) or None
-                bar.ma_150    = float(latest.get("ma_150") or 0) or None
-                bar.ma_200    = float(latest.get("ma_200") or 0) or None
-                bar.high_52w  = float(latest.get("high_52w") or 0) or None
-                bar.low_52w   = float(latest.get("low_52w") or 0) or None
-                bar.rs_rating = rs_ratings.get(ticker)
+                bar.open      = _safe_float(latest.get("open"))
+                bar.high      = _safe_float(latest.get("high"))
+                bar.low       = _safe_float(latest.get("low"))
+                bar.close     = _safe_float(latest.get("close"))
+                bar.adj_close = _safe_float(latest.get("adj_close"))
+                bar.volume    = _safe_int(latest.get("volume"))
+                bar.ma_10     = _safe_float(latest.get("ma_10"))
+                bar.ma_21     = _safe_float(latest.get("ma_21"))
+                bar.ma_50     = _safe_float(latest.get("ma_50"))
+                bar.ma_150    = _safe_float(latest.get("ma_150"))
+                bar.ma_200    = _safe_float(latest.get("ma_200"))
+                bar.ma_200_prev = _safe_float(latest.get("ma_200_prev"))
+                bar.avg_vol_50 = _safe_float(latest.get("avg_vol_50"))
+                bar.vol_ratio = _safe_float(latest.get("vol_ratio"))
+                bar.high_52w  = _safe_float(latest.get("high_52w"))
+                bar.low_52w   = _safe_float(latest.get("low_52w"))
+                bar.pct_from_52w_high = _safe_float(latest.get("pct_from_52w_high"))
+                bar.pct_from_52w_low  = _safe_float(latest.get("pct_from_52w_low"))
+                bar.atr_14    = _safe_float(latest.get("atr_14"))
+                bar.rs_rating = _safe_float(rs_ratings.get(ticker))
+
+            
+            db.add(AuditLog(
+                action=AuditAction.TASK_RUN,
+                message=f"Price data refreshed for {len(all_prices)} stocks",
+            ))
 
         logger.info(f"Price data refreshed for {len(all_prices)} stocks")
 
@@ -164,7 +206,7 @@ def evaluate_market_regime_task(self):
             return
 
         with get_db() as db:
-            bars = db.query(PriceBar).filter(PriceBar.date == date.today()).all()
+            bars = db.query(PriceBar).filter(PriceBar.date == get_current_date()).all()
             universe_data = [
                 {"ticker": b.ticker, "close": float(b.close or 0), "ma_200": float(b.ma_200 or 0)}
                 for b in bars if b.close and b.ma_200
@@ -178,7 +220,7 @@ def evaluate_market_regime_task(self):
         with get_db() as db:
             for key, value in [
                 ("last_market_regime", regime.value),
-                ("last_regime_check", str(date.today())),
+                ("last_regime_check", str(get_current_date())),
             ]:
                 cfg = db.query(SystemConfig).filter(SystemConfig.key == key).first()
                 if cfg:
@@ -221,7 +263,7 @@ def run_daily_screen(self):
         return
 
     logger.info("Starting Minervini daily screen...")
-    today    = date.today()
+    today    = get_current_date()
 
     try:
         with get_db() as db:
@@ -278,7 +320,11 @@ def run_daily_screen(self):
                             with get_db() as db:
                                 _upsert_watchlist(ticker, trend_results, db, organization_id=org.id)
                             watchlist_added += 1
+                        else:
+                            with get_db() as db:
+                                _update_watchlist_if_exists(ticker, trend_results, db, organization_id=org.id)
                         continue
+
 
                     # --- Fundamentals ---
                     fundamentals = get_fundamentals(ticker)
@@ -297,7 +343,11 @@ def run_daily_screen(self):
 
                     # Must pass ≥ 75% of fundamental rules
                     if fund_total > 0 and (fund_passed / fund_total) < 0.75:
+                        with get_db() as db:
+                            _upsert_watchlist(ticker, {**trend_results, **fund_results}, db, organization_id=org.id)
+                        watchlist_added += 1
                         continue
+
 
                     # --- VCP Detection ---
                     avg_vol = float(df["avg_vol_50"].iloc[-1] or 0)
@@ -349,6 +399,7 @@ def run_daily_screen(self):
                         risk_per_trade_aud=sizing.risk_aud,
                         vcp_contractions=vcp_result.contraction_count,
                         vcp_weeks=vcp_result.base_weeks,
+                        notes="[VCP Screener]",
                     )
 
                     with get_db() as db3:
@@ -426,7 +477,7 @@ def _run_screen_force(self, organization_id: int = None):
     Writes a SCREENER_TICKER audit row per stock so the Task Log shows live progress.
     """
     logger.info("Running forced screen (bypassing trading-day check)...")
-    today    = date.today()
+    today    = get_current_date()
 
     try:
         with get_db() as db:
@@ -590,6 +641,7 @@ def _run_screen_force(self, organization_id: int = None):
                                     risk_per_trade_aud=sizing.risk_aud,
                                     vcp_contractions=vcp_result.contraction_count,
                                     vcp_weeks=vcp_result.base_weeks,
+                                    notes="[VCP Screener]",
                                 )
 
                                 with get_db() as db3:
@@ -627,6 +679,7 @@ def _run_screen_force(self, organization_id: int = None):
                             # Trend passes but fundamentals fail
                             fund_fails = [rid.replace("fundamental_","") for rid, r in fund_results.items() if not r.passed]
                             with get_db() as db:
+                                _upsert_watchlist(ticker, {**trend_results, **fund_results}, db, organization_id=org.id)
                                 db.add(AuditLog(
                                     action=AuditAction.SCREENER_TICKER,
                                     organization_id=org.id,
@@ -634,6 +687,8 @@ def _run_screen_force(self, organization_id: int = None):
                                     message=f"🟡 FAIL fundamentals — trend {trend_passed}/{trend_total} fund {fund_passed}/{fund_total} | failed: {', '.join(fund_fails[:4])}",
                                     detail={"result": "fail_fundamentals", "rules": rule_summary},
                                 ))
+                            watchlist_added += 1
+
                     elif trend_passed >= 6:
                         # Partial trend pass (≥6) → watchlist
                         trend_fails = [rid.replace("trend_","") for rid, r in trend_results.items() if not r.passed]
@@ -651,6 +706,7 @@ def _run_screen_force(self, organization_id: int = None):
                         # Trend fails badly → log which rules failed
                         trend_fails = [rid.replace("trend_","") for rid, r in trend_results.items() if not r.passed]
                         with get_db() as db:
+                            _update_watchlist_if_exists(ticker, trend_results, db, organization_id=org.id)
                             db.add(AuditLog(
                                 action=AuditAction.SCREENER_TICKER,
                                 organization_id=org.id,
@@ -658,6 +714,7 @@ def _run_screen_force(self, organization_id: int = None):
                                 message=f"🔴 FAIL trend {trend_passed}/{trend_total} | failed: {', '.join(trend_fails)}",
                                 detail={"result": "fail_trend", "rules": rule_summary},
                             ))
+
 
                 except Exception as e:
                     logger.warning(f"Force screen error for {ticker}: {e}")
@@ -703,10 +760,25 @@ def _upsert_watchlist(ticker: str, rule_results: dict, db, organization_id: int)
             rule_results=serialize_rule_results(rule_results),
             added_by="screener",
         ))
+    else:
+        existing.rule_results = serialize_rule_results(rule_results)
+
+
+def _update_watchlist_if_exists(ticker: str, rule_results: dict, db, organization_id: int):
+    """Update a stock on the watchlist only if it already exists."""
+    from app.models.signal import Watchlist, WatchlistStatus
+    existing = db.query(Watchlist).filter(
+        Watchlist.ticker == ticker,
+        Watchlist.organization_id == organization_id,
+        Watchlist.status == WatchlistStatus.WATCHING
+    ).first()
+    if existing:
+        existing.rule_results = serialize_rule_results(rule_results)
+
 
 
 @app.task(name="app.tasks.screening.screen_single_ticker", bind=True)
-def screen_single_ticker(self, ticker: str, notes: str = "", organization_id: int = None):
+def screen_single_ticker(self, ticker: str, notes: str = "", organization_id: int = None, label_id: int = None):
     """Screen a single ticker immediately and add to watchlist or signals."""
     logger.info(f"Screening single ticker manually: {ticker} (Org: {organization_id})")
 
@@ -726,7 +798,7 @@ def screen_single_ticker(self, ticker: str, notes: str = "", organization_id: in
 
         engine = RuleEngine(organization_id=org.id, tier=org.tier.value)
         notifier = WhatsAppNotifier(organization_id=organization_id)
-        today = date.today()
+        today = get_current_date()
 
         # 1. Ensure stock exists in Stock table
         with get_db() as db:
@@ -755,26 +827,36 @@ def screen_single_ticker(self, ticker: str, notes: str = "", organization_id: in
         # 3. Populate latest price bar in DB so stats are available
         latest_row = df.iloc[-1]
         with get_db() as db:
-            existing_bar = db.query(PriceBar).filter(PriceBar.ticker == ticker, PriceBar.date == today).first()
-            if not existing_bar:
-                bar = PriceBar(
-                    ticker=ticker,
-                    date=today,
-                    open=float(latest_row.get("open", 0) or 0),
-                    high=float(latest_row.get("high", 0) or 0),
-                    low=float(latest_row.get("low", 0) or 0),
-                    close=float(latest_row.get("close", 0) or 0),
-                    adj_close=float(latest_row.get("adj_close", 0) or 0),
-                    volume=int(latest_row.get("volume", 0) or 0),
-                    ma_50=float(latest_row.get("ma_50") or 0) or None,
-                    ma_150=float(latest_row.get("ma_150") or 0) or None,
-                    ma_200=float(latest_row.get("ma_200") or 0) or None,
-                    high_52w=float(latest_row.get("high_52w") or 0) or None,
-                    low_52w=float(latest_row.get("low_52w") or 0) or None,
-                    rs_rating=float(latest_row.get("rs_rating") or 0) or None,
-                )
+            bar = db.query(PriceBar).filter(PriceBar.ticker == ticker, PriceBar.date == today).first()
+            if not bar:
+                bar = PriceBar(ticker=ticker, date=today)
                 db.add(bar)
-                db.commit()
+
+            bar.open      = _safe_float(latest_row.get("open"))
+            bar.high      = _safe_float(latest_row.get("high"))
+            bar.low       = _safe_float(latest_row.get("low"))
+            bar.close     = _safe_float(latest_row.get("close"))
+            bar.adj_close = _safe_float(latest_row.get("adj_close"))
+            bar.volume    = _safe_int(latest_row.get("volume"))
+            bar.ma_10     = _safe_float(latest_row.get("ma_10"))
+            bar.ma_21     = _safe_float(latest_row.get("ma_21"))
+            bar.ma_50     = _safe_float(latest_row.get("ma_50"))
+            bar.ma_150    = _safe_float(latest_row.get("ma_150"))
+            bar.ma_200    = _safe_float(latest_row.get("ma_200"))
+            bar.ma_200_prev = _safe_float(latest_row.get("ma_200_prev"))
+            bar.avg_vol_50 = _safe_float(latest_row.get("avg_vol_50"))
+            bar.vol_ratio = _safe_float(latest_row.get("vol_ratio"))
+            bar.high_52w  = _safe_float(latest_row.get("high_52w"))
+            bar.low_52w   = _safe_float(latest_row.get("low_52w"))
+            bar.pct_from_52w_high = _safe_float(latest_row.get("pct_from_52w_high"))
+            bar.pct_from_52w_low  = _safe_float(latest_row.get("pct_from_52w_low"))
+            bar.atr_14    = _safe_float(latest_row.get("atr_14"))
+            
+            rs_val = _safe_float(latest_row.get("rs_rating"))
+            if rs_val is not None:
+                bar.rs_rating = rs_val
+
+            db.commit()
 
         # 4. Fetch fundamentals (and update stock name)
         fundamentals = get_fundamentals(ticker)
@@ -878,6 +960,7 @@ def screen_single_ticker(self, ticker: str, notes: str = "", organization_id: in
                         status=WatchlistStatus.WATCHING,
                         added_by="admin_manual",
                         notes=notes,
+                        label_id=label_id,
                         rule_results=serialize_rule_results(all_rule_results)
                     ))
                     db.add(AuditLog(
@@ -889,6 +972,21 @@ def screen_single_ticker(self, ticker: str, notes: str = "", organization_id: in
                     ))
                     db.commit()
                     logger.info(f"Added {ticker} to watchlist (Manually screened)")
+                else:
+                    existing_wl.rule_results = serialize_rule_results(all_rule_results)
+                    if notes:
+                        existing_wl.notes = notes
+                    if label_id is not None:
+                        existing_wl.label_id = label_id
+                    db.add(AuditLog(
+                        action=AuditAction.SCREENER_TICKER,
+                        organization_id=organization_id,
+                        ticker=ticker,
+                        message=f"🔵 WATCHLIST (Manual Update) — trend {trend_passed}/{trend_total} fund {fund_passed}/{fund_total}",
+                        detail={"result": "watchlist"}
+                    ))
+                    db.commit()
+                    logger.info(f"Updated {ticker} on watchlist (Manually screened)")
 
     except Exception as e:
         logger.error(f"Manual screening failed for {ticker}: {e}")

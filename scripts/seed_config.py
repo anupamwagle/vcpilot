@@ -29,9 +29,9 @@ SYSTEM_CONFIGS = [
          label="Last Worker Heartbeat", group="system"),
 
     # --- Capital ---
-    dict(key="weekly_injection_aud", value=str(settings.weekly_capital_injection_env), value_type="FLOAT",
-         label="Weekly Capital Injection (AUD)", group="capital",
-         description="Weekly capital injected into trading calculations"),
+    dict(key="working_capital_aud", value=str(settings.working_capital_env), value_type="FLOAT",
+         label="Working Capital (AUD)", group="general",
+         description="Working capital used for sizing and risk calculations"),
 
     # --- IBKR Configuration ---
     dict(key="ibkr_account", value=str(settings.ibkr_account_env), value_type="STRING",
@@ -59,6 +59,27 @@ SYSTEM_CONFIGS = [
     dict(key="fmp_api_key", value=str(settings.fmp_api_key_env), value_type="STRING",
          label="FMP API Key", group="data", is_secret=True,
          description="Financial Modeling Prep API key for supplemental fundamental data"),
+
+    # --- Timezone ---
+    dict(key="org_timezone", value="UTC", value_type="STRING",
+         label="Display Timezone", group="general",
+         description="IANA timezone for displaying timestamps in the dashboard and reports "
+                     "(e.g. UTC, Australia/Sydney, Asia/Singapore). Change to Australia/Sydney to see AEST times. "
+                     "Beat schedules always run on AEST since ASX is in Sydney."),
+
+    # --- Simulation & Time-Travel ---
+    dict(key="mock_time_enabled", value="false", value_type="BOOLEAN",
+         label="Mock Time Enabled", group="system",
+         description="Enable global clock mocking for rule testing and data replaying"),
+    dict(key="mock_current_time", value="", value_type="STRING",
+         label="Mock Current Time", group="system",
+         description="Simulated date and time in YYYY-MM-DD HH:MM:SS format to overwrite system clock"),
+    dict(key="ibkr_simulate", value="false", value_type="BOOLEAN",
+         label="IBKR Simulation Mode", group="system",
+         description="When true, orders are simulated locally without sending to IBKR Gateway"),
+    dict(key="mock_market_regime", value="BULL", value_type="STRING",
+         label="Mock Market Regime", group="system",
+         description="Simulated market regime shown when Mock Time is enabled (BULL / CAUTION / BEAR). Never overwrites the evaluated last_market_regime."),
 ]
 
 
@@ -513,12 +534,12 @@ def seed_all():
                     tier_id=admin_tier.id,
                     is_active=True,
                     is_paper=True,
-                    capital_aud=1000.00,
+                    capital_aud=5000.00,
                 ))
-                logger.info("Seeded default account (paper, $1000, ADMIN tier)")
+                logger.info("Seeded default account (paper, $5000, ADMIN tier)")
 
         # --- Clean up old/removed keys ---
-        removed_keys = ["trading_universe", "base_currency", "account_capital_aud"]
+        removed_keys = ["trading_universe", "base_currency", "account_capital_aud", "weekly_injection_aud"]
         for rk in removed_keys:
             db.query(SystemConfig).filter(SystemConfig.key == rk).delete()
         db.flush()

@@ -1,11 +1,11 @@
 """
-Market data models — Stock universe and daily OHLCV price bars.
+Market data models — Stock universe, daily OHLCV price bars, and intraday entry check logs.
 PriceBar is a TimescaleDB hypertable (partitioned by date).
 """
 from datetime import datetime, date
 from sqlalchemy import (
     Column, Integer, String, Boolean, DateTime, Date,
-    Numeric, BigInteger, Text, UniqueConstraint, Index
+    Numeric, BigInteger, Text, UniqueConstraint, Index, JSON
 )
 from app.database import Base
 
@@ -91,3 +91,63 @@ class PriceBar(Base):
 
     def __repr__(self):
         return f"<PriceBar {self.ticker} {self.date} close={self.close}>"
+
+
+class EntryCheckLog(Base):
+    """
+    Per-org, per-signal intraday metric snapshot captured every 5-15 minutes
+    during market hours. Powers the Admin Data Log page so users can see exactly
+    which Minervini metrics were evaluated and whether each rule passed/failed.
+    """
+    __tablename__ = "entry_check_logs"
+    __table_args__ = (
+        Index("ix_ecl_org_checked", "organization_id", "checked_at"),
+        Index("ix_ecl_ticker", "ticker"),
+    )
+
+    id              = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, nullable=False, index=True)
+    signal_id       = Column(Integer, nullable=True, index=True)
+    ticker          = Column(String(16), nullable=False)
+    checked_at      = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    # Price
+    price_current   = Column(Numeric(12, 4), nullable=True)
+    price_pivot     = Column(Numeric(12, 4), nullable=True)
+    price_stop      = Column(Numeric(12, 4), nullable=True)
+    price_vs_pivot  = Column(Numeric(8, 4), nullable=True)
+
+    # Volume
+    vol_current     = Column(BigInteger, nullable=True)
+    vol_avg_50      = Column(Numeric(18, 2), nullable=True)
+    vol_ratio       = Column(Numeric(8, 4), nullable=True)
+
+    # Moving averages (last EOD bar)
+    ma_10           = Column(Numeric(12, 4), nullable=True)
+    ma_50           = Column(Numeric(12, 4), nullable=True)
+    ma_150          = Column(Numeric(12, 4), nullable=True)
+    ma_200          = Column(Numeric(12, 4), nullable=True)
+
+    # 52-week range
+    high_52w        = Column(Numeric(12, 4), nullable=True)
+    low_52w         = Column(Numeric(12, 4), nullable=True)
+    pct_from_52w_high = Column(Numeric(8, 4), nullable=True)
+
+    # Relative strength
+    rs_rating       = Column(Numeric(6, 2), nullable=True)
+
+    # Verdict
+    breakout_confirmed = Column(Boolean, default=False)
+
+    # Per-rule detail: {rule_id: {passed, value, threshold, message}}
+    rule_results    = Column(JSON, default=dict)
+
+    # Data source metadata
+    data_source     = Column(String(32), default="yfinance")
+    data_delay_mins = Column(Integer, default=20)
+    bar_timestamp   = Column(DateTime, nullable=True)
+
+    created_at      = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<EntryCheckLog {self.ticker} @ {self.checked_at} confirmed={self.breakout_confirmed}>"

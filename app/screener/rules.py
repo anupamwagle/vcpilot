@@ -53,6 +53,7 @@ class RuleEngine:
         self.organization_id = organization_id
         self.tier = tier
         self._rules: dict[str, RuleConfig] = {}
+        self._signal_overrides: dict[str, bool] = {}   # per-signal temporary overrides
         self._load_rules()
 
     def _load_rules(self):
@@ -77,7 +78,51 @@ class RuleEngine:
         rule = self._rules.get(rule_id)
         if not rule:
             return False
+        # Signal override: respected only when rule is globally enabled and not mandatory
+        if rule_id in self._signal_overrides and rule.enabled_globally and not rule.is_mandatory:
+            return self._signal_overrides[rule_id]
         return rule.is_enabled_for_tier(self.tier)
+
+    def apply_signal_overrides(self, overrides: dict):
+        """
+        Temporarily override rule enabled-state for the current signal.
+        Mandatory rules and globally-disabled rules are immune.
+        """
+        for rule_id, enabled in overrides.items():
+            rule = self._rules.get(rule_id)
+            if rule and rule.enabled_globally and not rule.is_mandatory:
+                self._signal_overrides[rule_id] = bool(enabled)
+
+    def clear_signal_overrides(self):
+        """Reset all per-signal overrides (call after processing each signal)."""
+        self._signal_overrides.clear()
+
+    def get_rule_meta(self, rule_id: str) -> Optional[dict]:
+        """Return label, mandatory flag, and global-enabled flag for UI rendering."""
+        rule = self._rules.get(rule_id)
+        if not rule:
+            return None
+        return {
+            "rule_id": rule.rule_id,
+            "label": rule.label,
+            "is_mandatory": rule.is_mandatory,
+            "globally_enabled": rule.enabled_globally,
+            "tier_enabled": rule.is_enabled_for_tier(self.tier),
+        }
+
+    def all_rules_meta(self) -> list[dict]:
+        """Return metadata for all rules — used for per-signal override UI."""
+        return [
+            {
+                "rule_id": r.rule_id,
+                "label": r.label,
+                "category": r.category.value,
+                "is_mandatory": r.is_mandatory,
+                "globally_enabled": r.enabled_globally,
+                "tier_enabled": r.is_enabled_for_tier(self.tier),
+            }
+            for r in sorted(self._rules.values(), key=lambda x: x.sort_order)
+        ]
 
     def threshold(self, rule_id: str) -> Optional[float]:
         rule = self._rules.get(rule_id)

@@ -1,0 +1,372 @@
+{% extends "base.html" %}
+{% block title %}Data Log{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">📡 Data Log</h1>
+    <p class="page-subtitle">Live intraday metric snapshots — checked every 5–15 min against Minervini entry rules</p>
+  </div>
+  <div class="flex items-center gap-2">
+    <!-- Auto-refresh indicator -->
+    <span id="refresh-indicator" class="badge text-xs" style="background:var(--t-accent-bg);color:var(--t-accent)">
+      ⟳ Auto-refresh
+    </span>
+    <span id="last-refresh" class="text-xs" style="color:var(--text-subtle)"></span>
+  </div>
+</div>
+
+<!-- Data delay banner -->
+<div id="delay-banner" class="card mb-4 p-3 flex flex-col gap-1" style="border-left:3px solid var(--warn);background:var(--warn-bg)">
+  <div class="flex items-center gap-2">
+    <svg class="w-4 h-4 flex-shrink-0" style="color:var(--warn)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+    </svg>
+    <p class="text-sm font-semibold" style="color:var(--warn)">Data Delay Notice</p>
+  </div>
+  <p class="text-xs" style="color:var(--text-muted)">
+    <strong>yfinance (free tier)</strong> provides ASX data with a <strong>~15–20 minute delay</strong>.
+    Price shown is not real-time. Connect IBKR Gateway in <a href="/admin/config" style="color:var(--t-accent)">Admin → Config</a>
+    to unlock real-time data. Entry checks run every 5 minutes; data freshness depends on your data source.
+  </p>
+</div>
+
+<!-- Filters -->
+<div class="card mb-4 p-3">
+  <form method="get" action="/admin/data-log" class="flex flex-wrap items-end gap-3">
+    <!-- Time window -->
+    <div class="flex flex-col gap-1">
+      <label class="text-xs font-semibold" style="color:var(--text-muted)">Time Window</label>
+      <div class="flex gap-1 flex-wrap">
+        {% for w, lbl in [('latest','Latest'), ('15','− 15 min'), ('30','− 30 min'), ('60','− 60 min'), ('today','Today')] %}
+        <button type="submit" name="window" value="{{ w }}"
+          class="px-3 py-1 text-xs rounded-full border transition-all"
+          style="{% if window == w %}background:var(--t-accent);color:#fff;border-color:var(--t-accent){% else %}background:var(--surface);color:var(--text-muted);border-color:var(--border){% endif %}"
+          {% if ticker %}{% endif %}>
+          {{ lbl }}
+        </button>
+        {% endfor %}
+        <!-- preserve other filters when switching window -->
+        {% if ticker %}<input type="hidden" name="ticker" value="{{ ticker }}">{% endif %}
+        {% if only_confirmed %}<input type="hidden" name="only_confirmed" value="true">{% endif %}
+      </div>
+    </div>
+
+    <!-- Ticker filter -->
+    <div class="flex flex-col gap-1">
+      <label class="text-xs font-semibold" style="color:var(--text-muted)">Ticker</label>
+      <select name="ticker" class="input py-1 px-2 text-sm" style="min-width:130px">
+        <option value="">All tickers</option>
+        {% for t in all_tickers %}
+        <option value="{{ t }}" {% if ticker == t %}selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- Confirmed only toggle -->
+    <div class="flex items-center gap-2 mt-4">
+      <input type="checkbox" id="only_confirmed" name="only_confirmed" value="true"
+             {% if only_confirmed %}checked{% endif %}
+             class="w-4 h-4 rounded" style="accent-color:var(--pos)">
+      <label for="only_confirmed" class="text-xs font-semibold" style="color:var(--text-muted)">
+        Confirmed breakouts only
+      </label>
+    </div>
+
+    <button type="submit" class="btn-primary py-1 px-3 text-xs mt-4">Apply</button>
+    <a href="/admin/data-log" class="btn-ghost py-1 px-3 text-xs mt-4">Reset</a>
+
+    <!-- preserve window when changing other filters -->
+    <input type="hidden" name="window" value="{{ window }}">
+  </form>
+</div>
+
+<!-- Results summary -->
+<div class="flex items-center gap-3 mb-3">
+  <p class="text-sm" style="color:var(--text-muted)">
+    Showing <strong style="color:var(--text)">{{ total }}</strong>
+    snapshot{% if total != 1 %}s{% endif %}
+    {% if window == 'latest' %}· most recent per signal{% elif window == 'today' %}· today{% else %}· last {{ window }} min{% endif %}
+  </p>
+  {% if total == 0 %}
+  <span class="badge text-xs" style="background:var(--warn-bg);color:var(--warn)">No data yet — runs during market hours (10:00–16:12 AEST)</span>
+  {% endif %}
+</div>
+
+<!-- Data table -->
+{% if rows %}
+<div class="card overflow-x-auto" id="log-table-wrap">
+  <table class="w-full text-sm" style="border-collapse:separate;border-spacing:0">
+    <thead>
+      <tr style="border-bottom:1px solid var(--border)">
+        <th class="text-left p-3 text-xs font-semibold" style="color:var(--text-muted)">Time</th>
+        <th class="text-left p-3 text-xs font-semibold" style="color:var(--text-muted)">Ticker</th>
+        <th class="text-right p-3 text-xs font-semibold" style="color:var(--text-muted)">Current</th>
+        <th class="text-right p-3 text-xs font-semibold" style="color:var(--text-muted)">Pivot</th>
+        <th class="text-right p-3 text-xs font-semibold" style="color:var(--text-muted)">vs Pivot</th>
+        <th class="text-right p-3 text-xs font-semibold" style="color:var(--text-muted)">Vol Ratio</th>
+        <th class="text-right p-3 text-xs font-semibold" style="color:var(--text-muted)">MA50</th>
+        <th class="text-right p-3 text-xs font-semibold" style="color:var(--text-muted)">MA200</th>
+        <th class="text-right p-3 text-xs font-semibold" style="color:var(--text-muted)">RS</th>
+        <th class="text-left p-3 text-xs font-semibold" style="color:var(--text-muted)">Rules</th>
+        <th class="text-left p-3 text-xs font-semibold" style="color:var(--text-muted)">Source</th>
+        <th class="text-left p-3 text-xs font-semibold" style="color:var(--text-muted)">Verdict</th>
+      </tr>
+    </thead>
+    <tbody id="log-tbody">
+      {% for row in rows %}
+      <tr class="log-row" data-id="{{ row.id }}"
+          style="border-bottom:1px solid var(--border);
+                 {% if row.breakout_confirmed %}background:rgba(5,150,105,.05){% endif %}">
+        <!-- Time -->
+        <td class="p-3 whitespace-nowrap text-xs" style="color:var(--text-muted)">{{ row.checked_at }}</td>
+
+        <!-- Ticker -->
+        <td class="p-3">
+          <span class="font-mono font-bold text-sm" style="color:var(--t-accent)">{{ row.ticker }}</span>
+        </td>
+
+        <!-- Current price -->
+        <td class="p-3 text-right font-mono text-sm font-semibold" style="color:var(--text)">
+          {% if row.price_current %}${{ "%.3f"|format(row.price_current) }}{% else %}—{% endif %}
+        </td>
+
+        <!-- Pivot price -->
+        <td class="p-3 text-right font-mono text-sm" style="color:var(--text-muted)">
+          {% if row.price_pivot %}${{ "%.3f"|format(row.price_pivot) }}{% else %}—{% endif %}
+        </td>
+
+        <!-- % vs pivot — green if above, red if below -->
+        <td class="p-3 text-right font-mono text-xs font-semibold">
+          {% if row.price_vs_pivot is not none %}
+            <span style="color:{% if row.price_vs_pivot >= 0 %}var(--pos){% else %}var(--neg){% endif %}">
+              {{ "%+.2f"|format(row.price_vs_pivot) }}%
+            </span>
+          {% else %}—{% endif %}
+        </td>
+
+        <!-- Volume ratio — green ≥1.5, warn 1.0-1.5, red <1.0 -->
+        <td class="p-3 text-right font-mono text-xs font-semibold">
+          {% if row.vol_ratio is not none %}
+            <span style="color:{% if row.vol_ratio >= 1.5 %}var(--pos){% elif row.vol_ratio >= 1.0 %}var(--warn){% else %}var(--neg){% endif %}">
+              {{ "%.2f"|format(row.vol_ratio) }}×
+            </span>
+          {% else %}—{% endif %}
+        </td>
+
+        <!-- MA50 -->
+        <td class="p-3 text-right font-mono text-xs" style="color:var(--text-muted)">
+          {% if row.ma_50 %}${{ "%.3f"|format(row.ma_50) }}{% else %}—{% endif %}
+        </td>
+
+        <!-- MA200 -->
+        <td class="p-3 text-right font-mono text-xs" style="color:var(--text-muted)">
+          {% if row.ma_200 %}${{ "%.3f"|format(row.ma_200) }}{% else %}—{% endif %}
+        </td>
+
+        <!-- RS Rating -->
+        <td class="p-3 text-right font-mono text-xs font-semibold">
+          {% if row.rs_rating is not none %}
+            <span style="color:{% if row.rs_rating >= 80 %}var(--pos){% elif row.rs_rating >= 60 %}var(--warn){% else %}var(--neg){% endif %}">
+              {{ row.rs_rating|int }}
+            </span>
+          {% else %}—{% endif %}
+        </td>
+
+        <!-- Rule badges -->
+        <td class="p-3">
+          <div class="flex flex-wrap gap-1">
+            {% for rule in row.rules %}
+            <span class="rule-badge text-xs px-2 py-0.5 rounded font-mono"
+                  title="{{ rule.label }}: {{ rule.message }}"
+                  style="background:{% if rule.passed %}var(--pos-bg){% else %}var(--neg-bg){% endif %};
+                         color:{% if rule.passed %}var(--pos){% else %}var(--neg){% endif %};
+                         border:1px solid {% if rule.passed %}var(--pos){% else %}var(--neg){% endif %};
+                         opacity:0.9">
+              {% if rule.passed %}✓{% else %}✗{% endif %} {{ rule.label }}
+            </span>
+            {% else %}
+            <span class="text-xs" style="color:var(--text-subtle)">No rules logged</span>
+            {% endfor %}
+          </div>
+        </td>
+
+        <!-- Data source badge -->
+        <td class="p-3 whitespace-nowrap">
+          <span class="text-xs px-2 py-0.5 rounded"
+                style="background:{% if row.data_source == 'ibkr' %}var(--pos-bg){% else %}var(--warn-bg){% endif %};
+                       color:{% if row.data_source == 'ibkr' %}var(--pos){% else %}var(--warn){% endif %}">
+            {% if row.data_source == 'ibkr' %}⚡ IBKR Live
+            {% elif row.data_source == 'eod_fallback' %}📉 EOD Close
+            {% else %}🕐 ~{{ row.delay_mins or 20 }}min delay{% endif %}
+          </span>
+        </td>
+
+        <!-- Breakout verdict -->
+        <td class="p-3 whitespace-nowrap">
+          {% if row.breakout_confirmed %}
+          <span class="badge text-xs font-bold" style="background:var(--pos-bg);color:var(--pos);border:1px solid var(--pos)">
+            ✅ CONFIRMED
+          </span>
+          {% else %}
+          <span class="badge text-xs" style="background:var(--surface-alt);color:var(--text-subtle)">
+            Watching
+          </span>
+          {% endif %}
+        </td>
+      </tr>
+
+      <!-- Expandable rule detail row -->
+      <tr id="detail-{{ row.id }}" style="display:none;background:var(--surface-alt)">
+        <td colspan="12" class="px-4 py-3">
+          <div class="flex flex-wrap gap-3">
+            {% for rule in row.rules %}
+            <div class="rounded-lg p-3 text-xs" style="min-width:180px;background:var(--surface);border:1px solid {% if rule.passed %}var(--pos){% else %}var(--neg){% endif %}">
+              <p class="font-semibold mb-1" style="color:{% if rule.passed %}var(--pos){% else %}var(--neg){% endif %}">
+                {% if rule.passed %}✓{% else %}✗{% endif %} {{ rule.label }}
+              </p>
+              <p style="color:var(--text-muted)">{{ rule.message or '—' }}</p>
+              {% if rule.value is not none %}
+              <p class="mt-1" style="color:var(--text-subtle)">
+                Value: <span class="font-mono" style="color:var(--text)">{{ rule.value }}</span>
+                {% if rule.threshold is not none %}
+                  / Threshold: <span class="font-mono" style="color:var(--text)">{{ rule.threshold }}</span>
+                {% endif %}
+              </p>
+              {% endif %}
+            </div>
+            {% endfor %}
+
+            <!-- Price context -->
+            <div class="rounded-lg p-3 text-xs" style="min-width:160px;background:var(--surface);border:1px solid var(--border)">
+              <p class="font-semibold mb-1" style="color:var(--text-muted)">Price Context</p>
+              {% if row.ma_50 %}<p style="color:var(--text-muted)">MA50: <span class="font-mono" style="color:var(--text)">${{ "%.3f"|format(row.ma_50) }}</span></p>{% endif %}
+              {% if row.ma_150 %}<p style="color:var(--text-muted)">MA150: <span class="font-mono" style="color:var(--text)">${{ "%.3f"|format(row.ma_150) }}</span></p>{% endif %}
+              {% if row.ma_200 %}<p style="color:var(--text-muted)">MA200: <span class="font-mono" style="color:var(--text)">${{ "%.3f"|format(row.ma_200) }}</span></p>{% endif %}
+              {% if row.pct_from_52w_high is not none %}<p style="color:var(--text-muted)">From 52w High: <span class="font-mono" style="color:var(--text)">{{ "%+.1f"|format(row.pct_from_52w_high) }}%</span></p>{% endif %}
+            </div>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="card p-8 text-center">
+  <p class="text-4xl mb-3">📭</p>
+  <p class="font-semibold mb-1" style="color:var(--text)">No entry check data yet</p>
+  <p class="text-sm" style="color:var(--text-muted)">
+    Data populates during ASX market hours (10:00–16:12 AEST) when there are pending signals.
+    Make sure the Celery worker is running and signals exist on the
+    <a href="/signals" style="color:var(--t-accent)">Signals</a> page.
+  </p>
+</div>
+{% endif %}
+
+<style>
+  .page-header { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:1.25rem; gap:1rem; flex-wrap:wrap; }
+  .page-title  { font-size:1.25rem; font-weight:700; color:var(--text); }
+  .page-subtitle { font-size:.8rem; color:var(--text-muted); margin-top:.15rem; }
+  .badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:9999px; font-size:.7rem; font-weight:600; }
+  .rule-badge { cursor:default; }
+  .log-row { cursor:pointer; transition:background .15s; }
+  .log-row:hover { background:var(--surface-alt) !important; }
+  .btn-primary { display:inline-flex; align-items:center; background:var(--t-accent); color:#fff; border-radius:.375rem; font-weight:600; border:none; cursor:pointer; transition:opacity .15s; }
+  .btn-primary:hover { opacity:.88; }
+  .btn-ghost { display:inline-flex; align-items:center; background:transparent; color:var(--text-muted); border-radius:.375rem; border:1px solid var(--border); font-weight:600; cursor:pointer; text-decoration:none; transition:background .15s; }
+  .btn-ghost:hover { background:var(--surface-alt); }
+  .input { background:var(--surface); border:1px solid var(--border); border-radius:.375rem; color:var(--text); }
+  .input:focus { outline:2px solid var(--t-accent); }
+</style>
+
+<script>
+// ── Row expand/collapse ────────────────────────────────────────────────────
+document.querySelectorAll('.log-row').forEach(tr => {
+  tr.addEventListener('click', () => {
+    const detail = document.getElementById('detail-' + tr.dataset.id);
+    if (detail) {
+      detail.style.display = detail.style.display === 'none' ? '' : 'none';
+    }
+  });
+});
+
+// ── Auto-refresh via poll endpoint ────────────────────────────────────────
+let maxId = {{ rows[0].id if rows else 0 }};
+const indicator = document.getElementById('refresh-indicator');
+const lastRefreshEl = document.getElementById('last-refresh');
+
+function formatTime(isoStr) {
+  const d = new Date(isoStr);
+  return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+}
+
+function buildRow(r) {
+  const pctColor = r.price_vs_pivot >= 0 ? 'var(--pos)' : 'var(--neg)';
+  const volColor = r.vol_ratio >= 1.5 ? 'var(--pos)' : r.vol_ratio >= 1.0 ? 'var(--warn)' : 'var(--neg)';
+  const srcLabel = r.data_source === 'ibkr' ? '⚡ IBKR Live' :
+                   r.data_source === 'eod_fallback' ? '📉 EOD Close' :
+                   `🕐 ~${r.delay_mins||20}min delay`;
+  const srcColor = r.data_source === 'ibkr' ? 'var(--pos-bg)' : 'var(--warn-bg)';
+  const srcText  = r.data_source === 'ibkr' ? 'var(--pos)' : 'var(--warn)';
+  const verdictHtml = r.breakout_confirmed
+    ? `<span class="badge text-xs font-bold" style="background:var(--pos-bg);color:var(--pos);border:1px solid var(--pos)">✅ CONFIRMED</span>`
+    : `<span class="badge text-xs" style="background:var(--surface-alt);color:var(--text-subtle)">Watching</span>`;
+  const ruleBadges = Object.entries(r.rule_results||{}).map(([rid, rd]) =>
+    `<span class="rule-badge text-xs px-2 py-0.5 rounded font-mono"
+       style="background:${rd.passed?'var(--pos-bg)':'var(--neg-bg)'};color:${rd.passed?'var(--pos)':'var(--neg)'};border:1px solid ${rd.passed?'var(--pos)':'var(--neg)'}">
+       ${rd.passed?'✓':'✗'} ${rid.replace(/_/g,' ')}
+     </span>`
+  ).join('');
+
+  return `<tr class="log-row" data-id="${r.id}"
+             style="border-bottom:1px solid var(--border);${r.breakout_confirmed?'background:rgba(5,150,105,.05)':''}">
+    <td class="p-3 whitespace-nowrap text-xs" style="color:var(--text-muted)">${formatTime(r.checked_at)}</td>
+    <td class="p-3"><span class="font-mono font-bold text-sm" style="color:var(--t-accent)">${r.ticker}</span></td>
+    <td class="p-3 text-right font-mono text-sm font-semibold" style="color:var(--text)">${r.price_current ? '$'+r.price_current.toFixed(3) : '—'}</td>
+    <td class="p-3 text-right font-mono text-sm" style="color:var(--text-muted)">${r.price_pivot ? '$'+r.price_pivot.toFixed(3) : '—'}</td>
+    <td class="p-3 text-right font-mono text-xs font-semibold"><span style="color:${pctColor}">${r.price_vs_pivot != null ? (r.price_vs_pivot>0?'+':'')+r.price_vs_pivot.toFixed(2)+'%' : '—'}</span></td>
+    <td class="p-3 text-right font-mono text-xs font-semibold"><span style="color:${volColor}">${r.vol_ratio != null ? r.vol_ratio.toFixed(2)+'×' : '—'}</span></td>
+    <td class="p-3 text-right font-mono text-xs" style="color:var(--text-muted)">—</td>
+    <td class="p-3 text-right font-mono text-xs" style="color:var(--text-muted)">—</td>
+    <td class="p-3 text-right font-mono text-xs">—</td>
+    <td class="p-3"><div class="flex flex-wrap gap-1">${ruleBadges || '<span style="color:var(--text-subtle)" class="text-xs">—</span>'}</div></td>
+    <td class="p-3 whitespace-nowrap"><span class="text-xs px-2 py-0.5 rounded" style="background:${srcColor};color:${srcText}">${srcLabel}</span></td>
+    <td class="p-3">${verdictHtml}</td>
+  </tr>`;
+}
+
+async function pollNewRows() {
+  try {
+    indicator.textContent = '⟳ Refreshing…';
+    const res = await fetch(`/admin/data-log/poll?after_id=${maxId}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.rows && data.rows.length > 0) {
+      const tbody = document.getElementById('log-tbody');
+      const html = data.rows.map(buildRow).join('');
+      tbody.insertAdjacentHTML('afterbegin', html);
+      maxId = Math.max(maxId, ...data.rows.map(r => r.id));
+      // Re-bind click listeners for new rows
+      document.querySelectorAll('.log-row').forEach(tr => {
+        if (!tr.dataset.bound) {
+          tr.dataset.bound = '1';
+          tr.addEventListener('click', () => {
+            const detail = document.getElementById('detail-' + tr.dataset.id);
+            if (detail) detail.style.display = detail.style.display === 'none' ? '' : 'none';
+          });
+        }
+      });
+    }
+    indicator.textContent = '⟳ Auto-refresh';
+    lastRefreshEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    indicator.textContent = '⟳ Auto-refresh';
+  }
+}
+
+// Poll every 30 seconds
+setInterval(pollNewRows, 30000);
+lastRefreshEl.textContent = 'Loaded ' + new Date().toLocaleTimeString();
+</script>
+{% endblock %}

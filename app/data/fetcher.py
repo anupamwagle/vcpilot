@@ -183,6 +183,81 @@ def get_batch_prices(
     return results
 
 
+
+# ---------------------------------------------------------------------------
+# Intraday price (used by check_entry_triggers every 15 min)
+# ---------------------------------------------------------------------------
+
+def get_intraday_price(
+    ticker: str,
+    organization_id: int = None,
+) -> dict:
+    """
+    Fetch the most recent intraday price for a ticker.
+
+    Priority:
+      1. IBKR real-time snapshot if connected (0 min delay)
+      2. yfinance 15-min interval data (~15-20 min delayed for ASX free tier)
+
+    Returns:
+      {"price": float, "volume": int, "bid": float|None, "ask": float|None,
+       "data_source": str, "delay_mins": int, "bar_timestamp": datetime|None, "ok": bool}
+    """
+    from datetime import datetime as _dt
+
+    # 1. Try IBKR real-time if available and connected
+    if organization_id is not None:
+        try:
+            from app.broker.ibkr import IBKRBroker
+            from app.config import settings as _s
+            if not _s.ibkr_simulate:
+                with IBKRBroker(organization_id=organization_id) as broker:
+                    if broker.is_connected:
+                        snap = broker.get_market_snapshot(ticker)
+                        if snap and snap.get("last"):
+                            return {
+                                "price": float(snap["last"]),
+                                "volume": int(snap.get("volume", 0)),
+                                "bid": snap.get("bid"),
+                                "ask": snap.get("ask"),
+                                "data_source": "ibkr",
+                                "delay_mins": 0,
+                                "bar_timestamp": snap.get("timestamp"),
+                                "ok": True,
+                            }
+        except Exception as e:
+            logger.debug(f"IBKR intraday snapshot failed for {ticker}: {e}")
+
+    # 2. Fall back to yfinance 15-min bars (ASX free tier ~15-20 min delayed)
+    try:
+        stock = yf.Ticker(ticker)
+        df = stock.history(period="2d", interval="15m", auto_adjust=False)
+        if df is not None and not df.empty:
+            df = df.reset_index()
+            df.columns = [c.lower() for c in df.columns]
+            latest = df.iloc[-1]
+            bar_ts = pd.to_datetime(latest.get("datetime") or latest.get("date"))
+            price  = float(latest.get("close") or latest.get("adj close") or 0)
+            volume = int(latest.get("volume") or 0)
+            if price > 0:
+                return {
+                    "price": price,
+                    "volume": volume,
+                    "bid": None,
+                    "ask": None,
+                    "data_source": "yfinance",
+                    "delay_mins": 20,
+                    "bar_timestamp": bar_ts.to_pydatetime() if bar_ts is not None else None,
+                    "ok": True,
+                }
+    except Exception as e:
+        logger.debug(f"yfinance intraday fetch failed for {ticker}: {e}")
+
+    logger.warning(f"No intraday data for {ticker} — all sources failed")
+    return {"price": None, "volume": None, "bid": None, "ask": None,
+            "data_source": "eod_fallback", "delay_mins": None, "bar_timestamp": None, "ok": False}
+
+
 # ---------------------------------------------------------------------------
 # Relative Strength
 # ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ import os, sys
 sys.path.insert(0, "/app")
 
 from datetime import date, datetime, timedelta
+from app.utils.time_helper import get_current_date
 from fastapi import FastAPI, Request, Form, Depends, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -17,8 +18,110 @@ from loguru import logger
 app = FastAPI(title="VCPilot", docs_url=None, redoc_url=None)
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("APP_SECRET_KEY", "changeme-secret"))
 
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi.exceptions import RequestValidationError
+from app.utils.cache import cache
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    status_code = exc.status_code
+    if status_code == 404:
+        return templates.TemplateResponse(
+            "error.html",
+            {
+                "request": request,
+                "error_code": "404",
+                "error_title": "Page Not Found",
+                "error_heading": "We lost this signal!",
+                "error_message": "The page you are looking for does not exist or has been moved. Use the button below to return to safety.",
+            },
+            status_code=404
+        )
+    return templates.TemplateResponse(
+        "error.html",
+        {
+            "request": request,
+            "error_code": str(status_code),
+            "error_title": f"Error {status_code}",
+            "error_heading": "HTTP Error",
+            "error_message": exc.detail or "An HTTP exception occurred while processing this request.",
+        },
+        status_code=status_code
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.error(f"Validation error: {exc}")
+    error_detail = None
+    from app.config import settings
+    if settings.app_env == "development":
+        error_detail = str(exc.errors())
+    return templates.TemplateResponse(
+        "error.html",
+        {
+            "request": request,
+            "error_code": "422",
+            "error_title": "Invalid Request",
+            "error_heading": "Incorrect Coordinates!",
+            "error_message": "The request payload or parameters were invalid. Please verify your inputs.",
+            "error_detail": error_detail,
+        },
+        status_code=422
+    )
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    import traceback
+    logger.error(f"Unhandled server error: {exc}\n{traceback.format_exc()}")
+    from app.config import settings
+    error_detail = None
+    if settings.app_env == "development":
+        error_detail = f"{str(exc)}\n\n{traceback.format_exc()}"
+    return templates.TemplateResponse(
+        "error.html",
+        {
+            "request": request,
+            "error_code": "500",
+            "error_title": "Server Error",
+            "error_heading": "Engine Malfunction!",
+            "error_message": "An internal server error occurred. VCPilot has logged the issue and our team has been alerted.",
+            "error_detail": error_detail,
+        },
+        status_code=500
+    )
+
+def get_cached_stock_names(db: Session) -> dict[str, str]:
+    """Retrieve stock ticker-to-name mapping from Redis cache (expires in 1 hour)."""
+    from app.models.market import Stock
+    cached = cache.get("stock_names_map")
+    if cached is not None:
+        return cached
+    stocks = db.query(Stock).all()
+    stock_names = {s.ticker: (s.name or "") for s in stocks}
+    cache.set("stock_names_map", stock_names, expire_seconds=3600)
+    return stock_names
+
 templates = Jinja2Templates(directory="/app/dashboard/templates")
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "changeme")
+
+# ---------------------------------------------------------------------------
+# Jinja2 filter: {{ some_utc_str | fmt_dt(display_tz) }}
+# Converts a UTC ISO timestamp string to the given IANA timezone for display.
+# ---------------------------------------------------------------------------
+def _jinja_fmt_dt(utc_str, tz: str = "UTC") -> str:
+    return _fmt_dt(str(utc_str) if utc_str else "", tz)
+
+templates.env.filters["fmt_dt"] = _jinja_fmt_dt
+
+
+def _get_display_tz(org_id, db) -> str:
+    """Read org_timezone SystemConfig for the given org. Falls back to UTC."""
+    from app.models.config import SystemConfig
+    cfg = db.query(SystemConfig).filter(
+        SystemConfig.key == "org_timezone",
+        SystemConfig.organization_id == org_id,
+    ).first()
+    return (cfg.value or "UTC") if cfg else "UTC"
 
 
 @app.on_event("startup")
@@ -83,6 +186,7 @@ def _worker_status(heartbeat_str: str) -> str:
     online   — heartbeat within last 15 min
     starting — never received (system just booted)
     offline  — heartbeat older than 15 min
+    Stored value is always a UTC ISO string (e.g. 2026-06-04T05:22:00).
     """
     if not heartbeat_str or heartbeat_str.strip() in ("", "Never"):
         return "starting"
@@ -96,10 +200,31 @@ def _worker_status(heartbeat_str: str) -> str:
         return "starting"
 
 
+def _fmt_dt(utc_iso: str, tz_name: str = "UTC") -> str:
+    """
+    Convert a stored UTC ISO timestamp string to a human-readable string
+    in the given IANA timezone (e.g. 'Australia/Sydney').
+    Returns empty string if input is blank or unparseable.
+    """
+    if not utc_iso or not utc_iso.strip():
+        return ""
+    try:
+        import pytz
+        tz = pytz.timezone(tz_name) if tz_name else pytz.utc
+        naive = datetime.fromisoformat(utc_iso.strip()[:19])
+        utc_dt = pytz.utc.localize(naive)
+        local_dt = utc_dt.astimezone(tz)
+        abbr = local_dt.strftime("%Z")   # e.g. AEST, UTC
+        return local_dt.strftime(f"%Y-%m-%d %H:%M {abbr}")
+    except Exception:
+        return utc_iso[:16]              # fall back to raw truncated string
+
+
 # ---------------------------------------------------------------------------
 # Global context (navbar + every template)
 # ---------------------------------------------------------------------------
 def _global(request: Request, db: Session) -> dict:
+    from app.config import settings
     from app.models.config import SystemConfig
     from app.models.trade import Position, TradeStatus
     from app.models.signal import Signal
@@ -107,7 +232,8 @@ def _global(request: Request, db: Session) -> dict:
     org_id = request.session.get("organization_id")
 
     def cfg(key, default=""):
-        if key in ("last_market_regime", "last_regime_check"):
+        if key in ("last_market_regime", "last_regime_check", "mock_time_enabled",
+                   "mock_current_time", "ibkr_simulate", "mock_market_regime"):
             c = db.query(SystemConfig).filter(SystemConfig.key == key, SystemConfig.organization_id == None).first()
         elif key == "last_heartbeat":
             # Prefer per-org heartbeat (written by updated health_check task);
@@ -120,11 +246,21 @@ def _global(request: Request, db: Session) -> dict:
         return c.value if c else default
 
     raw_hb       = cfg("last_heartbeat", "")
-    hb_display   = raw_hb[:16] if raw_hb else ""
+    display_tz   = cfg("org_timezone", "UTC") or "UTC"
+    hb_display   = _fmt_dt(raw_hb, display_tz)
     wstatus      = _worker_status(raw_hb)
     trading_paused = cfg("trading_paused", "false").lower() == "true"
     whatsapp_enabled = cfg("whatsapp_enabled", "true").lower() == "true"
-    regime_raw   = cfg("last_market_regime", "")
+
+    # Resolve active market regime: use mock_market_regime when simulation clock is on
+    mock_time_on = cfg("mock_time_enabled", "false").lower() == "true"
+    if mock_time_on:
+        mock_regime = cfg("mock_market_regime", "")
+        regime_raw  = mock_regime if mock_regime else cfg("last_market_regime", "")
+        regime_is_simulated = True
+    else:
+        regime_raw  = cfg("last_market_regime", "")
+        regime_is_simulated = False
 
     is_paper = os.getenv("IBKR_PAPER_MODE", "true").lower() == "true"
     if org_id:
@@ -138,7 +274,7 @@ def _global(request: Request, db: Session) -> dict:
     if org_id:
         open_count = db.query(Position).filter(Position.status == TradeStatus.OPEN, Position.organization_id == org_id).count()
         signal_count = db.query(Signal).filter(
-            Signal.signal_date == date.today(),
+            Signal.signal_date == get_current_date(),
             Signal.organization_id == org_id
         ).count()
 
@@ -161,15 +297,30 @@ def _global(request: Request, db: Session) -> dict:
 
     user_id = request.session.get("user_id")
 
+    favourited_tickers = set()
+    if org_id:
+        from app.models.signal import Watchlist, WatchlistStatus, WatchlistLabel
+        res = db.query(Watchlist.ticker).join(
+            WatchlistLabel, Watchlist.label_id == WatchlistLabel.id
+        ).filter(
+            Watchlist.organization_id == org_id,
+            Watchlist.status == WatchlistStatus.WATCHING,
+            WatchlistLabel.is_default == True
+        ).all()
+        favourited_tickers = {r[0] for r in res}
+
     return {
         "request": request,
+        "favourited_tickers": favourited_tickers,
         "path": str(request.url.path),
         "regime": regime_raw,
+        "regime_is_simulated": regime_is_simulated,
         "regime_set": bool(regime_raw and regime_raw not in ("UNKNOWN", "")),
         "trading_paused": trading_paused,
         "whatsapp_enabled": whatsapp_enabled,
         "is_paper": is_paper,
         "heartbeat": hb_display or "Never",
+        "display_tz": display_tz,
         "worker_status": wstatus,
         "trading_active": (not trading_paused) and (wstatus == "online"),
         "open_count": open_count,
@@ -181,6 +332,10 @@ def _global(request: Request, db: Session) -> dict:
         "org_name": request.session.get("organization_name", ""),
         "all_orgs": all_orgs,
         "current_org_id": org_id,
+        "ibkr_simulate": cfg("ibkr_simulate", "false").lower() == "true",
+        "mock_time_enabled": mock_time_on,
+        "mock_current_time": cfg("mock_current_time", ""),
+        "mock_market_regime": cfg("mock_market_regime", "BULL"),
     }
 
 
@@ -397,12 +552,19 @@ async def home(request: Request, db: Session = Depends(get_db)):
             "entry": entry, "current": curr, "stop": stop,
             "pnl_pct": round((curr - entry) / entry * 100, 2),
             "pnl_aud": round(pnl, 2),
-            "days": (date.today() - p.entry_date).days,
+            "days": (get_current_date() - p.entry_date).days,
             "is_paper": p.is_paper,
         })
 
-    # Signals
-    signals = db.query(Signal).filter(Signal.signal_date == date.today(), Signal.organization_id == org_id).all()
+    # Signals (Show today's signals OR active pending signals)
+    from sqlalchemy import or_
+    signals = db.query(Signal).filter(
+        or_(
+            Signal.signal_date == get_current_date(),
+            Signal.status == SignalStatus.PENDING
+        ),
+        Signal.organization_id == org_id
+    ).all()
     sig_data = [{
         "id": s.id, "ticker": s.ticker,
         "company_name": stock_names.get(s.ticker, ""),
@@ -417,8 +579,111 @@ async def home(request: Request, db: Session = Depends(get_db)):
     } for s in signals]
 
     # P&L
-    today_trades = db.query(Trade).filter(Trade.exit_date == date.today(), Trade.organization_id == org_id).all()
+    today_trades = db.query(Trade).filter(Trade.exit_date == get_current_date(), Trade.organization_id == org_id).all()
     all_trades   = db.query(Trade).filter(Trade.organization_id == org_id).all()
+
+    # ── Automated System Checks ──
+    from app.models.audit import AuditLog, AuditAction
+    def get_latest_check(action, message_like=None):
+        q = db.query(AuditLog).filter(
+            or_(AuditLog.organization_id == org_id, AuditLog.organization_id == None),
+            AuditLog.action == action
+        )
+        if message_like:
+            q = q.filter(AuditLog.message.ilike(f"%{message_like}%"))
+        return q.order_by(desc(AuditLog.created_at)).first()
+
+    latest_universe = get_latest_check(AuditAction.SYSTEM_STARTED, "Universe")
+    latest_price = get_latest_check(AuditAction.TASK_RUN, "Price data")
+    latest_regime = get_latest_check(AuditAction.MARKET_REGIME_CHANGE)
+    latest_screen = get_latest_check(AuditAction.SCREENER_RUN)
+    latest_entry = get_latest_check(AuditAction.TASK_RUN, "Entry check")
+    latest_exit = get_latest_check(AuditAction.TASK_RUN, "Exit check")
+
+    from app.models.config import SystemConfig
+    cfg_last = db.query(SystemConfig).filter(SystemConfig.key == "last_market_regime", SystemConfig.organization_id == None).first()
+    last_eval = cfg_last.value if cfg_last else ""
+
+    checks = [
+        {"name": "Universe Constituents Sync", "frequency": "Weekly (Sun 8pm AEST)", "log": latest_universe},
+        {"name": "EOD Price Data Ingestion", "frequency": "Daily (Mon-Fri 5pm AEST)", "log": latest_price},
+        {"name": "Market Regime Evaluation", "frequency": "Daily (Mon-Fri 5:15pm AEST)", "log": latest_regime,
+         "active_regime": last_eval, "regime_is_simulated": False},
+        {"name": "Minervini Daily Screener", "frequency": "Daily (Mon-Fri 5:30pm AEST)", "log": latest_screen},
+        {"name": "Intraday Breakout Entry Check", "frequency": "Every 5 min (10am-4:12pm AEST)", "log": latest_entry},
+        {"name": "Intraday Position Exit Check", "frequency": "Every 5 min (10am-4:12pm AEST)", "log": latest_exit},
+    ]
+
+    # ── Watchlist Market Data Table ──
+    from app.models.signal import Watchlist, WatchlistStatus, WatchlistLabel
+    from app.models.market import Stock, PriceBar
+    from sqlalchemy import func, and_
+    from sqlalchemy.orm import joinedload
+
+    all_labels = db.query(WatchlistLabel).filter(WatchlistLabel.organization_id == org_id).order_by(WatchlistLabel.sort_order).all()
+    wl_labels_data = [{"id": l.id, "name": l.name, "color": l.color} for l in all_labels]
+
+    active_label = request.query_params.get("label")
+    active_label_id = int(active_label) if (active_label and active_label.isdigit()) else None
+    only_custom = request.query_params.get("custom") == "true"
+
+    wq = db.query(Watchlist).options(joinedload(Watchlist.label)).filter(
+        Watchlist.status == WatchlistStatus.WATCHING,
+        Watchlist.organization_id == org_id
+    )
+    if active_label_id is not None:
+        wq = wq.filter(Watchlist.label_id == active_label_id)
+
+    wl_items = wq.all()
+    wl_tickers = [w.ticker for w in wl_items]
+    wl_stock_map = {}
+    wl_bar_map = {}
+
+    if wl_tickers:
+        wl_stocks = db.query(Stock).filter(Stock.ticker.in_(wl_tickers)).all()
+        wl_stock_map = {s.ticker: s for s in wl_stocks}
+
+        latest_dates = db.query(
+            PriceBar.ticker,
+            func.max(PriceBar.date).label("max_date")
+        ).filter(PriceBar.ticker.in_(wl_tickers)).group_by(PriceBar.ticker).subquery()
+
+        wl_bars = db.query(PriceBar).join(
+            latest_dates,
+            and_(
+                PriceBar.ticker == latest_dates.c.ticker,
+                PriceBar.date == latest_dates.c.max_date,
+            )
+        ).all()
+        wl_bar_map = {b.ticker: b for b in wl_bars}
+
+    watchlist_rows = []
+    for w in wl_items:
+        s = wl_stock_map.get(w.ticker)
+        bar = wl_bar_map.get(w.ticker)
+
+        is_custom = s and not s.in_asx200
+        if only_custom and not is_custom:
+            continue
+
+        watchlist_rows.append({
+            "ticker": w.ticker,
+            "company_name": s.name if s else "",
+            "sector": s.sector if s else "",
+            "in_asx200": s.in_asx200 if s else False,
+            "is_custom": is_custom,
+            "label": {"id": w.label.id, "name": w.label.name, "color": w.label.color} if w.label else None,
+            "close": float(bar.close) if bar and bar.close else None,
+            "volume": int(bar.volume) if bar and bar.volume else None,
+            "ma_50": float(bar.ma_50) if bar and bar.ma_50 else None,
+            "ma_150": float(bar.ma_150) if bar and bar.ma_150 else None,
+            "ma_200": float(bar.ma_200) if bar and bar.ma_200 else None,
+            "vol_ratio": float(bar.vol_ratio) if bar and bar.vol_ratio else None,
+            "rs_rating": float(bar.rs_rating) if bar and bar.rs_rating else None,
+            "pct_from_52w_high": float(bar.pct_from_52w_high) if bar and bar.pct_from_52w_high else None,
+            "atr_14": float(bar.atr_14) if bar and bar.atr_14 else None,
+            "bar_date": str(bar.date) if bar else "",
+        })
 
     ctx.update({
         "capital": capital,
@@ -428,6 +693,11 @@ async def home(request: Request, db: Session = Depends(get_db)):
         "today_pnl": round(sum(float(t.net_pnl_aud or 0) for t in today_trades), 2),
         "total_pnl":  round(sum(float(t.net_pnl_aud or 0) for t in all_trades), 2),
         "trade_count": len(all_trades),
+        "checks": checks,
+        "watchlist_rows": watchlist_rows,
+        "wl_labels": wl_labels_data,
+        "wl_active_label": active_label_id,
+        "wl_only_custom": only_custom,
     })
     return templates.TemplateResponse("trading/home.html", ctx)
 
@@ -441,6 +711,7 @@ async def positions(request: Request, db: Session = Depends(get_db)):
 
     from app.models.trade import Position, Trade, TradeStatus
     from app.models.market import Stock
+    from app.models.account import Account
 
     ctx = _global(request, db)
 
@@ -448,21 +719,46 @@ async def positions(request: Request, db: Session = Depends(get_db)):
 
     positions = db.query(Position).filter(Position.status == TradeStatus.OPEN, Position.organization_id == org_id).all()
     pos_data = []
+    total_risk = 0.0
     for p in positions:
         curr  = float(p.current_price or p.entry_price)
         entry = float(p.entry_price)
+        stop  = float(p.current_stop)
+        total_risk += (entry - stop) * p.qty
+        
+        # Query last 2 exit checks for this position
+        exit_checks = []
+        try:
+            from app.models.audit import AuditLog, AuditAction
+            log_entries = db.query(AuditLog).filter(
+                AuditLog.organization_id == org_id,
+                AuditLog.action == AuditAction.TASK_RUN,
+                AuditLog.ticker == p.ticker,
+                AuditLog.entity_type == "Position",
+                AuditLog.entity_id == str(p.id)
+            ).order_by(desc(AuditLog.created_at)).limit(2).all()
+            for log_entry in log_entries:
+                exit_checks.append({
+                    "id": log_entry.id,
+                    "time": _fmt_dt(str(log_entry.created_at), ctx.get("display_tz", "UTC")),
+                    "message": log_entry.message,
+                })
+        except Exception:
+            pass
+
         pos_data.append({
             "id": p.id, "ticker": p.ticker,
             "company_name": stock_names.get(p.ticker, ""),
             "qty": p.qty,
             "entry": entry, "current": curr,
-            "stop": float(p.current_stop),
+            "stop": stop,
             "target_1": float(p.target_1 or 0),
             "pnl_pct": round((curr - entry) / entry * 100, 2),
             "pnl_aud": round((curr - entry) * p.qty, 2),
-            "days": (date.today() - p.entry_date).days,
+            "days": (get_current_date() - p.entry_date).days,
             "entry_date": str(p.entry_date),
             "is_paper": p.is_paper,
+            "exit_checks": exit_checks,
         })
 
     trades = db.query(Trade).filter(Trade.organization_id == org_id).order_by(desc(Trade.exit_date)).limit(50).all()
@@ -479,29 +775,70 @@ async def positions(request: Request, db: Session = Depends(get_db)):
         "is_paper": t.is_paper,
     } for t in trades]
 
+    account = db.query(Account).filter(Account.is_active == True, Account.organization_id == org_id).first()
+    capital = float(account.capital_aud) if account else 5000.0
+    portfolio_heat = round(total_risk / capital * 100, 1) if capital else 0.0
+
     wins = [t for t in trades if float(t.net_pnl_aud or 0) > 0]
+    losses = [t for t in trades if float(t.net_pnl_aud or 0) <= 0]
+    avg_win = sum(float(t.net_pnl_aud or 0) for t in wins) / len(wins) if wins else 0.0
+    avg_loss = abs(sum(float(t.net_pnl_aud or 0) for t in losses)) / len(losses) if losses else 0.0
+    win_loss_ratio = round(avg_win / avg_loss, 2) if avg_loss else 0.0
+    avg_hold_time = round(sum(t.hold_days for t in trades if t.hold_days is not None) / len(trades), 1) if trades else 0.0
+
     ctx.update({
         "positions": pos_data, "trades": trade_data,
         "win_rate": round(len(wins) / len(trades) * 100) if trades else 0,
         "total_pnl": round(sum(float(t.net_pnl_aud or 0) for t in trades), 2),
         "trade_count": len(trades),
+        "portfolio_heat": portfolio_heat,
+        "win_loss_ratio": win_loss_ratio,
+        "avg_hold_time": avg_hold_time,
+        "capital": capital,
     })
     return templates.TemplateResponse("trading/positions.html", ctx)
 
 
-def _enrich_rule_results(ticker: str, rule_results_dict: dict, db_session, target_date=None) -> list[dict]:
+def _enrich_rule_results(ticker: str, rule_results_dict: dict, db_session, target_date=None, overrides=None) -> list[dict]:
     """
     Enrich rule results with actual values from the price bar on the given date (or latest).
     """
     from app.models.market import PriceBar
     
     # Query price bar for the given date, or latest
-    q = db_session.query(PriceBar).filter(PriceBar.ticker == ticker)
+    bar = None
     if target_date:
-        q = q.filter(PriceBar.date == target_date)
+        bar = db_session.query(PriceBar).filter(PriceBar.ticker == ticker).filter(PriceBar.date == target_date).first()
     else:
-        q = q.order_by(desc(PriceBar.date))
-    bar = q.first()
+        cache_key = f"latest_price_bar:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            if cached:
+                class DictObject:
+                    def __init__(self, data):
+                        for k, v in data.items():
+                            setattr(self, k, v)
+                bar = DictObject(cached)
+        else:
+            bar_obj = db_session.query(PriceBar).filter(PriceBar.ticker == ticker).order_by(desc(PriceBar.date)).first()
+            if bar_obj:
+                bar_data = {
+                    "close": float(bar_obj.close or 0),
+                    "ma_50": float(bar_obj.ma_50 or 0),
+                    "ma_150": float(bar_obj.ma_150 or 0),
+                    "ma_200": float(bar_obj.ma_200 or 0),
+                    "high_52w": float(bar_obj.high_52w or 0),
+                    "low_52w": float(bar_obj.low_52w or 0),
+                    "rs_rating": float(bar_obj.rs_rating or 0),
+                }
+                cache.set(cache_key, bar_data, expire_seconds=300)
+                class DictObject:
+                    def __init__(self, data):
+                        for k, v in data.items():
+                            setattr(self, k, v)
+                bar = DictObject(bar_data)
+            else:
+                cache.set(cache_key, {}, expire_seconds=3600)
     
     enriched = []
     for rid, robj in rule_results_dict.items():
@@ -549,6 +886,7 @@ def _enrich_rule_results(ticker: str, rule_results_dict: dict, db_session, targe
             "rule_id": rid,
             "label": clean_label,
             "passed": passed,
+            "overridden": overrides.get(rid) == False if overrides else False,
             "detail": val_str,
         })
     return enriched
@@ -563,17 +901,138 @@ async def signals(request: Request, db: Session = Depends(get_db)):
 
     from app.models.signal import Signal
     from app.models.market import Stock
+    from app.models.config import RuleConfig
+    from app.screener.rules import RuleEngine
 
     ctx = _global(request, db)
-    sigs = db.query(Signal).filter(Signal.signal_date == date.today(), Signal.organization_id == org_id).all()
+
+    # Load org rule metadata once for the override UI
+    from app.models.account import Organization as _Org
+    org_obj = db.query(_Org).filter(_Org.id == org_id).first()
+    tier = org_obj.tier.value if org_obj else "GOLD"
+    all_org_rules = db.query(RuleConfig).filter(RuleConfig.organization_id == org_id).order_by(RuleConfig.sort_order).all()
+    rules_meta = {
+        r.rule_id: {
+            "label": r.label,
+            "category": r.category.value,
+            "is_mandatory": r.is_mandatory,
+            "globally_enabled": r.enabled_globally,
+        }
+        for r in all_org_rules
+    }
+
+    from app.models.audit import AuditLog, AuditAction
+    sig_tz = _get_display_tz(org_id, db)
+
+    from sqlalchemy import or_
+    from app.models.signal import SignalStatus
+    sigs = db.query(Signal).filter(
+        or_(
+            Signal.signal_date == get_current_date(),
+            Signal.status == SignalStatus.PENDING
+        ),
+        Signal.organization_id == org_id
+    ).all()
+    stock_names = get_cached_stock_names(db)
+
     sig_data = []
     for s in sigs:
-        # Fetch company name
-        stock_db = db.query(Stock).filter(Stock.ticker == s.ticker).first()
-        company_name = stock_db.name if stock_db else ""
+        company_name = stock_names.get(s.ticker, "")
+
+        # Lazy backfill: fetch company name from yfinance if missing and not attempted recently
+        if not company_name:
+            cache_key = f"missing_name_fetch:{s.ticker}"
+            if not cache.get(cache_key):
+                try:
+                    from app.data.fetcher import get_fundamentals
+                    fdata = get_fundamentals(s.ticker)
+                    if fdata.get("company_name"):
+                        stock_db = db.query(Stock).filter(Stock.ticker == s.ticker).first()
+                        if stock_db:
+                            stock_db.name     = fdata["company_name"]
+                            stock_db.sector   = fdata.get("sector") or stock_db.sector
+                            stock_db.industry = fdata.get("industry") or stock_db.industry
+                            db.commit()
+                            company_name = stock_db.name
+                            cache.delete("stock_names_map") # Clear cache
+                except Exception:
+                    pass
+                cache.set(cache_key, "attempted", expire_seconds=86400)  # 24 hours
 
         rr = s.rule_results or {}
         passed = sum(1 for v in rr.values() if v.get("passed"))
+        overrides = s.rule_overrides or {}
+
+        # ── Latest entry check result for this signal ────────────────────
+        last_check = None
+        try:
+            audit_entries = db.query(AuditLog).filter(
+                AuditLog.organization_id == org_id,
+                AuditLog.action == AuditAction.TASK_RUN,
+                AuditLog.ticker == s.ticker,
+            ).order_by(desc(AuditLog.created_at)).limit(20).all()
+            for entry in audit_entries:
+                d = entry.detail or {}
+                if d.get("signal_id") == s.id:
+                    raw_overrides = d.get("overrides_applied", {})
+                    # Only count rules that were actually disabled (value == False)
+                    active_overrides = {k: v for k, v in raw_overrides.items() if v is False}
+                    last_check = {
+                        "time": _fmt_dt(str(entry.created_at), sig_tz),
+                        "result": d.get("result", ""),
+                        "message": entry.message,
+                        "close": d.get("close"),
+                        "pivot": d.get("pivot"),
+                        "avg_vol": d.get("avg_vol"),
+                        "rules": [
+                            {
+                                "rule_id": rid,
+                                "label": rid.replace("vcp_", "").replace("_", " ").title(),
+                                "passed": rd.get("passed", False),
+                                "overridden": overrides.get(rid) == False,
+                                "message": rd.get("message", ""),
+                            }
+                            for rid, rd in d["rules"].items()
+                        ] if "rules" in d else None,
+                        "overrides_applied": active_overrides,
+                    }
+                    break
+        except Exception:
+            pass
+
+        # ── Build override rule list: only rules that make sense to toggle ──
+        # Use screener rule_results to know pass/fail; merge with breakout check
+        screener_pass_fail = {rid: bool(v.get("passed")) for rid, v in rr.items()}
+        # Also include breakout rules from last entry check
+        if last_check and last_check.get("rules"):
+            for br in last_check["rules"]:
+                screener_pass_fail[br["rule_id"]] = br["passed"]
+
+        override_rules_failed = []
+        override_rules_passed = []
+        for rule_id, meta in rules_meta.items():
+            if not meta["globally_enabled"]:
+                continue
+            rule_passed = screener_pass_fail.get(rule_id)   # True / False / None (unknown)
+            current_override = overrides.get(rule_id, None)  # True / False / None
+            entry = {
+                "rule_id":    rule_id,
+                "label":      meta["label"],
+                "category":   meta["category"],
+                "is_mandatory": meta["is_mandatory"],
+                "rule_passed": rule_passed,   # None = not evaluated yet
+                "override":   current_override,
+            }
+            if rule_passed is False:
+                override_rules_failed.append(entry)
+            else:
+                override_rules_passed.append(entry)
+
+        notes_str = s.notes or ""
+        is_promoted_manual = notes_str.startswith("[Manual Promotion]") or notes_str.startswith("Manually promoted from Watchlist")
+        is_promoted_vcp    = notes_str.startswith("[VCP Screener]")
+        has_overrides = any(overrides.get(rid) == False for rid, passed in screener_pass_fail.items() if passed is False)
+
         sig_data.append({
             "id": s.id, "ticker": s.ticker,
             "company_name": company_name,
@@ -591,9 +1050,15 @@ async def signals(request: Request, db: Session = Depends(get_db)):
             "status": s.status.value,
             "rules_passed": passed,
             "rules_total": len(rr),
-            "rule_results": _enrich_rule_results(s.ticker, rr, db, target_date=s.signal_date),
+            "rule_results": _enrich_rule_results(s.ticker, rr, db, target_date=s.signal_date, overrides=overrides),
+            "override_rules_failed": override_rules_failed,
+            "override_rules_passed": override_rules_passed,
+            "has_overrides": has_overrides,
+            "is_promoted_manual": bool(is_promoted_manual),
+            "is_promoted_vcp": bool(is_promoted_vcp),
+            "last_check": last_check,
         })
-    ctx.update({"signals": sig_data, "signal_date": str(date.today())})
+    ctx.update({"signals": sig_data, "signal_date": str(get_current_date())})
     return templates.TemplateResponse("trading/signals.html", ctx)
 
 
@@ -635,44 +1100,138 @@ async def unskip_signal(request: Request, signal_id: int, db: Session = Depends(
     return RedirectResponse("/signals", 302)
 
 
-@app.get("/watchlist", response_class=HTMLResponse)
-async def watchlist(request: Request, db: Session = Depends(get_db)):
+@app.post("/signals/{signal_id}/toggle-rule")
+async def signal_toggle_rule(
+    request: Request,
+    signal_id: int,
+    rule_id: str = Form(...),
+    enabled: str = Form(...),   # "true" or "false"
+    db: Session = Depends(get_db),
+):
+    """Toggle a single rule override for a specific signal. Mandatory rules are protected server-side."""
     if not _auth(request):
         return RedirectResponse("/login", 302)
-    # Super admins allowed in standard views under active organization context
     org_id = request.session.get("organization_id")
 
-    from app.models.signal import Watchlist, WatchlistStatus
+    from app.models.signal import Signal, SignalStatus
+    from app.models.config import RuleConfig
+    from app.models.audit import AuditLog, AuditAction
+
+    s = db.query(Signal).filter(Signal.id == signal_id, Signal.organization_id == org_id).first()
+    if not s or s.status not in (SignalStatus.PENDING,):
+        return RedirectResponse("/signals", 302)
+
+    # Server-side guard: refuse override of mandatory or globally-disabled rules
+    rule = db.query(RuleConfig).filter(
+        RuleConfig.rule_id == rule_id,
+        RuleConfig.organization_id == org_id,
+    ).first()
+    if rule and (rule.is_mandatory or not rule.enabled_globally):
+        return RedirectResponse("/signals", 302)
+
+    overrides = dict(s.rule_overrides or {})
+    new_state = enabled.lower() == "true"
+    overrides[rule_id] = new_state
+    s.rule_overrides = overrides
+
+    action_label = "enabled" if new_state else "disabled"
+    db.add(AuditLog(
+        action=AuditAction.RULE_TOGGLED,
+        organization_id=org_id,
+        ticker=s.ticker,
+        actor=request.session.get("email", "dashboard"),
+        user_id=request.session.get("user_id"),
+        message=f"Rule '{rule_id}' {action_label} for signal {s.ticker} (override — reverts next screen)",
+        detail={"signal_id": signal_id, "rule_id": rule_id, "enabled": new_state},
+    ))
+    db.commit()
+    return RedirectResponse("/signals", 302)
+
+
+@app.get("/watchlist", response_class=HTMLResponse)
+async def watchlist(
+    request: Request,
+    label: int = Query(None),       # filter by label id; None = show all
+    db: Session = Depends(get_db)
+):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    org_id = request.session.get("organization_id")
+
+    from app.models.signal import Watchlist, WatchlistStatus, WatchlistLabel
     from app.models.market import PriceBar, Stock
     ctx = _global(request, db)
-    items = db.query(Watchlist).filter(
+
+    # Load all labels for this org (for filter chips)
+    all_labels = db.query(WatchlistLabel).filter(
+        WatchlistLabel.organization_id == org_id
+    ).order_by(WatchlistLabel.sort_order).all()
+    ctx["labels"] = [{"id": l.id, "name": l.name, "color": l.color, "is_default": l.is_default} for l in all_labels]
+    ctx["active_label"] = label  # currently selected filter (None = all)
+
+    from sqlalchemy.orm import joinedload
+    q = db.query(Watchlist).options(joinedload(Watchlist.label)).filter(
         Watchlist.status == WatchlistStatus.WATCHING,
         Watchlist.organization_id == org_id
-    ).order_by(desc(Watchlist.created_at)).all()
-    
+    )
+    if label is not None:
+        q = q.filter(Watchlist.label_id == label)
+    items = q.order_by(desc(Watchlist.created_at)).all()
+
+    stock_names = get_cached_stock_names(db)
+
     watchlist_data = []
     for w in items:
-        # Fetch company name
-        stock_db = db.query(Stock).filter(Stock.ticker == w.ticker).first()
-        company_name = stock_db.name if stock_db else ""
+        company_name = stock_names.get(w.ticker, "")
+        if not company_name:
+            cache_key = f"missing_name_fetch:{w.ticker}"
+            if not cache.get(cache_key):
+                try:
+                    from app.data.fetcher import get_fundamentals
+                    fdata = get_fundamentals(w.ticker)
+                    if fdata.get("company_name"):
+                        stock_db = db.query(Stock).filter(Stock.ticker == w.ticker).first()
+                        if stock_db:
+                            stock_db.name     = fdata["company_name"]
+                            stock_db.sector   = fdata.get("sector") or stock_db.sector
+                            stock_db.industry = fdata.get("industry") or stock_db.industry
+                            db.commit()
+                            company_name = stock_db.name
+                            cache.delete("stock_names_map") # Clear cache
+                except Exception:
+                    pass
+                cache.set(cache_key, "attempted", expire_seconds=86400)  # 24 hours
 
-        # Fetch the latest price bar for the ticker to show stats
-        bar = db.query(PriceBar).filter(PriceBar.ticker == w.ticker).order_by(desc(PriceBar.date)).first()
-        bar_data = None
-        if bar:
-            bar_data = {
-                "close": float(bar.close or 0),
-                "ma_50": float(bar.ma_50 or 0),
-                "ma_150": float(bar.ma_150 or 0),
-                "ma_200": float(bar.ma_200 or 0),
-                "high_52w": float(bar.high_52w or 0),
-                "low_52w": float(bar.low_52w or 0),
-                "rs_rating": float(bar.rs_rating or 0),
-            }
-            
+        # Check cache for PriceBar details
+        cache_key = f"latest_price_bar:{w.ticker}"
+        bar_data = cache.get(cache_key)
+        if bar_data is None:
+            bar = db.query(PriceBar).filter(PriceBar.ticker == w.ticker).order_by(desc(PriceBar.date)).first()
+            if bar:
+                bar_data = {
+                    "close": float(bar.close or 0),
+                    "ma_50": float(bar.ma_50 or 0),
+                    "ma_150": float(bar.ma_150 or 0),
+                    "ma_200": float(bar.ma_200 or 0),
+                    "high_52w": float(bar.high_52w or 0),
+                    "low_52w": float(bar.low_52w or 0),
+                    "rs_rating": float(bar.rs_rating or 0),
+                }
+                cache.set(cache_key, bar_data, expire_seconds=300)
+            else:
+                bar_data = {}
+                cache.set(cache_key, {}, expire_seconds=3600)
+
+        stats_data = bar_data if bar_data else None
+
         rr = w.rule_results or {}
         passed = sum(1 for v in rr.values() if v.get("passed"))
-        
+
+        # Label info for card display
+        lbl = None
+        if w.label:
+            lbl = {"id": w.label.id, "name": w.label.name, "color": w.label.color}
+
         watchlist_data.append({
             "id": w.id,
             "ticker": w.ticker,
@@ -680,14 +1239,148 @@ async def watchlist(request: Request, db: Session = Depends(get_db)):
             "added": str(w.added_date),
             "by": w.added_by,
             "notes": w.notes or "",
-            "stats": bar_data,
+            "stats": stats_data,
             "rules_passed": passed,
             "rules_total": len(rr),
             "rule_results": _enrich_rule_results(w.ticker, rr, db),
+            "label": lbl,
         })
-        
+
     ctx["watchlist"] = watchlist_data
     return templates.TemplateResponse("trading/watchlist.html", ctx)
+
+
+@app.post("/watchlist/labels/create")
+async def watchlist_label_create(
+    request: Request,
+    name: str = Form(...),
+    color: str = Form("#3b82f6"),
+    db: Session = Depends(get_db)
+):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    org_id = request.session.get("organization_id")
+    from app.models.signal import WatchlistLabel
+    name = name.strip()[:64]
+    if name:
+        existing_count = db.query(WatchlistLabel).filter(
+            WatchlistLabel.organization_id == org_id
+        ).count()
+        db.add(WatchlistLabel(
+            organization_id=org_id,
+            name=name,
+            color=color,
+            sort_order=existing_count,
+        ))
+        db.commit()
+    return RedirectResponse("/watchlist?msg=label_created", 302)
+
+
+@app.post("/watchlist/{item_id}/set-label")
+async def watchlist_set_label(
+    request: Request,
+    item_id: int,
+    label_id: str = Form(""),
+    db: Session = Depends(get_db)
+):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    org_id = request.session.get("organization_id")
+    from app.models.signal import Watchlist, WatchlistStatus
+    w = db.query(Watchlist).filter(
+        Watchlist.id == item_id,
+        Watchlist.organization_id == org_id,
+    ).first()
+    if w:
+        w.label_id = int(label_id) if label_id.isdigit() else None
+        db.commit()
+    return RedirectResponse("/watchlist", 302)
+
+
+@app.post("/watchlist/toggle-favourite")
+async def toggle_favourite(
+    request: Request,
+    ticker: str = Form(...),
+    redirect_url: str = Form("/watchlist"),
+    db: Session = Depends(get_db)
+):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    org_id = request.session.get("organization_id")
+    from app.models.signal import Watchlist, WatchlistStatus, WatchlistLabel
+
+    t = ticker.strip().upper()
+    if not t.endswith(".AX"):
+        t += ".AX"
+
+    # Find or create Favourites label
+    fav_label = db.query(WatchlistLabel).filter(
+        WatchlistLabel.organization_id == org_id,
+        WatchlistLabel.name == "Favourites"
+    ).first()
+    if not fav_label:
+        fav_label = db.query(WatchlistLabel).filter(
+            WatchlistLabel.organization_id == org_id,
+            WatchlistLabel.is_default == True
+        ).first()
+    if not fav_label:
+        fav_label = WatchlistLabel(
+            organization_id=org_id,
+            name="Favourites",
+            color="#f59e0b",
+            is_default=True,
+            sort_order=0
+        )
+        db.add(fav_label)
+        db.flush()
+
+    w = db.query(Watchlist).filter(
+        Watchlist.ticker == t,
+        Watchlist.organization_id == org_id,
+        Watchlist.status == WatchlistStatus.WATCHING
+    ).first()
+
+    if w:
+        if w.label_id == fav_label.id:
+            # Currently favourited -> Unfavourite
+            if w.added_by == "admin":
+                w.status = WatchlistStatus.REMOVED
+            else:
+                w.label_id = None
+        else:
+            # In watchlist but with other label -> Change to Favourites
+            w.label_id = fav_label.id
+    else:
+        # Not in watchlist -> Create new manual watchlist item with Favourites label
+        w = Watchlist(
+            ticker=t,
+            organization_id=org_id,
+            status=WatchlistStatus.WATCHING,
+            label_id=fav_label.id,
+            added_by="admin"
+        )
+        db.add(w)
+
+    db.commit()
+    return RedirectResponse(redirect_url, 302)
+
+
+@app.post("/action/positions/{pos_id}/clear-checks")
+async def positions_clear_checks(request: Request, pos_id: int, db: Session = Depends(get_db)):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    org_id = request.session.get("organization_id")
+    
+    from app.models.audit import AuditLog, AuditAction
+    db.query(AuditLog).filter(
+        AuditLog.organization_id == org_id,
+        AuditLog.action == AuditAction.TASK_RUN,
+        AuditLog.entity_type == "Position",
+        AuditLog.entity_id == str(pos_id)
+    ).delete(synchronize_session=False)
+    db.commit()
+    
+    return RedirectResponse("/positions?msg=checks_cleared", 302)
 
 
 @app.post("/positions/{pos_id}/close")
@@ -719,7 +1412,7 @@ async def close_position(
     if not pos:
         return RedirectResponse("/positions?msg=not_found", 302)
 
-    today = date.today()
+    today = get_current_date()
     close_price = exit_price if (exit_price and exit_price > 0) else float(pos.current_price or pos.entry_price)
     entry_price = float(pos.entry_price)
     pnl_aud = (close_price - entry_price) * pos.qty
@@ -780,7 +1473,7 @@ async def close_position(
 
 
 @app.post("/watchlist/add")
-async def watchlist_add(request: Request, ticker: str = Form(...), notes: str = Form(""), db: Session = Depends(get_db)):
+async def watchlist_add(request: Request, ticker: str = Form(...), notes: str = Form(""), label_id: str = Form(""), db: Session = Depends(get_db)):
     if not _auth(request):
         return RedirectResponse("/login", 302)
     # Super admins allowed in standard views under active organization context
@@ -789,8 +1482,9 @@ async def watchlist_add(request: Request, ticker: str = Form(...), notes: str = 
     t = ticker.strip().upper()
     if not t.endswith(".AX"):
         t += ".AX"
+    lbl_id = int(label_id) if label_id.isdigit() else None
     from app.tasks.screening import screen_single_ticker
-    screen_single_ticker.delay(t, notes, organization_id=org_id)
+    screen_single_ticker.delay(t, notes, organization_id=org_id, label_id=lbl_id)
     return RedirectResponse("/watchlist?msg=added", 302)
 
 
@@ -802,20 +1496,33 @@ async def watchlist_promote(request: Request, item_id: int, db: Session = Depend
     org_id = request.session.get("organization_id")
 
     from app.models.signal import Watchlist, WatchlistStatus, Signal, SignalStatus
-    from app.models.market import PriceBar
+    from app.models.market import PriceBar, Stock
     from app.models.audit import AuditLog, AuditAction
     
     w = db.query(Watchlist).filter(Watchlist.id == item_id, Watchlist.organization_id == org_id).first()
     if not w:
         return RedirectResponse("/watchlist?msg=not_found", 302)
-        
+
+    # ── Ensure the Stock row has a company name (may be empty for manually-added tickers) ──
+    stock_row = db.query(Stock).filter(Stock.ticker == w.ticker).first()
+    if stock_row and not stock_row.name:
+        try:
+            from app.data.fetcher import get_fundamentals
+            fdata = get_fundamentals(w.ticker)
+            if fdata.get("company_name"):
+                stock_row.name     = fdata["company_name"]
+                stock_row.sector   = fdata.get("sector") or stock_row.sector
+                stock_row.industry = fdata.get("industry") or stock_row.industry
+        except Exception:
+            pass  # non-critical — name will just stay blank
+
     bar = db.query(PriceBar).filter(PriceBar.ticker == w.ticker).order_by(desc(PriceBar.date)).first()
     close_price = float(bar.close) if bar and bar.close else 1.0
     
     pivot = close_price
     stop = close_price * 0.92
     
-    today = date.today()
+    today = get_current_date()
     existing = db.query(Signal).filter(Signal.ticker == w.ticker, Signal.signal_date == today, Signal.organization_id == org_id).first()
     if not existing:
         sig = Signal(
@@ -830,7 +1537,7 @@ async def watchlist_promote(request: Request, item_id: int, db: Session = Depend
             rs_rating=float(bar.rs_rating or 0) if bar else 0,
             trend_score=w.rules_passed if hasattr(w, 'rules_passed') else 6,
             rule_results=w.rule_results or {},
-            notes=f"Manually promoted from Watchlist. Original notes: {w.notes or ''}",
+            notes=f"[Manual Promotion] {request.session.get('email', 'dashboard')} | {w.notes or ''}".strip().rstrip('|').strip(),
             organization_id=org_id,
         )
         db.add(sig)
@@ -986,6 +1693,43 @@ async def action_force_screen(request: Request):
     return RedirectResponse("/signals?msg=screen", 302)
 
 
+@app.post("/action/force-breakout-check")
+async def action_force_breakout_check(request: Request):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.trading import check_entry_triggers
+    check_entry_triggers.delay()
+    return RedirectResponse("/admin/tasks?msg=breakout", 302)
+
+
+@app.post("/action/force-exit-check")
+async def action_force_exit_check(request: Request):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.trading import check_exit_rules_task
+    check_exit_rules_task.delay()
+    return RedirectResponse("/admin/tasks?msg=exit_check", 302)
+
+
+@app.post("/action/force-position-sync")
+async def action_force_position_sync(request: Request):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.trading import sync_ibkr_positions_task
+    sync_ibkr_positions_task.delay()
+    return RedirectResponse("/admin/tasks?msg=positions", 302)
+
+
+@app.post("/action/force-stop-sync")
+async def action_force_stop_sync(request: Request):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.trading import sync_stop_orders
+    sync_stop_orders.delay()
+    return RedirectResponse("/admin/tasks?msg=stops", 302)
+
+
+
 # ===========================================================================
 # ADMIN AREA
 # ===========================================================================
@@ -1031,14 +1775,18 @@ async def admin_tasks(request: Request, db: Session = Depends(get_db)):
         "CONFIG_CHANGED":       "var(--a-accent)",
         "SYSTEM_STARTED":       "var(--text-muted)",
         "HEALTH_CHECK":         "var(--text-subtle)",
+        "TASK_RUN":             "var(--t-accent)",
+        "TASK_ERROR":           "var(--neg)",
     }
 
+    display_tz = _get_display_tz(org_id, db)
     seed_logs = [{
-        "time":    str(l.created_at)[11:19],
+        "time":    _fmt_dt(str(l.created_at), display_tz),
         "action":  str(l.action).replace("AuditAction.", ""),
         "ticker":  l.ticker or "—",
-        "message": (l.message or "")[:80],
+        "message": (l.message or "")[:120],
         "color":   ACTION_COLOURS.get(str(l.action).replace("AuditAction.", ""), "var(--text-muted)"),
+        "detail":  l.detail or None,
     } for l in logs]
 
     ctx.update({
@@ -1046,7 +1794,7 @@ async def admin_tasks(request: Request, db: Session = Depends(get_db)):
         "last_log_id":    last_id,
         "stock_count":    db.query(func.count(Stock.id)).scalar() or 0,
         "price_bar_count": db.query(func.count(PriceBar.id)).scalar() or 0,
-        "signal_count":   db.query(func.count(Signal.id)).filter(Signal.signal_date == date.today(), Signal.organization_id == org_id).scalar() or 0,
+        "signal_count":   db.query(func.count(Signal.id)).filter(Signal.signal_date == get_current_date(), Signal.organization_id == org_id).scalar() or 0,
         "watchlist_count": db.query(func.count(Watchlist.id)).filter(Watchlist.status == WatchlistStatus.WATCHING, Watchlist.organization_id == org_id).scalar() or 0,
     })
     return templates.TemplateResponse("admin/tasks.html", ctx)
@@ -1081,8 +1829,11 @@ async def admin_tasks_poll(request: Request, after: int = 0, db: Session = Depen
         "CONFIG_CHANGED":       "var(--a-accent)",
         "SYSTEM_STARTED":       "var(--text-muted)",
         "HEALTH_CHECK":         "var(--text-subtle)",
+        "TASK_RUN":             "var(--t-accent)",
+        "TASK_ERROR":           "var(--neg)",
     }
 
+    display_tz = _get_display_tz(org_id, db)
     try:
         new_logs = db.query(AuditLog).filter(AuditLog.id > after, AuditLog.organization_id == org_id).order_by(desc(AuditLog.id)).limit(50).all()
     except Exception:
@@ -1090,19 +1841,35 @@ async def admin_tasks_poll(request: Request, after: int = 0, db: Session = Depen
     return JSONResponse({
         "logs": [{
             "id":      l.id,
-            "time":    str(l.created_at)[11:19],
+            "time":    _fmt_dt(str(l.created_at), display_tz),
             "action":  str(l.action).replace("AuditAction.", ""),
             "ticker":  l.ticker or "—",
-            "message": (l.message or "")[:80],
+            "message": (l.message or "")[:120],
             "color":   ACTION_COLOURS.get(str(l.action).replace("AuditAction.", ""), "var(--text-muted)"),
+            "detail":  l.detail or None,
         } for l in new_logs],
         "counts": {
             "stocks":    db.query(func.count(Stock.id)).scalar() or 0,
             "bars":      db.query(func.count(PriceBar.id)).scalar() or 0,
-            "signals":   db.query(func.count(Signal.id)).filter(Signal.signal_date == date.today(), Signal.organization_id == org_id).scalar() or 0,
+            "signals":   db.query(func.count(Signal.id)).filter(Signal.signal_date == get_current_date(), Signal.organization_id == org_id).scalar() or 0,
             "watchlist": db.query(func.count(Watchlist.id)).filter(Watchlist.status == WatchlistStatus.WATCHING, Watchlist.organization_id == org_id).scalar() or 0,
         },
     })
+
+
+@app.post("/admin/tasks/clear-log")
+async def admin_tasks_clear_log(request: Request, db: Session = Depends(get_db)):
+    """Delete all TASK_RUN audit entries for this org (entry/exit check noise). Keeps other events."""
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    org_id = request.session.get("organization_id")
+    from app.models.audit import AuditLog, AuditAction
+    db.query(AuditLog).filter(
+        AuditLog.organization_id == org_id,
+        AuditLog.action == AuditAction.TASK_RUN,
+    ).delete(synchronize_session=False)
+    db.commit()
+    return RedirectResponse("/admin/tasks?msg=cleared", 302)
 
 
 
@@ -1128,8 +1895,8 @@ async def admin_health(request: Request, db: Session = Depends(get_db)):
 
     stock_count     = db.query(func.count(Stock.id)).scalar() or 0
     price_bar_count = db.query(func.count(PriceBar.id)).scalar() or 0
-    today_bars      = db.query(func.count(PriceBar.id)).filter(PriceBar.date == date.today()).scalar() or 0
-    signal_count    = db.query(func.count(Signal.id)).filter(Signal.signal_date == date.today(), Signal.organization_id == org_id).scalar() or 0
+    today_bars      = db.query(func.count(PriceBar.id)).filter(PriceBar.date == get_current_date()).scalar() or 0
+    signal_count    = db.query(func.count(Signal.id)).filter(Signal.signal_date == get_current_date(), Signal.organization_id == org_id).scalar() or 0
     watchlist_count = db.query(func.count(Watchlist.id)).filter(Watchlist.status == WatchlistStatus.WATCHING, Watchlist.organization_id == org_id).scalar() or 0
     is_first_run    = stock_count == 0
 
@@ -1141,7 +1908,7 @@ async def admin_health(request: Request, db: Session = Depends(get_db)):
             "ticker": l.ticker or "—",
             "message": (l.message or "")[:60],
             "actor": l.actor,
-            "time": str(l.created_at)[11:19],
+            "time": _fmt_dt(str(l.created_at), ctx.get("display_tz", "UTC")),
         } for l in logs],
         # Diagnostics
         "stock_count": stock_count,
@@ -1332,8 +2099,9 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
     ctx = _global(request, db)
     configs = db.query(SystemConfig).filter(SystemConfig.organization_id == org_id).order_by(SystemConfig.group, SystemConfig.key).all()
     by_group = {}
+    HIDDEN_GROUPS = {"system"} if request.session.get("user_role") != "superadmin" else set()
     for c in configs:
-        if c.group == "system":
+        if c.group in HIDDEN_GROUPS:
             continue
         grp = c.group or "general"
         if grp not in by_group:
@@ -1354,17 +2122,37 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
 async def update_config(request: Request, config_id: int, value: str = Form(...), db: Session = Depends(get_db)):
     if not _auth(request):
         return RedirectResponse("/login", 302)
-    # Super admins allowed in standard views under active organization context
     org_id = request.session.get("organization_id")
 
     from app.models.config import SystemConfig
     from app.models.audit import AuditLog, AuditAction
-    c = db.query(SystemConfig).filter(SystemConfig.id == config_id, SystemConfig.organization_id == org_id).first()
-    if c and value is not None:
+
+    # Try org-scoped row first; fall back to global row (organization_id IS NULL) so that
+    # superadmins viewing global configs (mock_clock, regime, etc.) can save them too.
+    c = db.query(SystemConfig).filter(SystemConfig.id == config_id).first()
+    if c is None:
+        return RedirectResponse("/admin/config?error=notfound", 302)
+
+    # Security: regular org users may only edit rows belonging to their own org
+    user_role = request.session.get("user_role")
+    if user_role != "superadmin" and c.organization_id != org_id:
+        return RedirectResponse("/admin/config?error=forbidden", 302)
+
+    if value is not None:
         old_val = c.value
         c.value = value
         c.updated_by = request.session.get("email", "dashboard")
-        # AuditLog write is non-fatal — missing DB column won't block the save
+
+        # Synchronize working capital configuration with active Account capital
+        if c.key in ("working_capital_aud", "weekly_injection_aud") and c.organization_id:
+            from app.models.account import Account
+            account = db.query(Account).filter(Account.is_active == True, Account.organization_id == c.organization_id).first()
+            if account:
+                try:
+                    account.capital_aud = float(value)
+                except ValueError:
+                    pass
+
         try:
             db.add(AuditLog(
                 action=AuditAction.CONFIG_CHANGED,
@@ -1373,22 +2161,28 @@ async def update_config(request: Request, config_id: int, value: str = Form(...)
                 after_value=value,
                 actor=request.session.get("email", "dashboard"),
                 user_id=request.session.get("user_id"),
-                organization_id=org_id,
+                organization_id=c.organization_id,
             ))
             db.commit()
         except Exception as _audit_err:
             logger.warning(f"Config save audit log failed (non-fatal): {_audit_err}")
             try:
                 db.rollback()
-            except Exception:
-                pass
-            # Re-save the config without the audit log
-            try:
-                c.value = value
-                c.updated_by = request.session.get("email", "dashboard")
-                db.commit()
-            except Exception:
-                pass
+                c = db.query(SystemConfig).filter(SystemConfig.id == config_id).first()
+                if c:
+                    c.value = value
+                    c.updated_by = request.session.get("email", "dashboard")
+                    if c.key in ("working_capital_aud", "weekly_injection_aud") and c.organization_id:
+                        from app.models.account import Account
+                        account = db.query(Account).filter(Account.is_active == True, Account.organization_id == c.organization_id).first()
+                        if account:
+                            try:
+                                account.capital_aud = float(value)
+                            except ValueError:
+                                pass
+                    db.commit()
+            except Exception as _save_err:
+                logger.error(f"Config save failed entirely: {_save_err}")
     return RedirectResponse("/admin/config?saved=1", 302)
 
 
@@ -1419,8 +2213,9 @@ async def admin_audit(request: Request, db: Session = Depends(get_db)):
         logs = q.limit(200).all()
     except Exception:
         logs = []
+    audit_tz = _get_display_tz(org_id, db)
     ctx.update({
-        "logs": [{"time": str(l.created_at)[5:19], "action": str(l.action).replace("AuditAction.", ""),
+        "logs": [{"time": _fmt_dt(str(l.created_at), audit_tz), "action": str(l.action).replace("AuditAction.", ""),
                   "actor": l.actor or "system", "ticker": l.ticker or "—",
                   "message": (l.message or "")[:80],
                   "before": (l.before_value or "")[:20], "after": (l.after_value or "")[:20]}
@@ -1591,7 +2386,7 @@ async def admin_whatsapp(request: Request, db: Session = Depends(get_db)):
         "hook_url":        settings.waha_hook_url,
         "qr_b64":          qr_b64,
         "recent_commands": [
-            {"time":    str(l.created_at)[11:19],
+            {"time":    _fmt_dt(str(l.created_at), ctx.get("display_tz", "UTC")),
              "message": (l.detail or {}).get("message", ""),
              "sender":  (l.detail or {}).get("sender", "")}
             for l in recent_cmds
@@ -1633,6 +2428,184 @@ async def whatsapp_send_test(request: Request):
     from app.notifications.whatsapp import WhatsAppNotifier
     ok = WhatsAppNotifier(organization_id=org_id).send("✅ VCPilot test message — WhatsApp integration is working!")
     return RedirectResponse(f"/admin/whatsapp?msg={'test_ok' if ok else 'test_fail'}", 302)
+
+
+# ===========================================================================
+# ADMIN DATA LOG — intraday entry check snapshots
+# ===========================================================================
+
+@app.get("/admin/data-log", response_class=HTMLResponse)
+async def admin_data_log(
+    request: Request,
+    db: Session = Depends(get_db),
+    ticker: str = Query(None),
+    window: str = Query("latest"),   # latest | 15 | 30 | 60 | today
+    only_confirmed: bool = Query(False),
+):
+    """
+    Admin Data Log — shows per-signal intraday metric snapshots captured every
+    5–15 minutes during market hours, with per-rule pass/fail colouring so users
+    can see exactly what metrics are being evaluated against Minervini rules.
+    Data source badge warns when using delayed yfinance data (≈15-20 min for ASX).
+    """
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    org_id = request.session.get("organization_id")
+    ctx = _global(request, db)
+
+    from app.models.market import EntryCheckLog
+    from app.models.signal import Signal
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    now_utc = _dt.utcnow()
+    # Determine time filter
+    if window == "today":
+        cutoff = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif window == "15":
+        cutoff = now_utc - _td(minutes=15)
+    elif window == "30":
+        cutoff = now_utc - _td(minutes=30)
+    elif window == "60":
+        cutoff = now_utc - _td(minutes=60)
+    else:
+        # "latest" = most recent snapshot per signal
+        cutoff = now_utc - _td(hours=24)
+
+    q = db.query(EntryCheckLog).filter(
+        EntryCheckLog.organization_id == org_id,
+        EntryCheckLog.checked_at >= cutoff,
+    )
+    if ticker:
+        q = q.filter(EntryCheckLog.ticker == ticker.upper().strip())
+    if only_confirmed:
+        q = q.filter(EntryCheckLog.breakout_confirmed == True)
+
+    logs = q.order_by(desc(EntryCheckLog.checked_at)).limit(200).all()
+
+    # For "latest" mode: deduplicate to most recent per signal
+    if window == "latest":
+        seen = set()
+        deduped = []
+        for row in logs:
+            key = (row.signal_id, row.ticker)
+            if key not in seen:
+                seen.add(key)
+                deduped.append(row)
+        logs = deduped
+
+    # Serialize for template — flatten rule_results JSON into per-rule list
+    RULE_LABELS = {
+        "vcp_breakout_price":   "Price ≥ Pivot",
+        "vcp_breakout_volume":  "Volume Surge",
+        "vcp_contractions":     "Contraction Count",
+        "vcp_base_weeks":       "Base Length (min weeks)",
+        "vcp_max_extension":    "Max Extension",
+    }
+
+    rows = []
+    for log in logs:
+        rules = log.rule_results or {}
+        rule_list = [
+            {
+                "id":        rid,
+                "label":     RULE_LABELS.get(rid, rid.replace("_", " ").title()),
+                "passed":    rdata.get("passed", False),
+                "value":     rdata.get("value"),
+                "threshold": rdata.get("threshold"),
+                "message":   rdata.get("message", ""),
+            }
+            for rid, rdata in rules.items()
+        ]
+        checked_local = _fmt_dt(str(log.checked_at), ctx.get("display_tz", "UTC"))
+        source_label  = "IBKR Real-Time" if log.data_source == "ibkr" else (
+                         "EOD Fallback"   if log.data_source == "eod_fallback" else
+                         "yfinance ~20 min delay"
+                        )
+        source_color  = "pos" if log.data_source == "ibkr" else (
+                         "warn" if log.data_source == "eod_fallback" else "warn"
+                        )
+        rows.append({
+            "id":               log.id,
+            "ticker":           log.ticker,
+            "checked_at":       checked_local,
+            "checked_raw":      log.checked_at.isoformat() + "Z",
+            "price_current":    float(log.price_current)   if log.price_current   else None,
+            "price_pivot":      float(log.price_pivot)     if log.price_pivot     else None,
+            "price_stop":       float(log.price_stop)      if log.price_stop      else None,
+            "price_vs_pivot":   float(log.price_vs_pivot)  if log.price_vs_pivot  else None,
+            "vol_current":      log.vol_current,
+            "vol_avg_50":       float(log.vol_avg_50)      if log.vol_avg_50      else None,
+            "vol_ratio":        float(log.vol_ratio)       if log.vol_ratio       else None,
+            "ma_50":            float(log.ma_50)           if log.ma_50           else None,
+            "ma_150":           float(log.ma_150)          if log.ma_150          else None,
+            "ma_200":           float(log.ma_200)          if log.ma_200          else None,
+            "rs_rating":        float(log.rs_rating)       if log.rs_rating       else None,
+            "pct_from_52w_high":float(log.pct_from_52w_high) if log.pct_from_52w_high else None,
+            "breakout_confirmed": log.breakout_confirmed,
+            "rules":            rule_list,
+            "data_source":      log.data_source,
+            "source_label":     source_label,
+            "source_color":     source_color,
+            "delay_mins":       log.data_delay_mins,
+        })
+
+    # Distinct tickers for filter dropdown
+    all_tickers = sorted(set(r["ticker"] for r in rows))
+
+    ctx.update({
+        "rows":           rows,
+        "ticker":         ticker or "",
+        "window":         window,
+        "only_confirmed": only_confirmed,
+        "all_tickers":    all_tickers,
+        "total":          len(rows),
+        "msg":            request.query_params.get("msg", ""),
+    })
+    return templates.TemplateResponse("admin/data_log.html", ctx)
+
+
+@app.get("/admin/data-log/poll")
+async def admin_data_log_poll(
+    request: Request,
+    db: Session = Depends(get_db),
+    after_id: int = Query(0),
+):
+    """
+    Lightweight JSON poll endpoint — returns rows newer than after_id.
+    Used by the auto-refresh on the Data Log page.
+    """
+    if not _auth(request):
+        return {"rows": [], "error": "unauthorized"}
+    org_id = request.session.get("organization_id")
+    from app.models.market import EntryCheckLog
+    from datetime import timedelta as _td, datetime as _dt
+
+    cutoff = _dt.utcnow() - _td(hours=24)
+    rows = db.query(EntryCheckLog).filter(
+        EntryCheckLog.organization_id == org_id,
+        EntryCheckLog.id > after_id,
+        EntryCheckLog.checked_at >= cutoff,
+    ).order_by(desc(EntryCheckLog.checked_at)).limit(50).all()
+
+    return {
+        "rows": [
+            {
+                "id":               r.id,
+                "ticker":           r.ticker,
+                "checked_at":       r.checked_at.isoformat() + "Z",
+                "price_current":    float(r.price_current)  if r.price_current  else None,
+                "price_pivot":      float(r.price_pivot)    if r.price_pivot    else None,
+                "price_vs_pivot":   float(r.price_vs_pivot) if r.price_vs_pivot else None,
+                "vol_ratio":        float(r.vol_ratio)      if r.vol_ratio      else None,
+                "breakout_confirmed": r.breakout_confirmed,
+                "data_source":      r.data_source,
+                "delay_mins":       r.data_delay_mins,
+                "rule_results":     r.rule_results or {},
+            }
+            for r in rows
+        ],
+        "count": len(rows),
+    }
 
 
 # ===========================================================================
@@ -1705,7 +2678,7 @@ async def superadmin_organizations_create(
         name=f"{name.strip()} Primary Account",
         organization_id=org.id,
         tier_id=acc_tier.id,
-        capital_aud=1000.0,
+        capital_aud=5000.0,
         is_active=True,
         is_paper=True
     )
@@ -1713,14 +2686,18 @@ async def superadmin_organizations_create(
 
     # 3. Create Org Admin User
     import secrets
+    from datetime import datetime, timedelta
     dummy_pass = secrets.token_hex(16)
     hashed_pwd = hash_password(dummy_pass)
+    token = secrets.token_urlsafe(32)
     user = User(
         email=admin_email.strip().lower(),
         password_hash=hashed_pwd,
         name=admin_name.strip(),
         organization_id=org.id,
-        is_active=True
+        is_active=True,
+        reset_token=token,
+        reset_token_expires=datetime.utcnow() + timedelta(hours=24)
     )
     db.add(user)
     db.flush()
@@ -1746,7 +2723,7 @@ async def superadmin_organizations_create(
         ("ibkr_password", "", ConfigValueType.STRING, "IBKR Password", "Interactive Brokers login password", True),
         ("ibkr_paper_mode", "true", ConfigValueType.BOOLEAN, "IBKR Paper Mode", "Use paper trading environment"),
         ("fmp_api_key", "", ConfigValueType.STRING, "FMP API Key", "Financial Modeling Prep API key", True),
-        ("weekly_injection_aud", "1000.0", ConfigValueType.FLOAT, "Weekly Injection (AUD)", "Capital added weekly for sizing"),
+        ("working_capital_aud", "5000.0", ConfigValueType.FLOAT, "Working Capital (AUD)", "Working capital used for sizing and risk calculations"),
     ]
     for cfg_item in configs_to_seed:
         key, val, vtype, label, desc = cfg_item[:5]
@@ -1759,8 +2736,8 @@ async def superadmin_organizations_create(
 
     # 5. Clone default templates to RuleConfig for the new organization
     from app.models.config import RuleConfig
-    templates = db.query(RuleConfig).filter(RuleConfig.organization_id == None).all()
-    for t in templates:
+    rule_templates = db.query(RuleConfig).filter(RuleConfig.organization_id == None).all()
+    for t in rule_templates:
         db.add(RuleConfig(
             rule_id=t.rule_id,
             organization_id=org.id,
@@ -1780,7 +2757,34 @@ async def superadmin_organizations_create(
         ))
 
     db.commit()
-    return RedirectResponse("/superadmin/organizations?saved=1", 302)
+
+    # Welcome email sending flow for Organization Admin
+    from app.utils.email import send_email
+    import urllib.parse
+    
+    host = request.headers.get("host", "localhost:8501")
+    scheme = "https" if request.url.scheme == "https" else "http"
+    reset_link = f"{scheme}://{host}/reset-password?token={token}"
+
+    subject = "Welcome to VCPilot! Set up your Organisation Admin Account"
+    html_content = (
+        '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px">'
+        '<h2 style="color:#1d4ed8">Welcome to VCPilot!</h2>'
+        f'<p>Hi {user.name},</p>'
+        f'<p>Your organization <strong>{org.name}</strong> has been created on VCPilot. '
+        'Click the button below to set up your admin password and log in:</p>'
+        f'<div style="text-align:center;margin:30px 0"><a href="{reset_link}" '
+        'style="background:#1d4ed8;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px">Set Up Password & Log In</a></div>'
+        f'<p style="font-size:12px;color:#6b7280">Or copy: {reset_link}</p>'
+        '<p style="color:#6b7280;font-size:14px">This link expires in 24 hours.</p></div>'
+    )
+    
+    email_sent = send_email(user.email, subject, html_content)
+    encoded_email = urllib.parse.quote(user.email)
+    if email_sent:
+        return RedirectResponse(f"/superadmin/organizations?saved=welcome_email&email={encoded_email}", 302)
+    else:
+        return RedirectResponse(f"/superadmin/organizations?saved=welcome_manual&token={token}&email={encoded_email}", 302)
 
 
 @app.get("/superadmin/organizations/{org_id}", response_class=HTMLResponse)
@@ -1818,11 +2822,6 @@ async def superadmin_org_detail(org_id: int, request: Request, db: Session = Dep
 
 @app.post("/superadmin/organizations/{org_id}/deactivate")
 async def superadmin_org_deactivate(org_id: int, request: Request, db: Session = Depends(get_db)):
-    """
-    Soft-delete an organisation: sets is_active=False.
-    The org's data (users, signals, trades, rules) is retained.
-    Beat tasks skip inactive orgs automatically (all tasks filter is_active==True).
-    """
     if not _auth(request):
         return RedirectResponse("/login", 302)
     if request.session.get("user_role") != "superadmin":
@@ -1835,12 +2834,9 @@ async def superadmin_org_deactivate(org_id: int, request: Request, db: Session =
     if not org:
         return RedirectResponse("/superadmin/organizations?msg=not_found", 302)
 
-    # Safety: prevent deactivating the org the superadmin is currently viewing as
     current_org_id = request.session.get("organization_id")
     if org.id == current_org_id:
-        return RedirectResponse(
-            f"/superadmin/organizations/{org_id}?msg=cannot_deactivate_self", 302
-        )
+        return RedirectResponse(f"/superadmin/organizations/{org_id}?msg=cannot_deactivate_self", 302)
 
     org.is_active = False
     db.add(AuditLog(
@@ -1850,14 +2846,11 @@ async def superadmin_org_deactivate(org_id: int, request: Request, db: Session =
         message=f"Organisation '{org.name}' soft-deleted (is_active=False)",
     ))
     db.commit()
-
-    logger.info(f"Organisation '{org.name}' (ID: {org_id}) deactivated by superadmin")
     return RedirectResponse(f"/superadmin/organizations?msg=deactivated&name={org.name}", 302)
 
 
 @app.post("/superadmin/organizations/{org_id}/reactivate")
 async def superadmin_org_reactivate(org_id: int, request: Request, db: Session = Depends(get_db)):
-    """Re-activate a soft-deleted organisation."""
     if not _auth(request):
         return RedirectResponse("/login", 302)
     if request.session.get("user_role") != "superadmin":
@@ -1878,8 +2871,6 @@ async def superadmin_org_reactivate(org_id: int, request: Request, db: Session =
         message=f"Organisation '{org.name}' reactivated (is_active=True)",
     ))
     db.commit()
-
-    logger.info(f"Organisation '{org.name}' (ID: {org_id}) reactivated by superadmin")
     return RedirectResponse(f"/superadmin/organizations/{org_id}?msg=reactivated", 302)
 
 
@@ -1893,7 +2884,6 @@ async def superadmin_rules(request: Request, db: Session = Depends(get_db)):
     from app.models.config import RuleConfig
 
     ctx = _global(request, db)
-    # Only load global template rules
     rules = db.query(RuleConfig).filter(RuleConfig.organization_id == None).order_by(RuleConfig.category, RuleConfig.sort_order).all()
 
     CATEGORY_LABELS = {
@@ -1949,7 +2939,6 @@ async def superadmin_rules_toggle_global(rule_id: str, request: Request, db: Ses
         r.enabled_globally = not r.enabled_globally
         r.updated_by = "superadmin"
         db.commit()
-
     return RedirectResponse("/superadmin/rules?saved=1", 302)
 
 
@@ -1967,26 +2956,17 @@ async def superadmin_rules_toggle_tier(rule_id: str, request: Request, tier: str
     if r and not r.is_mandatory:
         overrides = dict(r.tier_overrides or {})
         tier_override = overrides.get(tier, {})
-        current_enabled = tier_override.get("enabled", True)
-        tier_override["enabled"] = not current_enabled
+        tier_override["enabled"] = not tier_override.get("enabled", True)
         overrides[tier] = tier_override
         r.tier_overrides = overrides
         flag_modified(r, "tier_overrides")
         r.updated_by = "superadmin"
         db.commit()
-
     return RedirectResponse("/superadmin/rules?saved=1", 302)
 
 
 @app.post("/superadmin/rules/sync-all")
 async def superadmin_rules_sync_all(request: Request, db: Session = Depends(get_db)):
-    """
-    Propagate global template rule settings (enabled_globally, threshold, tier_overrides)
-    to ALL org-level rule copies.
-    Only overwrites values that still match the previous template snapshot — org-customised
-    rules (updated_by != 'superadmin' / 'migration' / 'system') are left unchanged.
-    Passing force=1 in the query string overwrites ALL org rules regardless.
-    """
     if not _auth(request):
         return RedirectResponse("/login", 302)
     if request.session.get("user_role") != "superadmin":
@@ -1996,7 +2976,6 @@ async def superadmin_rules_sync_all(request: Request, db: Session = Depends(get_
     from app.models.config import RuleConfig
     from sqlalchemy.orm.attributes import flag_modified
 
-    # Load all global template rules
     global_rules = db.query(RuleConfig).filter(RuleConfig.organization_id == None).all()
     synced = 0
     skipped = 0
@@ -2006,7 +2985,6 @@ async def superadmin_rules_sync_all(request: Request, db: Session = Depends(get_
             RuleConfig.organization_id != None,
         ).all()
         for org_rule in org_rules:
-            # Skip if the org admin has explicitly customised this rule, unless force=1
             if not force and org_rule.updated_by not in (None, "superadmin", "migration", "system", "admin"):
                 skipped += 1
                 continue
@@ -2018,7 +2996,6 @@ async def superadmin_rules_sync_all(request: Request, db: Session = Depends(get_
             synced += 1
 
     db.commit()
-    logger.info(f"Rules sync-all: {synced} org rules updated, {skipped} skipped (org-customised)")
     return RedirectResponse(f"/superadmin/rules?saved=1&synced={synced}&skipped={skipped}", 302)
 
 
@@ -2042,7 +3019,71 @@ async def superadmin_rules_threshold(rule_id: str, request: Request, tier: str =
         flag_modified(r, "tier_overrides")
         r.updated_by = "superadmin"
         db.commit()
+    return RedirectResponse("/superadmin/rules?saved=1", 302)
 
+
+@app.post("/superadmin/config/simulation")
+async def superadmin_config_simulation(
+    request: Request,
+    db: Session = Depends(get_db),
+    mock_time_enabled: str = Form("false"),
+    mock_current_time: str = Form(""),
+    mock_market_regime: str = Form("BULL"),
+    ibkr_simulate: str = Form(None),
+):
+    """
+    Save simulation / time-travel controls from the superadmin rules page.
+    All keys are stored as global SystemConfig rows (organization_id=NULL).
+    """
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    if request.session.get("user_role") != "superadmin":
+        return RedirectResponse("/", 302)
+
+    from app.models.config import SystemConfig
+    from app.models.audit import AuditLog, AuditAction
+
+    def _upsert(key: str, value: str):
+        row = db.query(SystemConfig).filter(
+            SystemConfig.key == key,
+            SystemConfig.organization_id == None,
+        ).first()
+        if row:
+            row.value = value
+            row.updated_by = request.session.get("email", "superadmin")
+        else:
+            db.add(SystemConfig(
+                key=key, value=value,
+                value_type="BOOLEAN" if key in ("mock_time_enabled", "ibkr_simulate") else "STRING",
+                label=key.replace("_", " ").title(),
+                group="system",
+                organization_id=None,
+                updated_by=request.session.get("email", "superadmin"),
+            ))
+
+    _upsert("mock_time_enabled", mock_time_enabled.lower())
+    _upsert("mock_current_time", mock_current_time.strip())
+    _upsert("mock_market_regime", mock_market_regime.upper())  # store separately — never clobbers last_market_regime
+
+    # ibkr_simulate is optional in the form (checkbox — absent = false)
+    _upsert("ibkr_simulate", "true" if ibkr_simulate == "true" else "false")
+
+    db.add(AuditLog(
+        action=AuditAction.CONFIG_CHANGED,
+        actor=request.session.get("email", "superadmin"),
+        organization_id=None,
+        message=(
+            f"Simulation config updated: mock_clock={mock_time_enabled}, "
+            f"regime={mock_market_regime}, ibkr_simulate={ibkr_simulate or 'false'}"
+        ),
+        detail={
+            "mock_time_enabled": mock_time_enabled,
+            "mock_current_time": mock_current_time,
+            "mock_market_regime": mock_market_regime,
+            "ibkr_simulate": ibkr_simulate or "false",
+        },
+    ))
+    db.commit()
     return RedirectResponse("/superadmin/rules?saved=1", 302)
 
 
@@ -2071,13 +3112,10 @@ async def superadmin_users(request: Request, db: Session = Depends(get_db)):
 
     ctx = _global(request, db)
     ctx.update({
-        "users": users,
-        "organizations": organizations,
-        "roles": roles,
-        "search": search,
-        "selected_org_id": selected_org_id,
+        "users": users, "organizations": organizations, "roles": roles,
+        "search": search, "selected_org_id": selected_org_id,
         "saved": request.query_params.get("saved", ""),
-        "error": request.query_params.get("error", "")
+        "error": request.query_params.get("error", ""),
     })
     return templates.TemplateResponse("superadmin/users.html", ctx)
 
@@ -2100,7 +3138,6 @@ async def superadmin_users_create(
     from app.models.account import Organization
     import secrets
 
-    # Check unique email
     email_clean = email.strip().lower()
     existing_user = db.query(User).filter(User.email == email_clean).first()
     if existing_user:
@@ -2111,20 +3148,19 @@ async def superadmin_users_create(
         ctx.update({
             "users": users, "organizations": organizations, "roles": roles,
             "error": f"User with email '{email}' already exists",
-            "search": "", "selected_org_id": ""
+            "search": "", "selected_org_id": "",
         })
         return templates.TemplateResponse("superadmin/users.html", ctx, status_code=400)
 
-    # Generate a random secure dummy password initially
     dummy_pass = secrets.token_hex(16)
     hashed_pwd = hash_password(dummy_pass)
-
+    from datetime import datetime, timedelta
+    token = secrets.token_urlsafe(32)
     user = User(
-        email=email_clean,
-        password_hash=hashed_pwd,
-        name=name.strip(),
-        organization_id=organization_id,
-        is_active=True
+        email=email_clean, password_hash=hashed_pwd,
+        name=name.strip(), organization_id=organization_id, is_active=True,
+        reset_token=token,
+        reset_token_expires=datetime.utcnow() + timedelta(hours=24)
     )
     db.add(user)
     db.flush()
@@ -2132,9 +3168,34 @@ async def superadmin_users_create(
     role = db.query(Role).filter(Role.id == role_id).first()
     if role:
         user.roles.append(role)
-
     db.commit()
-    return RedirectResponse("/superadmin/users?saved=1", 302)
+
+    # Welcome email sending flow for User
+    from app.utils.email import send_email
+    import urllib.parse
+    
+    host = request.headers.get("host", "localhost:8501")
+    scheme = "https" if request.url.scheme == "https" else "http"
+    reset_link = f"{scheme}://{host}/reset-password?token={token}"
+
+    subject = "Welcome to VCPilot! Set up your account"
+    html_content = (
+        '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px">'
+        '<h2 style="color:#1d4ed8">Welcome to VCPilot!</h2>'
+        f'<p>Hi {user.name},</p>'
+        '<p>An account has been created for you on VCPilot. Click the button below to set up your password and log in:</p>'
+        f'<div style="text-align:center;margin:30px 0"><a href="{reset_link}" '
+        'style="background:#1d4ed8;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px">Set Up Password & Log In</a></div>'
+        f'<p style="font-size:12px;color:#6b7280">Or copy: {reset_link}</p>'
+        '<p style="color:#6b7280;font-size:14px">This link expires in 24 hours.</p></div>'
+    )
+    
+    email_sent = send_email(user.email, subject, html_content)
+    encoded_email = urllib.parse.quote(user.email)
+    if email_sent:
+        return RedirectResponse(f"/superadmin/users?saved=welcome_email&email={encoded_email}", 302)
+    else:
+        return RedirectResponse(f"/superadmin/users?saved=welcome_manual&token={token}&email={encoded_email}", 302)
 
 
 @app.post("/superadmin/users/{user_id}/update-role")
@@ -2145,14 +3206,11 @@ async def superadmin_user_update_role(user_id: int, request: Request, role_id: i
         return RedirectResponse("/", 302)
 
     from app.models.auth import User, Role
-
     user = db.query(User).filter(User.id == user_id).first()
     role = db.query(Role).filter(Role.id == role_id).first()
-
     if user and role:
         user.roles = [role]
         db.commit()
-
     return RedirectResponse("/superadmin/users?saved=1", 302)
 
 
@@ -2191,7 +3249,6 @@ async def superadmin_user_reset_password(user_id: int, request: Request, db: Ses
         f'<p style="font-size:12px;color:#6b7280">Or copy: {reset_link}</p>'
         '<p style="color:#6b7280;font-size:14px">This link expires in 1 hour.</p></div>'
     )
-
     email_sent = send_email(user.email, subject, html_content)
     if email_sent:
         return RedirectResponse("/superadmin/users?saved=reset_email", 302)
@@ -2199,6 +3256,247 @@ async def superadmin_user_reset_password(user_id: int, request: Request, db: Ses
         import urllib.parse
         encoded_email = urllib.parse.quote(user.email)
         return RedirectResponse(f"/superadmin/users?saved=reset_manual&token={token}&email={encoded_email}", 302)
+
+
+# ===========================================================================
+# SUPER ADMIN DATA VIEW — universe + price data + custom stocks
+# ===========================================================================
+
+@app.get("/superadmin/data", response_class=HTMLResponse)
+async def superadmin_data(
+    request: Request,
+    db: Session = Depends(get_db),
+    tab: str = Query("universe"),       # universe | custom
+    search: str = Query(""),
+    sector: str = Query(""),
+    sort_by: str = Query("ticker"),     # ticker | rs_rating | last_price | market_cap | vol_ratio
+    sort_dir: str = Query("asc"),
+    page: int = Query(1),
+):
+    """
+    Super Admin Data page — two-tab view:
+      Tab 1 (universe): All ASX200/active stocks with their latest PriceBar metrics.
+      Tab 2 (custom):   Custom/non-universe stocks added per-org via watchlist.
+    Interactive: sortable columns, search, sector filter, pagination.
+    """
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    if request.session.get("user_role") != "superadmin":
+        return RedirectResponse("/", 302)
+
+    from app.models.market import Stock, PriceBar
+    from app.models.signal import Watchlist
+    from app.models.account import Organization
+    from sqlalchemy import func, and_
+
+    ctx = _global(request, db)
+    per_page = 50
+
+    if tab == "universe":
+        # ── Tab 1: Centralized universe stocks with latest price bar ──────────
+        q = db.query(Stock).filter(Stock.is_active == True, Stock.blacklisted == False)
+        if search:
+            q = q.filter(
+                (Stock.ticker.ilike(f"%{search.upper()}%")) |
+                (Stock.name.ilike(f"%{search}%"))
+            )
+        if sector:
+            q = q.filter(Stock.sector == sector)
+
+        total_stocks = q.count()
+
+        # Sort
+        sort_map = {
+            "ticker":     Stock.ticker,
+            "name":       Stock.name,
+            "sector":     Stock.sector,
+            "market_cap": Stock.market_cap,
+            "last_price": Stock.last_price,
+        }
+        sort_col = sort_map.get(sort_by, Stock.ticker)
+        if sort_dir == "desc":
+            q = q.order_by(sort_col.desc().nullslast())
+        else:
+            q = q.order_by(sort_col.asc().nullslast())
+
+        offset = (page - 1) * per_page
+        stocks = q.offset(offset).limit(per_page).all()
+
+        # Fetch latest price bars for these stocks
+        tickers = [s.ticker for s in stocks]
+        if tickers:
+            # Subquery: max date per ticker
+            latest_dates = db.query(
+                PriceBar.ticker,
+                func.max(PriceBar.date).label("max_date")
+            ).filter(PriceBar.ticker.in_(tickers)).group_by(PriceBar.ticker).subquery()
+
+            bars = db.query(PriceBar).join(
+                latest_dates,
+                and_(
+                    PriceBar.ticker == latest_dates.c.ticker,
+                    PriceBar.date == latest_dates.c.max_date,
+                )
+            ).all()
+            bar_map = {b.ticker: b for b in bars}
+        else:
+            bar_map = {}
+
+        # Serialize
+        rows = []
+        for s in stocks:
+            bar = bar_map.get(s.ticker)
+            rows.append({
+                "ticker":         s.ticker,
+                "asx_code":       s.asx_code,
+                "name":           s.name or "",
+                "sector":         s.sector or "",
+                "industry":       s.industry or "",
+                "in_asx200":      s.in_asx200,
+                "market_cap":     int(s.market_cap) if s.market_cap else None,
+                "last_price":     float(s.last_price) if s.last_price else None,
+                "last_updated":   str(s.last_updated)[:10] if s.last_updated else "",
+                # Price bar fields
+                "bar_date":       str(bar.date) if bar else "",
+                "close":          float(bar.close)         if bar and bar.close         else None,
+                "volume":         int(bar.volume)          if bar and bar.volume        else None,
+                "ma_50":          float(bar.ma_50)         if bar and bar.ma_50         else None,
+                "ma_150":         float(bar.ma_150)        if bar and bar.ma_150        else None,
+                "ma_200":         float(bar.ma_200)        if bar and bar.ma_200        else None,
+                "vol_ratio":      float(bar.vol_ratio)     if bar and bar.vol_ratio     else None,
+                "rs_rating":      float(bar.rs_rating)     if bar and bar.rs_rating     else None,
+                "pct_from_52w_high": float(bar.pct_from_52w_high) if bar and bar.pct_from_52w_high else None,
+                "atr_14":         float(bar.atr_14)        if bar and bar.atr_14        else None,
+                "has_bar":        bar is not None,
+            })
+
+        # Sort by price bar fields (not available as SQL columns — sort in Python)
+        if sort_by in ("rs_rating", "vol_ratio"):
+            reverse = sort_dir == "desc"
+            rows.sort(key=lambda r: (r[sort_by] is None, r.get(sort_by) or 0), reverse=reverse)
+
+        # Distinct sectors for filter
+        sectors = sorted(set(
+            s.sector for s in db.query(Stock.sector).filter(
+                Stock.is_active == True, Stock.sector != None
+            ).distinct().all()
+            if s.sector
+        ))
+
+        # Summary stats
+        total_with_bars = sum(1 for r in rows if r["has_bar"])
+        avg_rs = round(sum(r["rs_rating"] for r in rows if r["rs_rating"]) /
+                       max(1, sum(1 for r in rows if r["rs_rating"])), 1)
+
+        ctx.update({
+            "tab":            "universe",
+            "rows":           rows,
+            "search":         search,
+            "sector":         sector,
+            "sectors":        sectors,
+            "sort_by":        sort_by,
+            "sort_dir":       sort_dir,
+            "page":           page,
+            "per_page":       per_page,
+            "total":          total_stocks,
+            "total_pages":    max(1, (total_stocks + per_page - 1) // per_page),
+            "total_with_bars": total_with_bars,
+            "avg_rs":         avg_rs,
+            "custom_rows":    [],
+        })
+
+    else:
+        # ── Tab 2: Custom stocks per org (in watchlist but not in ASX200 universe) ──
+        # Find tickers in watchlist that are NOT in the stocks table as ASX200
+        from sqlalchemy import text as _text
+
+        custom_rows_raw = db.execute(_text("""
+            SELECT
+                w.ticker,
+                w.organization_id,
+                o.name AS org_name,
+                COUNT(*) OVER (PARTITION BY w.ticker) AS org_count,
+                s.name AS stock_name,
+                s.sector,
+                s.in_asx200,
+                s.is_active,
+                pb.close,
+                pb.date AS bar_date,
+                pb.rs_rating,
+                pb.vol_ratio,
+                pb.ma_50,
+                pb.ma_200,
+                pb.pct_from_52w_high,
+                w.added_at
+            FROM watchlist w
+            JOIN organizations o ON o.id = w.organization_id
+            LEFT JOIN stocks s ON s.ticker = w.ticker
+            LEFT JOIN LATERAL (
+                SELECT close, date, rs_rating, vol_ratio, ma_50, ma_200, pct_from_52w_high
+                FROM price_bars
+                WHERE ticker = w.ticker
+                ORDER BY date DESC
+                LIMIT 1
+            ) pb ON TRUE
+            WHERE (s.in_asx200 IS NULL OR s.in_asx200 = FALSE)
+            ORDER BY org_count DESC, w.ticker, o.name
+        """)).fetchall()
+
+        custom_rows = [
+            {
+                "ticker":     r.ticker,
+                "org_id":     r.organization_id,
+                "org_name":   r.org_name,
+                "org_count":  r.org_count,
+                "name":       r.stock_name or "",
+                "sector":     r.sector or "",
+                "in_asx200":  r.in_asx200 or False,
+                "is_active":  r.is_active if r.is_active is not None else True,
+                "close":      float(r.close) if r.close else None,
+                "bar_date":   str(r.bar_date) if r.bar_date else "",
+                "rs_rating":  float(r.rs_rating) if r.rs_rating else None,
+                "vol_ratio":  float(r.vol_ratio) if r.vol_ratio else None,
+                "ma_50":      float(r.ma_50) if r.ma_50 else None,
+                "ma_200":     float(r.ma_200) if r.ma_200 else None,
+                "pct_from_52w_high": float(r.pct_from_52w_high) if r.pct_from_52w_high else None,
+                "added_at":   str(r.added_at)[:10] if r.added_at else "",
+            }
+            for r in custom_rows_raw
+        ]
+
+        # Apply search filter
+        if search:
+            su = search.upper()
+            custom_rows = [r for r in custom_rows if su in r["ticker"] or search.lower() in r["name"].lower()]
+
+        ctx.update({
+            "tab":        "custom",
+            "rows":       [],
+            "custom_rows": custom_rows,
+            "search":     search,
+            "sector":     "",
+            "sectors":    [],
+            "sort_by":    sort_by,
+            "sort_dir":   sort_dir,
+            "page":       1,
+            "per_page":   per_page,
+            "total":      len(custom_rows),
+            "total_pages": 1,
+            "total_with_bars": sum(1 for r in custom_rows if r["close"]),
+            "avg_rs": 0,
+        })
+
+    # Global data stats for summary cards
+    total_stocks_db    = db.query(Stock).filter(Stock.is_active == True).count()
+    total_bars_db      = db.query(PriceBar).count()
+    latest_bar_date_r  = db.query(func.max(PriceBar.date)).scalar()
+    ctx.update({
+        "total_stocks_db":   total_stocks_db,
+        "total_bars_db":     total_bars_db,
+        "latest_bar_date":   str(latest_bar_date_r) if latest_bar_date_r else "—",
+        "msg":               request.query_params.get("msg", ""),
+    })
+    return templates.TemplateResponse("superadmin/data.html", ctx)
 
 
 @app.get("/reset-password", response_class=HTMLResponse)
@@ -2214,4 +3512,14 @@ async def reset_password_get(request: Request, token: str = Query(...), db: Sess
 @app.post("/reset-password")
 async def reset_password_post(request: Request, token: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     from datetime import datetime
-    from app.models.auth import User, hash_p
+    from app.models.auth import User, hash_password as hash_p
+
+    user = db.query(User).filter(User.reset_token == token, User.reset_token_expires > datetime.utcnow()).first()
+    if not user:
+        return templates.TemplateResponse("reset_password.html", {"request": request, "token": token, "error": "Invalid or expired link.", "success": False})
+
+    user.password_hash = hash_p(password)
+    user.reset_token = None
+    user.reset_token_expires = None
+    db.commit()
+    return templates.TemplateResponse("reset_password.html", {"request": request, "token": token, "error": None, "success": True})

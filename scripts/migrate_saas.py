@@ -215,7 +215,8 @@ def migrate():
                     UPDATE system_configs 
                     SET organization_id = :org_id 
                     WHERE organization_id IS NULL 
-                      AND key NOT IN ('last_market_regime', 'last_regime_check', 'last_heartbeat');
+                      AND key NOT IN ('last_market_regime', 'last_regime_check', 'last_heartbeat',
+                                      'mock_time_enabled', 'mock_current_time', 'ibkr_simulate', 'mock_market_regime');
                 """), {"org_id": default_org_id})
             else:
                 conn.execute(text(f"""
@@ -321,29 +322,76 @@ def migrate():
             VALUES (:uid, :rid)
             ON CONFLICT DO NOTHING;
         """), {"uid": uid, "rid": admin_role_id})
+
+        # ── Watchlist labels table ─────────────────────────────────────────────
+        logger.info("Creating 'watchlist_labels' table...")
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS watchlist_labels (
+                id SERIAL PRIMARY KEY,
+                organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                name VARCHAR(64) NOT NULL,
+                color VARCHAR(16) NOT NULL DEFAULT '#f59e0b',
+                is_default BOOLEAN NOT NULL DEFAULT FALSE,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT TIMEZONE('utc', NOW())
+            );
+            CREATE INDEX IF NOT EXISTS ix_watchlist_labels_org ON watchlist_labels (organization_id);
+        """))
+        conn.commit()
+
+        # Add label_id column to watchlist if missing
+        lbl_col = conn.execute(text("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'watchlist' AND column_name = 'label_id';
+        """)).fetchone()
+        if not lbl_col:
+            logger.info("Adding 'label_id' column to 'watchlist'...")
+            conn.execute(text("""
+                ALTER TABLE watchlist
+                ADD COLUMN label_id INTEGER REFERENCES watchlist_labels(id) ON DELETE SET NULL;
+            """))
+            conn.commit()
+
+        # Add rule_overrides column to signals if missing
+        sig_ovr_col = conn.execute(text("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'signals' AND column_name = 'rule_overrides';
+        """)).fetchone()
+        if not sig_ovr_col:
+            logger.info("Adding 'rule_overrides' column to 'signals'...")
+            conn.execute(text("ALTER TABLE signals ADD COLUMN rule_overrides JSONB DEFAULT '{}'::jsonb;"))
+            conn.commit()
+
         # Ensure all organizations have the required system config keys
         configs_to_ensure = [
             ("trading_paused", "false", "BOOLEAN", "Trading Paused", "Toggles automated trade placement", "general", False),
             ("whatsapp_enabled", "true", "BOOLEAN", "WhatsApp Alerts", "Enables real-time notifications", "whatsapp", False),
             ("whatsapp_admin_number", "", "STRING", "WhatsApp Admin Number", "Number to send alerts and receive commands JID format", "whatsapp", False),
             ("whatsapp_api_key", settings.waha_api_key, "STRING", "WhatsApp API Key", "API key for the WhatsApp (WAHA) service", "whatsapp", True),
-            # Session name set per-org below using org_id — do not hardcode "default" here
-            ("whatsapp_session_name", "default", "STRING", "WhatsApp Session Name", "WAHA session name (always 'default' for WAHA Core; use WAHA Plus for per-org sessions)", "whatsapp", False),
+            ("whatsapp_session_name", "default", "STRING", "WhatsApp Session Name", "WAHA session name (always \'default\' for WAHA Core)", "whatsapp", False),
             ("ibkr_account", "", "STRING", "IBKR Account ID", "Interactive Brokers account number", "broker", False),
             ("ibkr_username", "", "STRING", "IBKR Username", "Interactive Brokers login username", "broker", False),
             ("ibkr_password", "", "STRING", "IBKR Password", "Interactive Brokers login password", "broker", True),
             ("ibkr_paper_mode", "true", "BOOLEAN", "IBKR Paper Mode", "Use paper trading environment", "broker", False),
             ("fmp_api_key", "", "STRING", "FMP API Key", "Financial Modeling Prep API key", "general", True),
-            ("weekly_injection_aud", "1000.0", "FLOAT", "Weekly Injection (AUD)", "Capital added weekly for sizing", "general", False),
+            ("working_capital_aud", "5000.0", "FLOAT", "Working Capital (AUD)", "Working capital used for sizing and risk calculations", "general", False),
+            ("org_timezone", "Australia/Sydney", "STRING", "Display Timezone",
+             "IANA timezone for displaying timestamps (e.g. UTC, Australia/Sydney). "
+             "Beat schedules always run on AEST since ASX is in Sydney.", "general", False),
         ]
+        try:
+            conn.execute(text("DELETE FROM system_configs WHERE key = 'weekly_injection_aud';"))
+            conn.commit()
+        except Exception:
+            pass
         orgs_res = conn.execute(text("SELECT id FROM organizations;")).fetchall()
         for org in orgs_res:
             org_id = org[0]
-            
+
             # Ensure config keys exist
             for key, val, vtype, label, desc, group, is_secret in configs_to_ensure:
                 existing_cfg = conn.execute(text("""
-                    SELECT 1 FROM system_configs 
+                    SELECT 1 FROM system_configs
                     WHERE key = :key AND organization_id = :org_id;
                 """), {"key": key, "org_id": org_id}).fetchone()
                 if not existing_cfg:
@@ -356,10 +404,44 @@ def migrate():
                         "description": desc, "org_id": org_id, "group": group, "is_secret": is_secret
                     })
 
-            has_rules = conn.execute(text("SELECT 1 FROM rule_configs WHERE organization_id = :org_id LIMIT 1;"), {"org_id": org_id}).fetchone()
+            # Fix org_timezone label/description for existing rows
+            conn.execute(text("""
+                UPDATE system_configs
+                SET label = 'Display Timezone',
+                    description = 'IANA timezone for displaying timestamps. Beat schedules always run on AEST.'
+                WHERE key = 'org_timezone' AND organization_id = :org_id;
+            """), {"org_id": org_id})
+            conn.commit()
+
+            # Seed default watchlist labels for org if none exist
+            has_labels = conn.execute(text(
+                "SELECT 1 FROM watchlist_labels WHERE organization_id = :org_id LIMIT 1;"
+            ), {"org_id": org_id}).fetchone()
+            if not has_labels:
+                logger.info(f"Seeding default watchlist labels for org {org_id}...")
+                default_labels = [
+                    ("Favourites", "#f59e0b", True, 0),
+                    ("High Priority", "#ef4444", False, 1),
+                    ("VCP Forming", "#3b82f6", False, 2),
+                    ("Under Review", "#8b5cf6", False, 3),
+                ]
+                for lname, lcolor, lis_default, lorder in default_labels:
+                    conn.execute(text("""
+                        INSERT INTO watchlist_labels (organization_id, name, color, is_default, sort_order)
+                        VALUES (:org_id, :name, :color, :is_default, :sort_order)
+                        ON CONFLICT DO NOTHING;
+                    """), {"org_id": org_id, "name": lname, "color": lcolor,
+                           "is_default": lis_default, "sort_order": lorder})
+                conn.commit()
+
+            # Clone global template rules for org if none exist
+            has_rules = conn.execute(text(
+                "SELECT 1 FROM rule_configs WHERE organization_id = :org_id LIMIT 1;"
+            ), {"org_id": org_id}).fetchone()
             if not has_rules:
-                # Check if template rules exist
-                has_templates = conn.execute(text("SELECT 1 FROM rule_configs WHERE organization_id IS NULL LIMIT 1;")).fetchone()
+                has_templates = conn.execute(text(
+                    "SELECT 1 FROM rule_configs WHERE organization_id IS NULL LIMIT 1;"
+                )).fetchone()
                 if has_templates:
                     logger.info(f"Cloning global template rules for organization ID {org_id}...")
                     conn.execute(text("""
@@ -368,7 +450,7 @@ def migrate():
                             enabled_globally, threshold, threshold_label, threshold_min, threshold_max,
                             tier_overrides, is_mandatory, sort_order, updated_by
                         )
-                        SELECT 
+                        SELECT
                             rule_id, :org_id, category, label, description, minervini_ref,
                             enabled_globally, threshold, threshold_label, threshold_min, threshold_max,
                             tier_overrides, is_mandatory, sort_order, 'migration'
@@ -376,6 +458,64 @@ def migrate():
                         WHERE organization_id IS NULL;
                     """), {"org_id": org_id})
                     conn.commit()
+        conn.commit()
+
+        # ── Seed global system configs (organization_id IS NULL) ─────────────────
+        global_system_configs = [
+            ("mock_time_enabled", "false", "BOOLEAN", "Mock Time Enabled",
+             "Enable global clock mocking for rule testing", "system"),
+            ("mock_current_time", "", "STRING", "Mock Current Time",
+             "Simulated datetime in YYYY-MM-DD HH:MM:SS format", "system"),
+            ("ibkr_simulate", "false", "BOOLEAN", "IBKR Simulation Mode",
+             "When true, orders are simulated locally without sending to IBKR Gateway", "system"),
+        ]
+        for key, val, vtype, label, desc, group in global_system_configs:
+            exists = conn.execute(text(
+                "SELECT 1 FROM system_configs WHERE key = :k AND organization_id IS NULL;"
+            ), {"k": key}).fetchone()
+            if not exists:
+                logger.info(f"Seeding global system config '{key}'...")
+                conn.execute(text(
+                    "INSERT INTO system_configs (key, value, value_type, label, description, \"group\", organization_id) "
+                    "VALUES (:key, :val, :vtype, :label, :desc, :group, NULL) ON CONFLICT DO NOTHING;"
+                ), {"key": key, "val": val, "vtype": vtype, "label": label, "desc": desc, "group": group})
+        conn.commit()
+
+        # ── entry_check_logs table ─────────────────────────────────────────────
+        logger.info("Creating 'entry_check_logs' table...")
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS entry_check_logs (
+                id              SERIAL PRIMARY KEY,
+                organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                signal_id       INTEGER REFERENCES signals(id) ON DELETE SET NULL,
+                ticker          VARCHAR(16) NOT NULL,
+                checked_at      TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT TIMEZONE('utc', NOW()),
+                price_current   NUMERIC(12, 4),
+                price_pivot     NUMERIC(12, 4),
+                price_stop      NUMERIC(12, 4),
+                price_vs_pivot  NUMERIC(8, 4),
+                vol_current     BIGINT,
+                vol_avg_50      NUMERIC(18, 2),
+                vol_ratio       NUMERIC(8, 4),
+                ma_10           NUMERIC(12, 4),
+                ma_50           NUMERIC(12, 4),
+                ma_150          NUMERIC(12, 4),
+                ma_200          NUMERIC(12, 4),
+                high_52w        NUMERIC(12, 4),
+                low_52w         NUMERIC(12, 4),
+                pct_from_52w_high NUMERIC(8, 4),
+                rs_rating       NUMERIC(6, 2),
+                breakout_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+                rule_results    JSONB DEFAULT '{}'::jsonb,
+                data_source     VARCHAR(32) DEFAULT 'yfinance',
+                data_delay_mins INTEGER DEFAULT 20,
+                bar_timestamp   TIMESTAMP WITHOUT TIME ZONE,
+                created_at      TIMESTAMP WITHOUT TIME ZONE DEFAULT TIMEZONE('utc', NOW())
+            );
+            CREATE INDEX IF NOT EXISTS ix_ecl_org_checked ON entry_check_logs (organization_id, checked_at DESC);
+            CREATE INDEX IF NOT EXISTS ix_ecl_ticker      ON entry_check_logs (ticker);
+            CREATE INDEX IF NOT EXISTS ix_ecl_signal      ON entry_check_logs (signal_id);
+        """))
         conn.commit()
 
     logger.info("SaaS/Multi-tenant migration and seeding complete!")

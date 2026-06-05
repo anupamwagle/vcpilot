@@ -49,13 +49,14 @@ def get_trading_days(start: date, end: date) -> list[date]:
 
 
 def today_is_trading_day() -> bool:
-    return is_trading_day(date.today())
+    from app.utils.time_helper import get_current_date
+    return is_trading_day(get_current_date())
 
 
 def market_is_open_now() -> bool:
     """Check if ASX is currently in session (AEST 10:00–16:12)."""
-    from zoneinfo import ZoneInfo
-    now_aest = datetime.now(ZoneInfo("Australia/Sydney"))
+    from app.utils.time_helper import get_current_time
+    now_aest = get_current_time()
     if not is_trading_day(now_aest.date()):
         return False
     open_time  = now_aest.replace(hour=10, minute=0, second=0, microsecond=0)
@@ -65,18 +66,18 @@ def market_is_open_now() -> bool:
 
 def minutes_to_open() -> int:
     """Minutes until next ASX open. Returns 0 if market is open."""
-    from zoneinfo import ZoneInfo
-    now_aest = datetime.now(ZoneInfo("Australia/Sydney"))
+    import pytz
+    from app.utils.time_helper import get_current_time
+    aest = pytz.timezone("Australia/Sydney")
+    now_aest = get_current_time()
     if market_is_open_now():
         return 0
-    # Find next open
     candidate = now_aest.date()
     for _ in range(10):
         if is_trading_day(candidate):
-            open_dt = datetime(
-                candidate.year, candidate.month, candidate.day, 10, 0,
-                tzinfo=ZoneInfo("Australia/Sydney")
-            )
+            open_dt = aest.localize(datetime(
+                candidate.year, candidate.month, candidate.day, 10, 0
+            ))
             if open_dt > now_aest:
                 delta = open_dt - now_aest
                 return int(delta.total_seconds() / 60)

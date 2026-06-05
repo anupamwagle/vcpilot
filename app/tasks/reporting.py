@@ -4,6 +4,7 @@ Reporting tasks — daily P&L report, health checks.
 from __future__ import annotations
 from datetime import date
 from loguru import logger
+from app.utils.time_helper import get_current_date
 
 from app.tasks.celery_app import app
 from app.database import get_db
@@ -16,7 +17,7 @@ from app.notifications.whatsapp import WhatsAppNotifier
 
 def generate_daily_report(organization_id: int = None) -> dict:
     """Generate daily report dict. Scoped by organization if provided."""
-    today = date.today()
+    today = get_current_date()
     with get_db() as db:
         if organization_id:
             signals_today = db.query(Signal).filter(

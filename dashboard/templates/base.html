@@ -62,9 +62,9 @@
       --shadow:        none;
       --shadow-md:     none;
 
-      --t-accent:      #34d399;
-      --t-accent-bg:   rgba(52,211,153,.10);
-      --t-accent-mid:  rgba(52,211,153,.18);
+      --t-accent:      #60a5fa;   /* blue-400 — readable on dark bg */
+      --t-accent-bg:   rgba(96,165,250,.10);
+      --t-accent-mid:  rgba(96,165,250,.22);
       --a-accent:      #a78bfa;
       --a-accent-bg:   rgba(167,139,250,.10);
       --a-accent-mid:  rgba(167,139,250,.18);
@@ -331,6 +331,11 @@
       <p class="text-xs mt-0.5" style="color:var(--text-subtle)">ASX · Minervini SEPA</p>
     </div>
     {% if user_role != 'superadmin' %}
+      {% if regime == 'BULL' %}<span class="badge badge-bull" style="font-size:.65rem;padding:2px 6px">🟢 BULL</span>
+      {% elif regime == 'CAUTION' %}<span class="badge badge-caution" style="font-size:.65rem;padding:2px 6px">🟡 CAUTION</span>
+      {% elif regime == 'BEAR' %}<span class="badge badge-bear" style="font-size:.65rem;padding:2px 6px">🔴 BEAR</span>
+      {% elif not regime_set %}<span class="badge" style="font-size:.65rem;padding:2px 6px;background:var(--surface-alt);color:var(--text-subtle);border-color:var(--border)">⚪ N/A</span>
+      {% endif %}
       {% if is_paper %}<span class="badge badge-paper">PAPER</span>
       {% else %}<span class="badge badge-live">LIVE</span>{% endif %}
     {% endif %}
@@ -386,7 +391,11 @@
     <a href="/admin/tasks" onclick="closeIfMobile()" class="nav-link {% if path == '/admin/tasks' %}active-a{% endif %}">
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
       Task Log
-      <span class="nav-badge" style="background:var(--pos-bg);color:var(--pos)">Live</span>
+      <span class="nav-badge">Live</span>
+    </a>
+    <a href="/admin/data-log" onclick="closeIfMobile()" class="nav-link {% if path == '/admin/data-log' %}active-a{% endif %}">
+      <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+      Data Log
     </a>
     {% if whatsapp_enabled %}
     <a href="/admin/whatsapp" onclick="closeIfMobile()" class="nav-link {% if path == '/admin/whatsapp' %}active-a{% endif %}">
@@ -403,18 +412,22 @@
     </a>
     <a href="/superadmin/rules" onclick="closeIfMobile()" class="nav-link {% if path == '/superadmin/rules' %}active-a{% endif %}">
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
-      Global Rules
+      Global Config
     </a>
     <a href="/superadmin/users" onclick="closeIfMobile()" class="nav-link {% if path == '/superadmin/users' %}active-a{% endif %}">
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
       Global Users
     </a>
+    <a href="/superadmin/data" onclick="closeIfMobile()" class="nav-link {% if path.startswith('/superadmin/data') %}active-a{% endif %}">
+      <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/></svg>
+      Market Data
+    </a>
     {% endif %}
   </nav>
 
-  <!-- Sidebar footer — user identity + sign out -->
+  <!-- Sidebar footer — worker status only -->
   <div id="sidebar-footer" class="flex-shrink-0" style="border-top:1px solid var(--border)">
-    <div class="px-4 py-2 flex items-center gap-1.5 text-xs" style="color:var(--text-subtle);border-bottom:1px solid var(--border)">
+    <div class="px-4 py-3 flex items-center gap-1.5 text-xs" style="color:var(--text-subtle)">
       {% if worker_status == 'online' %}
         <span class="w-1.5 h-1.5 rounded-full animate-pulse flex-shrink-0" style="background:var(--pos)"></span>Worker OK
       {% elif worker_status == 'starting' %}
@@ -422,26 +435,6 @@
       {% else %}
         <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" style="background:var(--neg)"></span>Worker offline
       {% endif %}
-    </div>
-    <div class="px-3 py-3 flex items-center gap-3">
-      <div class="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold"
-           style="background:{% if user_role == 'superadmin' %}var(--a-accent){% else %}var(--t-accent){% endif %}">
-        {{ user_name[0]|upper if user_name else '?' }}
-      </div>
-      <div class="flex-1 min-w-0">
-        <p class="text-xs font-semibold truncate" style="color:var(--text)" title="{{ user_email }}">{{ user_name }}</p>
-        <p class="text-xs truncate" style="color:var(--text-subtle)">
-          {% if user_role == 'superadmin' %}Super Admin{% elif org_name %}{{ org_name }}{% else %}Trader{% endif %}
-        </p>
-      </div>
-      <a href="/logout" title="Sign out" class="flex-shrink-0 p-1.5 rounded-lg transition"
-         style="color:var(--text-subtle)"
-         onmouseover="this.style.color='var(--neg)'" onmouseout="this.style.color='var(--text-subtle)'">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
-        </svg>
-      </a>
     </div>
   </div>
 </aside>
@@ -474,13 +467,11 @@
       <!-- Status pills + controls -->
       <div class="flex items-center gap-2 flex-shrink-0">
 
-        {% if user_role != 'superadmin' %}
-        <!-- Market regime badge -->
-        {% if regime == 'BULL' %}<span class="badge badge-bull">🟢 BULL</span>
-        {% elif regime == 'CAUTION' %}<span class="badge badge-caution hidden sm:inline-flex">🟡 CAUTION</span>
-        {% elif regime == 'BEAR' %}<span class="badge badge-bear">🔴 BEAR</span>
-        {% elif not regime_set %}<span class="badge hidden sm:inline-flex" style="background:var(--surface-alt);color:var(--text-subtle);border-color:var(--border)">⚪ No regime</span>
+        {% if ibkr_simulate %}
+        <span class="badge" style="background:var(--warn-bg);color:var(--warn);border-color:rgba(217,119,6,.3)">🛠️ SIMULATOR</span>
         {% endif %}
+
+        {% if user_role != 'superadmin' %}
 
         <!-- Trading status -->
         {% if not trading_active %}
@@ -531,6 +522,28 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
           </svg>
         </button>
+
+        <!-- User profile details & Logout -->
+        <div class="flex items-center gap-2 border-l pl-2" style="border-color:var(--border)">
+          <div class="hidden md:flex flex-col text-right">
+            <span class="text-xs font-semibold" style="color:var(--text); line-height: 1.25">{{ user_name }}</span>
+            <span class="text-[10px]" style="color:var(--text-muted); line-height: 1.25">
+              {% if user_role == 'superadmin' %}Super Admin{% elif org_name %}{{ org_name }}{% else %}Trader{% endif %}
+            </span>
+          </div>
+          <div class="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0"
+               style="background:{% if user_role == 'superadmin' %}var(--a-accent){% else %}var(--t-accent){% endif %}">
+            {{ user_name[0]|upper if user_name else '?' }}
+          </div>
+          <a href="/logout" title="Sign out" class="p-1 rounded-lg transition"
+             style="color:var(--text-subtle)"
+             onmouseover="this.style.color='var(--neg)'" onmouseout="this.style.color='var(--text-subtle)'">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                    d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+            </svg>
+          </a>
+        </div>
       </div>
     </div>
   </header>

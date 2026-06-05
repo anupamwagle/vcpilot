@@ -1,0 +1,427 @@
+{% extends "base.html" %}
+{% block title %}Data — SaaS Management{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">🗄️ Market Data</h1>
+    <p class="page-subtitle">Centralized ASX universe and price bars — shared across all organizations</p>
+  </div>
+</div>
+
+<!-- Summary cards -->
+<div class="stats-grid mb-5">
+  <div class="stat-card">
+    <p class="stat-label">Active Stocks</p>
+    <p class="stat-value">{{ total_stocks_db }}</p>
+    <p class="stat-sub">in universe</p>
+  </div>
+  <div class="stat-card">
+    <p class="stat-label">Price Bars</p>
+    <p class="stat-value">{{ "{:,}".format(total_bars_db) }}</p>
+    <p class="stat-sub">total OHLCV rows</p>
+  </div>
+  <div class="stat-card">
+    <p class="stat-label">Latest Bar Date</p>
+    <p class="stat-value" style="font-size:1rem">{{ latest_bar_date }}</p>
+    <p class="stat-sub">most recent EOD data</p>
+  </div>
+  <div class="stat-card">
+    <p class="stat-label">Data Source</p>
+    <p class="stat-value" style="font-size:.95rem">yfinance</p>
+    <p class="stat-sub" style="color:var(--warn)">~15–20 min delayed</p>
+  </div>
+</div>
+
+<!-- Tabs -->
+<div class="flex gap-1 mb-4 border-b" style="border-color:var(--border)">
+  <a href="/superadmin/data?tab=universe{% if search %}&search={{ search }}{% endif %}"
+     class="tab-btn {% if tab == 'universe' %}tab-active{% endif %}">
+    📊 ASX Universe
+    <span class="tab-count">{{ total if tab == 'universe' else total_stocks_db }}</span>
+  </a>
+  <a href="/superadmin/data?tab=custom{% if search %}&search={{ search }}{% endif %}"
+     class="tab-btn {% if tab == 'custom' %}tab-active{% endif %}">
+    ⭐ Custom Stocks
+    <span class="tab-count">{{ total if tab == 'custom' else '—' }}</span>
+  </a>
+</div>
+
+{% if tab == 'universe' %}
+<!-- ══════════════════════════════════════════════════════════════════
+     TAB 1 — ASX Universe
+═══════════════════════════════════════════════════════════════════ -->
+
+<!-- Filters -->
+<div class="card p-3 mb-4">
+  <form method="get" action="/superadmin/data" class="flex flex-wrap items-end gap-3">
+    <input type="hidden" name="tab" value="universe">
+
+    <div class="flex flex-col gap-1">
+      <label class="text-xs font-semibold" style="color:var(--text-muted)">Search</label>
+      <input type="text" name="search" value="{{ search }}"
+             placeholder="Ticker or name…"
+             class="input py-1.5 px-3 text-sm" style="min-width:160px">
+    </div>
+
+    <div class="flex flex-col gap-1">
+      <label class="text-xs font-semibold" style="color:var(--text-muted)">Sector</label>
+      <select name="sector" class="input py-1.5 px-2 text-sm" style="min-width:150px">
+        <option value="">All sectors</option>
+        {% for s in sectors %}
+        <option value="{{ s }}" {% if sector == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- Sort -->
+    <div class="flex flex-col gap-1">
+      <label class="text-xs font-semibold" style="color:var(--text-muted)">Sort by</label>
+      <select name="sort_by" class="input py-1.5 px-2 text-sm">
+        {% for val, lbl in [('ticker','Ticker'),('rs_rating','RS Rating'),('last_price','Last Price'),('vol_ratio','Volume Ratio'),('market_cap','Market Cap')] %}
+        <option value="{{ val }}" {% if sort_by == val %}selected{% endif %}>{{ lbl }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="flex flex-col gap-1">
+      <label class="text-xs font-semibold" style="color:var(--text-muted)">Direction</label>
+      <select name="sort_dir" class="input py-1.5 px-2 text-sm">
+        <option value="asc"  {% if sort_dir == 'asc'  %}selected{% endif %}>↑ Asc</option>
+        <option value="desc" {% if sort_dir == 'desc' %}selected{% endif %}>↓ Desc</option>
+      </select>
+    </div>
+
+    <button type="submit" class="btn-primary py-1.5 px-3 text-xs mt-4">Apply</button>
+    <a href="/superadmin/data?tab=universe" class="btn-ghost py-1.5 px-3 text-xs mt-4">Reset</a>
+  </form>
+</div>
+
+<!-- Results summary -->
+<div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+  <p class="text-sm" style="color:var(--text-muted)">
+    Showing <strong style="color:var(--text)">{{ rows|length }}</strong> of
+    <strong style="color:var(--text)">{{ total }}</strong> stocks
+    {% if sector %} · sector: <strong>{{ sector }}</strong>{% endif %}
+    · page {{ page }}/{{ total_pages }}
+    · avg RS: <strong style="color:var(--pos)">{{ avg_rs }}</strong>
+  </p>
+  <!-- Pagination -->
+  <div class="flex gap-1">
+    {% if page > 1 %}
+    <a href="/superadmin/data?tab=universe&page={{ page-1 }}&search={{ search }}&sector={{ sector }}&sort_by={{ sort_by }}&sort_dir={{ sort_dir }}"
+       class="btn-ghost py-1 px-2 text-xs">← Prev</a>
+    {% endif %}
+    {% if page < total_pages %}
+    <a href="/superadmin/data?tab=universe&page={{ page+1 }}&search={{ search }}&sector={{ sector }}&sort_by={{ sort_by }}&sort_dir={{ sort_dir }}"
+       class="btn-ghost py-1 px-2 text-xs">Next →</a>
+    {% endif %}
+  </div>
+</div>
+
+{% if rows %}
+<div class="card overflow-x-auto">
+  <table class="w-full text-sm" style="border-collapse:separate;border-spacing:0">
+    <thead>
+      <tr style="border-bottom:1px solid var(--border);background:var(--surface-alt)">
+        {% macro sort_th(col, label) %}
+        <th class="p-3 text-left whitespace-nowrap">
+          <a href="/superadmin/data?tab=universe&sort_by={{ col }}&sort_dir={% if sort_by == col and sort_dir == 'asc' %}desc{% else %}asc{% endif %}&search={{ search }}&sector={{ sector }}&page=1"
+             class="flex items-center gap-1 text-xs font-semibold hover:opacity-80"
+             style="color:{% if sort_by == col %}var(--t-accent){% else %}var(--text-muted){% endif %}">
+            {{ label }}
+            {% if sort_by == col %}{% if sort_dir == 'asc' %}↑{% else %}↓{% endif %}{% endif %}
+          </a>
+        </th>
+        {% endmacro %}
+        {{ sort_th('ticker', 'Ticker') }}
+        <th class="p-3 text-left text-xs font-semibold" style="color:var(--text-muted)">Name / Sector</th>
+        {{ sort_th('last_price', 'Close') }}
+        {{ sort_th('vol_ratio', 'Vol ×') }}
+        <th class="p-3 text-right text-xs font-semibold" style="color:var(--text-muted)">MA50</th>
+        <th class="p-3 text-right text-xs font-semibold" style="color:var(--text-muted)">MA150</th>
+        <th class="p-3 text-right text-xs font-semibold" style="color:var(--text-muted)">MA200</th>
+        <th class="p-3 text-right text-xs font-semibold" style="color:var(--text-muted)">52w High%</th>
+        {{ sort_th('rs_rating', 'RS') }}
+        <th class="p-3 text-right text-xs font-semibold" style="color:var(--text-muted)">ATR14</th>
+        <th class="p-3 text-left text-xs font-semibold" style="color:var(--text-muted)">Bar Date</th>
+        <th class="p-3 text-left text-xs font-semibold" style="color:var(--text-muted)">Index</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr style="border-bottom:1px solid var(--border)" class="hover-row">
+        <!-- Ticker -->
+        <td class="p-3 whitespace-nowrap">
+          <span style="display:inline-flex;align-items:center;gap:.35rem">
+            <form method="post" action="/watchlist/toggle-favourite" style="display:inline">
+              <input type="hidden" name="ticker" value="{{ r.ticker }}">
+              <input type="hidden" name="redirect_url" value="{{ path }}">
+              <button type="submit" class="focus:outline-none" style="color:#f59e0b;background:none;border:none;padding:0;cursor:pointer;font-size:1rem;line-height:1" title="Toggle Favourite">
+                {% if r.ticker in favourited_tickers %}★{% else %}☆{% endif %}
+              </button>
+            </form>
+            <span class="font-mono font-bold text-sm" style="color:var(--t-accent)">{{ r.asx_code }}</span>
+            <span class="text-xs ml-1" style="color:var(--text-subtle)">.AX</span>
+          </span>
+        </td>
+
+        <!-- Name / sector -->
+        <td class="p-3" style="max-width:200px">
+          <p class="text-sm truncate font-medium" style="color:var(--text)" title="{{ r.name }}">{{ r.name or '—' }}</p>
+          {% if r.sector %}
+          <p class="text-xs truncate" style="color:var(--text-subtle)">{{ r.sector }}</p>
+          {% endif %}
+        </td>
+
+        <!-- Close price -->
+        <td class="p-3 text-right font-mono text-sm font-semibold" style="color:var(--text)">
+          {% if r.close %}${{ "%.3f"|format(r.close) }}
+          {% elif r.last_price %}${{ "%.3f"|format(r.last_price) }}
+          {% else %}—{% endif %}
+        </td>
+
+        <!-- Volume ratio -->
+        <td class="p-3 text-right font-mono text-xs font-semibold">
+          {% if r.vol_ratio is not none %}
+          <span style="color:{% if r.vol_ratio >= 1.5 %}var(--pos){% elif r.vol_ratio >= 1.0 %}var(--warn){% else %}var(--neg){% endif %}">
+            {{ "%.2f"|format(r.vol_ratio) }}×
+          </span>
+          {% else %}—{% endif %}
+        </td>
+
+        <!-- MA50 -->
+        <td class="p-3 text-right font-mono text-xs" style="color:var(--text-muted)">
+          {% if r.ma_50 and r.close %}
+          <span style="color:{% if r.close > r.ma_50 %}var(--pos){% else %}var(--neg){% endif %}">
+            ${{ "%.3f"|format(r.ma_50) }}
+          </span>
+          {% elif r.ma_50 %}${{ "%.3f"|format(r.ma_50) }}
+          {% else %}—{% endif %}
+        </td>
+
+        <!-- MA150 -->
+        <td class="p-3 text-right font-mono text-xs" style="color:var(--text-muted)">
+          {% if r.ma_150 %}${{ "%.3f"|format(r.ma_150) }}{% else %}—{% endif %}
+        </td>
+
+        <!-- MA200 -->
+        <td class="p-3 text-right font-mono text-xs" style="color:var(--text-muted)">
+          {% if r.ma_200 and r.close %}
+          <span style="color:{% if r.close > r.ma_200 %}var(--pos){% else %}var(--neg){% endif %}">
+            ${{ "%.3f"|format(r.ma_200) }}
+          </span>
+          {% elif r.ma_200 %}${{ "%.3f"|format(r.ma_200) }}
+          {% else %}—{% endif %}
+        </td>
+
+        <!-- % from 52w high -->
+        <td class="p-3 text-right font-mono text-xs font-semibold">
+          {% if r.pct_from_52w_high is not none %}
+          <span style="color:{% if r.pct_from_52w_high >= -10 %}var(--pos){% elif r.pct_from_52w_high >= -25 %}var(--warn){% else %}var(--neg){% endif %}">
+            {{ "%+.1f"|format(r.pct_from_52w_high) }}%
+          </span>
+          {% else %}—{% endif %}
+        </td>
+
+        <!-- RS Rating -->
+        <td class="p-3 text-right">
+          {% if r.rs_rating is not none %}
+          <span class="rs-badge" style="{% if r.rs_rating >= 80 %}background:var(--pos-bg);color:var(--pos){% elif r.rs_rating >= 60 %}background:var(--warn-bg);color:var(--warn){% else %}background:var(--neg-bg);color:var(--neg){% endif %}">
+            {{ r.rs_rating|int }}
+          </span>
+          {% else %}<span style="color:var(--text-subtle)">—</span>{% endif %}
+        </td>
+
+        <!-- ATR14 -->
+        <td class="p-3 text-right font-mono text-xs" style="color:var(--text-muted)">
+          {% if r.atr_14 %}{{ "%.3f"|format(r.atr_14) }}{% else %}—{% endif %}
+        </td>
+
+        <!-- Bar date -->
+        <td class="p-3 text-xs whitespace-nowrap" style="color:var(--text-subtle)">
+          {{ r.bar_date or '—' }}
+          {% if not r.has_bar %}
+          <span class="text-xs" style="color:var(--neg)">no bar</span>
+          {% endif %}
+        </td>
+
+        <!-- Index membership -->
+        <td class="p-3">
+          {% if r.in_asx200 %}
+          <span class="badge-sm" style="background:var(--t-accent-bg);color:var(--t-accent)">ASX200</span>
+          {% else %}
+          <span class="badge-sm" style="background:var(--surface-alt);color:var(--text-subtle)">Other</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% else %}
+<div class="card p-8 text-center">
+  <p class="text-4xl mb-3">📭</p>
+  <p class="font-semibold mb-1" style="color:var(--text)">No stocks found</p>
+  <p class="text-sm" style="color:var(--text-muted)">
+    Run <strong>Refresh Price Data</strong> from
+    <a href="/admin/health" style="color:var(--t-accent)">Admin → Health</a> to populate the universe.
+  </p>
+</div>
+{% endif %}
+
+
+{% else %}
+<!-- ══════════════════════════════════════════════════════════════════
+     TAB 2 — Custom Stocks (per-org, not in ASX200)
+═══════════════════════════════════════════════════════════════════ -->
+
+<!-- Search -->
+<div class="card p-3 mb-4">
+  <form method="get" action="/superadmin/data" class="flex items-end gap-3">
+    <input type="hidden" name="tab" value="custom">
+    <div class="flex flex-col gap-1">
+      <label class="text-xs font-semibold" style="color:var(--text-muted)">Search</label>
+      <input type="text" name="search" value="{{ search }}"
+             placeholder="Ticker or name…"
+             class="input py-1.5 px-3 text-sm" style="min-width:160px">
+    </div>
+    <button type="submit" class="btn-primary py-1.5 px-3 text-xs mt-4">Search</button>
+    <a href="/superadmin/data?tab=custom" class="btn-ghost py-1.5 px-3 text-xs mt-4">Reset</a>
+  </form>
+</div>
+
+<p class="text-sm mb-3" style="color:var(--text-muted)">
+  <strong style="color:var(--text)">{{ total }}</strong> custom ticker{% if total != 1 %}s{% endif %}
+  tracked by orgs — stocks not in the ASX200 universe added manually via Watchlist
+</p>
+
+{% if custom_rows %}
+<div class="card overflow-x-auto">
+  <table class="w-full text-sm" style="border-collapse:separate;border-spacing:0">
+    <thead>
+      <tr style="border-bottom:1px solid var(--border);background:var(--surface-alt)">
+        <th class="p-3 text-left text-xs font-semibold" style="color:var(--text-muted)">Ticker</th>
+        <th class="p-3 text-left text-xs font-semibold" style="color:var(--text-muted)">Name / Sector</th>
+        <th class="p-3 text-left text-xs font-semibold" style="color:var(--text-muted)">Organization</th>
+        <th class="p-3 text-right text-xs font-semibold" style="color:var(--text-muted)">Close</th>
+        <th class="p-3 text-right text-xs font-semibold" style="color:var(--text-muted)">Vol ×</th>
+        <th class="p-3 text-right text-xs font-semibold" style="color:var(--text-muted)">MA50</th>
+        <th class="p-3 text-right text-xs font-semibold" style="color:var(--text-muted)">MA200</th>
+        <th class="p-3 text-right text-xs font-semibold" style="color:var(--text-muted)">52w High%</th>
+        <th class="p-3 text-right text-xs font-semibold" style="color:var(--text-muted)">RS</th>
+        <th class="p-3 text-left text-xs font-semibold" style="color:var(--text-muted)">Bar Date</th>
+        <th class="p-3 text-left text-xs font-semibold" style="color:var(--text-muted)">Added</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in custom_rows %}
+      <tr style="border-bottom:1px solid var(--border)" class="hover-row">
+        <td class="p-3 whitespace-nowrap">
+          <span style="display:inline-flex;align-items:center;gap:.35rem">
+            <form method="post" action="/watchlist/toggle-favourite" style="display:inline">
+              <input type="hidden" name="ticker" value="{{ r.ticker }}">
+              <input type="hidden" name="redirect_url" value="{{ path }}">
+              <button type="submit" class="focus:outline-none" style="color:#f59e0b;background:none;border:none;padding:0;cursor:pointer;font-size:1rem;line-height:1" title="Toggle Favourite">
+                {% if r.ticker in favourited_tickers %}★{% else %}☆{% endif %}
+              </button>
+            </form>
+            <span class="font-mono font-bold text-sm" style="color:var(--a-accent)">{{ r.ticker }}</span>
+            {% if r.org_count > 1 %}
+            <span class="badge-sm ml-1" style="background:var(--a-accent-bg);color:var(--a-accent)">{{ r.org_count }} orgs</span>
+            {% endif %}
+          </span>
+        </td>
+        <td class="p-3" style="max-width:180px">
+          <p class="text-sm truncate" style="color:var(--text)">{{ r.name or '—' }}</p>
+          {% if r.sector %}<p class="text-xs" style="color:var(--text-subtle)">{{ r.sector }}</p>{% endif %}
+        </td>
+        <td class="p-3 text-sm" style="color:var(--text-muted)">{{ r.org_name }}</td>
+        <td class="p-3 text-right font-mono text-sm" style="color:var(--text)">
+          {% if r.close %}${{ "%.3f"|format(r.close) }}{% else %}—{% endif %}
+        </td>
+        <td class="p-3 text-right font-mono text-xs font-semibold">
+          {% if r.vol_ratio is not none %}
+          <span style="color:{% if r.vol_ratio >= 1.5 %}var(--pos){% elif r.vol_ratio >= 1.0 %}var(--warn){% else %}var(--neg){% endif %}">
+            {{ "%.2f"|format(r.vol_ratio) }}×
+          </span>
+          {% else %}—{% endif %}
+        </td>
+        <td class="p-3 text-right font-mono text-xs" style="color:var(--text-muted)">
+          {% if r.ma_50 and r.close %}
+          <span style="color:{% if r.close > r.ma_50 %}var(--pos){% else %}var(--neg){% endif %}">
+            ${{ "%.3f"|format(r.ma_50) }}
+          </span>
+          {% elif r.ma_50 %}${{ "%.3f"|format(r.ma_50) }}{% else %}—{% endif %}
+        </td>
+        <td class="p-3 text-right font-mono text-xs" style="color:var(--text-muted)">
+          {% if r.ma_200 and r.close %}
+          <span style="color:{% if r.close > r.ma_200 %}var(--pos){% else %}var(--neg){% endif %}">
+            ${{ "%.3f"|format(r.ma_200) }}
+          </span>
+          {% elif r.ma_200 %}${{ "%.3f"|format(r.ma_200) }}{% else %}—{% endif %}
+        </td>
+        <!-- % from 52w high -->
+        <td class="p-3 text-right font-mono text-xs font-semibold">
+          {% if r.pct_from_52w_high is not none %}
+          <span style="color:{% if r.pct_from_52w_high >= -10 %}var(--pos){% elif r.pct_from_52w_high >= -25 %}var(--warn){% else %}var(--neg){% endif %}">
+            {{ "%+.1f"|format(r.pct_from_52w_high) }}%
+          </span>
+          {% else %}—{% endif %}
+        </td>
+        <td class="p-3 text-right">
+          {% if r.rs_rating is not none %}
+          <span class="rs-badge" style="{% if r.rs_rating >= 80 %}background:var(--pos-bg);color:var(--pos){% elif r.rs_rating >= 60 %}background:var(--warn-bg);color:var(--warn){% else %}background:var(--neg-bg);color:var(--neg){% endif %}">
+            {{ r.rs_rating|int }}
+          </span>
+          {% else %}<span style="color:var(--text-subtle)">—</span>{% endif %}
+        </td>
+        <td class="p-3 text-xs whitespace-nowrap" style="color:var(--text-subtle)">{{ r.bar_date or '—' }}</td>
+        <td class="p-3 text-xs whitespace-nowrap" style="color:var(--text-subtle)">{{ r.added_at or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="card p-8 text-center">
+  <p class="text-4xl mb-3">⭐</p>
+  <p class="font-semibold mb-1" style="color:var(--text)">No custom stocks yet</p>
+  <p class="text-sm" style="color:var(--text-muted)">
+    Organizations can add non-ASX200 stocks manually via their
+    <a href="/watchlist" style="color:var(--t-accent)">Watchlist</a>.
+    They'll appear here once added.
+  </p>
+</div>
+{% endif %}
+{% endif %}
+
+
+<style>
+.page-header   { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:1.25rem; gap:1rem; flex-wrap:wrap; }
+.page-title    { font-size:1.25rem; font-weight:700; color:var(--text); }
+.page-subtitle { font-size:.8rem; color:var(--text-muted); margin-top:.15rem; }
+
+.stats-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:.75rem; }
+.stat-card  { background:var(--surface); border:1px solid var(--border); border-radius:.5rem; padding:.85rem 1rem; }
+.stat-label { font-size:.7rem; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.stat-value { font-size:1.35rem; font-weight:700; color:var(--text); margin:.15rem 0; }
+.stat-sub   { font-size:.7rem; color:var(--text-subtle); }
+
+.tab-btn    { display:inline-flex; align-items:center; gap:.4rem; padding:.5rem 1rem .6rem; font-size:.85rem; font-weight:600; color:var(--text-muted); border-bottom:2px solid transparent; text-decoration:none; transition:all .15s; }
+.tab-btn:hover { color:var(--text); }
+.tab-active { color:var(--a-accent) !important; border-bottom-color:var(--a-accent) !important; }
+.tab-count  { font-size:.7rem; background:var(--surface-alt); border:1px solid var(--border); border-radius:9999px; padding:1px 6px; color:var(--text-muted); }
+
+.rs-badge   { display:inline-block; font-size:.7rem; font-weight:700; padding:2px 7px; border-radius:9999px; font-family:monospace; }
+.badge-sm   { display:inline-block; font-size:.65rem; font-weight:600; padding:1px 6px; border-radius:9999px; }
+.hover-row:hover { background:var(--surface-alt) !important; }
+
+.btn-primary { display:inline-flex; align-items:center; background:var(--a-accent); color:#fff; border-radius:.375rem; font-weight:600; border:none; cursor:pointer; transition:opacity .15s; text-decoration:none; }
+.btn-primary:hover { opacity:.88; }
+.btn-ghost   { display:inline-flex; align-items:center; background:transparent; color:var(--text-muted); border-radius:.375rem; border:1px solid var(--border); font-weight:600; cursor:pointer; text-decoration:none; transition:background .15s; }
+.btn-ghost:hover   { background:var(--surface-alt); }
+.input { background:var(--surface); border:1px solid var(--border); border-radius:.375rem; color:var(--text); }
+.input:focus { outline:2px solid var(--a-accent); }
+</style>
+{% endblock %}

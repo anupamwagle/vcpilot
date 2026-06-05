@@ -53,6 +53,11 @@ class Signal(Base):
     rule_results    = Column(JSON, default=dict)
     # e.g. {"trend_price_above_200ma": true, "fundamental_eps_growth": true, ...}
 
+    # Per-signal rule overrides set by the user via the dashboard
+    # e.g. {"vcp_breakout_volume": false}  — disables volume check for this signal only
+    # Mandatory rules and globally-disabled rules cannot be overridden.
+    rule_overrides  = Column(JSON, default=dict)
+
     # Risk calculations
     suggested_size_shares = Column(Integer, nullable=True)   # Position size in shares
     suggested_size_aud    = Column(Numeric(12, 2), nullable=True)
@@ -76,6 +81,42 @@ class WatchlistStatus(str, enum.Enum):
     REMOVED   = "REMOVED"    # Removed from watchlist
 
 
+# Preset colour palette for watchlist labels (Tailwind-compatible hex values)
+LABEL_COLOUR_PALETTE = [
+    "#f59e0b",  # amber    — default Favourites
+    "#3b82f6",  # blue
+    "#10b981",  # emerald
+    "#8b5cf6",  # violet
+    "#ef4444",  # red
+    "#ec4899",  # pink
+    "#06b6d4",  # cyan
+    "#f97316",  # orange
+]
+
+
+class WatchlistLabel(Base):
+    """
+    User-defined label/tag for grouping watchlist items.
+    Each org gets a default 'Favourites' label (amber) on first seed.
+    """
+    __tablename__ = "watchlist_labels"
+
+    id              = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    name            = Column(String(64), nullable=False)
+    color           = Column(String(16), default="#f59e0b")  # hex colour
+    is_default      = Column(Boolean, default=False)          # 'Favourites' flag
+    sort_order      = Column(Integer, default=0)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    organization    = relationship("Organization")
+    items           = relationship("Watchlist", back_populates="label", lazy="dynamic")
+
+    def __repr__(self):
+        return f"<WatchlistLabel {self.name} org={self.organization_id}>"
+
+
 class Watchlist(Base):
     """
     Stocks that pass partial Minervini criteria — stage 2, trend template met —
@@ -91,10 +132,12 @@ class Watchlist(Base):
 
     # Relationships
     organization    = relationship("Organization")
+    label           = relationship("WatchlistLabel", back_populates="items", foreign_keys="Watchlist.label_id")
 
     status      = Column(Enum(WatchlistStatus), default=WatchlistStatus.WATCHING)
     added_by    = Column(String(64), default="screener")  # screener | admin | agent
     notes       = Column(Text, nullable=True)
+    label_id    = Column(Integer, ForeignKey("watchlist_labels.id", ondelete="SET NULL"), nullable=True)
     rule_results= Column(JSON, default=dict)
     removed_date= Column(Date, nullable=True)
     created_at  = Column(DateTime, default=datetime.utcnow)

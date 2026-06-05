@@ -249,6 +249,40 @@ Exit reasons: `STOP_LOSS`, `TRAILING_STOP`, `TIME_STOP`, `EARNINGS_AVOID`, `MARK
 ### 14. Old Streamlit files still exist
 `dashboard/Home.py` and `dashboard/pages/` still exist (can't delete via sandbox — Windows/WSL permission issue). They are ignored because the Dockerfile runs `uvicorn dashboard.main:app`, not streamlit. Delete them manually from WSL: `rm -rf /mnt/c/vcpilot/dashboard/Home.py /mnt/c/vcpilot/dashboard/pages/`
 
+### 18. Watchlist Labels (multi-group watchlist)
+`WatchlistLabel` model in `app/models/signal.py` — one row per user-defined label per org. Columns: `id`, `organization_id`, `name`, `color` (hex), `is_default`, `sort_order`. Migration adds `watchlist_labels` table and `label_id` FK on `watchlist`. Default labels seeded per org via `migrate_saas.py`: Favourites (amber `#f59e0b`, is_default=True), High Priority (red), VCP Forming (blue), Under Review (violet). Routes: `GET /watchlist?label={id}` filters by label; `POST /watchlist/labels/create` creates a label; `POST /watchlist/{id}/set-label` assigns a label to a stock. `screen_single_ticker` accepts `label_id` so manual adds land in the right group. `LABEL_COLOUR_PALETTE` in `signal.py` lists the 8 preset hex colours shown in the colour picker.
+
+### 19. Per-org timezone (org_timezone)
+`org_timezone` is a `SystemConfig` key seeded per org with value `Australia/Sydney`. Appears in `/admin/config` under General. Used for timestamps in WhatsApp reports. Celery Beat schedules are global on `timezone="Australia/Sydney"` in `celery_app.py` — this is correct since ASX is in Sydney and all orgs trade on ASX. Do NOT change the Beat timezone — change `org_timezone` in SystemConfig if a user's local reporting timezone differs.
+
+### 20. Background job audit trail (entry/exit tasks)
+`check_entry_triggers` and `check_exit_rules_task` write a `TASK_RUN` `AuditLog` row on every invocation, including when the market is closed. Timestamps are formatted in AEST (`Australia/Sydney`) timezone to align with the ASX. Furthermore, if `check_entry_triggers` skips checking because the market is in a BEAR regime, has reached max positions, or has trading paused, it writes a detailed `TASK_RUN` audit log row for each pending signal explaining the skip reason to populate the UI and prevent "No entry check yet" blank states.
+
+### 23. Intraday Price Fetcher — `get_intraday_price()`
+`app/data/fetcher.py` exports `get_intraday_price(ticker, organization_id)` which:
+1. If IBKR connected → calls `IBKRBroker.get_market_snapshot()` (real-time, 0 min delay)
+2. Else → yfinance `history(period="2d", interval="15m")` — ASX free tier ≈ 15-20 min delayed
+3. Last resort → returns `ok=False` so caller falls back to EOD close
+
+Always returns `{price, volume, data_source, delay_mins, bar_timestamp, ok}`. Used by `check_entry_triggers` every 5 min during market hours. `data_source` and `delay_mins` flow through to `entry_check_logs` and are surfaced in the Data Log UI with a delay banner.
+
+### 24. Entry Check Log — `entry_check_logs` table
+`app/models/market.py::EntryCheckLog` — per-org, per-signal intraday snapshot written on every `check_entry_triggers` run per pending signal. Stores: `price_current`, `price_pivot`, `price_vs_pivot` (% above/below pivot), `vol_ratio`, MAs, RS, `breakout_confirmed`, `rule_results` (JSON), `data_source`, `data_delay_mins`, `bar_timestamp`. Indexed on `(organization_id, checked_at DESC)`. The Admin Data Log page queries this table; the AuditLog continues to receive entries in parallel.
+
+### 21. Redis Caching & Eager Loading (Performance Optimization)
+To ensure the dashboard remains fast and responsive:
+- Cache stock name mappings in Redis (`stock_names_map`) for 1 hour using `get_cached_stock_names(db)`.
+- Cache the latest price bar details in Redis (`latest_price_bar:{ticker}`) for 5 minutes (or 1 hour if not found) during market hours.
+- Use `joinedload()` (e.g., `joinedload(Watchlist.label)`) to eager-load relationships inside loops to prevent N+1 query bottlenecks.
+- Throttle external API fetches (like yfinance/FMP) on missing data using a 24-hour marker (`missing_name_fetch:{ticker}`).
+
+### 22. Custom Exception Handlers (FastAPI/Starlette)
+FastAPI/Starlette exceptions are captured dynamically to render Flowbite/Tailwind custom error pages instead of exposing raw JSON payloads:
+- `StarletteHTTPException` (custom 404, etc.)
+- `RequestValidationError` (custom 422 validation errors)
+- Generic `Exception` (custom 500 internal server errors)
+Detailed debug tracebacks are exposed in a collapsible console view if `settings.app_env == "development"`, and hidden in production.
+
 ---
 
 ## Core Configuration & Environment Variables
@@ -332,6 +366,7 @@ All rules have `enabled_globally=True` by default. Admin can toggle any non-mand
 - `GET /admin/config` — Edit tenant-scoped settings (IBKR account, WhatsApp details, weekly capital)
 - `GET /admin/audit` — Filterable audit log (scoped to organization)
 - `GET /admin/tasks` — Live Task Log: streams new audit events (scoped to organization)
+- `GET /admin/data-log` — Data Log: intraday entry check snapshots from `entry_check_logs`; filters by time window/ticker/confirmed; auto-refresh via `/admin/data-log/poll`
 
 **Super Admin Area (SaaS Operators):**
 - `GET /superadmin/organizations` — List organizations and allocate tiers (Bronze, Silver, Gold)
@@ -344,6 +379,7 @@ All rules have `enabled_globally=True` by default. Admin can toggle any non-mand
 - `GET /superadmin/users` — List and manage users and roles globally
 - `POST /superadmin/users/create` — Create a new user under a tenant organization
 - `POST /superadmin/users/{user_id}/update-role` — Update a user's role globally
+- `GET /superadmin/data` — Market Data: Tab 1 = ASX universe with latest PriceBar metrics (sortable/searchable/paginated); Tab 2 = custom stocks per org not in ASX200
 
 **Action endpoints (POST → redirect):**
 - `/action/pause`, `/action/resume` — Toggle trading (scoped to organization)
@@ -437,3 +473,6 @@ The WAHA webhook routes incoming messages to `http://api:8501/webhook/whatsapp`.
 **TimescaleDB over plain PostgreSQL** — `price_bars` is queried heavily by date range and ticker. TimescaleDB hypertable partitions by date (3-month chunks), dramatically faster for 2yr × 200 stocks of daily bars.
 
 **Celery Beat over Airflow** — Developer knows Celery from Django. Airflow is overkill for 7 scheduled tasks. Celery Beat runs inside the same container ecosystem with no extra infra.
+
+**Reverse Proxy / Cloudflare Tunnel Support** — Uvicorn is configured with `--proxy-headers` and `--forwarded-allow-ips='*'` to transparently parse and trust forwarding headers (`X-Forwarded-Proto`, `X-Forwarded-For`). Auto-reload is disabled automatically when `APP_ENV=production` is set to optimize container CPU utilization.
+

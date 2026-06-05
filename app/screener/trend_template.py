@@ -134,6 +134,17 @@ def evaluate_trend_template(ticker: str, df: pd.DataFrame, engine: RuleEngine) -
     if engine.is_enabled(rule_id):
         threshold = float(engine.threshold(rule_id) or 70.0)
         rs = float(row.get("rs_rating", 0) or 0)
+        if rs == 0:
+            try:
+                from app.database import get_db
+                from app.models.market import PriceBar
+                from sqlalchemy import desc
+                with get_db() as db:
+                    bar = db.query(PriceBar).filter(PriceBar.ticker == ticker).order_by(desc(PriceBar.date)).first()
+                    if bar and bar.rs_rating:
+                        rs = float(bar.rs_rating)
+            except Exception as e:
+                logger.warning(f"Failed to fetch rs_rating from DB for {ticker}: {e}")
         passed = rs >= threshold
         results[rule_id] = RuleResult(rule_id, passed, rs, threshold,
             f"RS {rs:.1f} {'≥' if passed else '<'} {threshold}")

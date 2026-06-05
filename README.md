@@ -112,6 +112,19 @@ All rules are configurable per organization via the Rules Config page, allowing 
 
 ---
 
+## Data Sources & Delays
+
+| Source | Used for | Delay |
+|---|---|---|
+| yfinance (EOD) | Daily price bars, MAs, screener | Next day |
+| yfinance (15-min interval) | Intraday entry check price | ~15–20 min (ASX free tier) |
+| IBKR real-time | Intraday entry check price (if connected) | Real-time (0 min) |
+| FMP free tier | Supplemental fundamentals for shortlisted stocks | ~EOD |
+
+> **Note:** The entry check task runs every 5 minutes during market hours. With yfinance (default), the price checked is approximately 15–20 minutes behind the live market. Connect IBKR Gateway for real-time data. The Admin → Data Log page shows the data source and delay on every snapshot so you always know exactly how fresh the data is.
+
+---
+
 ## Schedule (AEST)
 
 | Time | Task |
@@ -120,7 +133,7 @@ All rules are configurable per organization via the Rules Config page, allowing 
 | 5:15pm Mon–Fri | Evaluate market regime |
 | 5:30pm Mon–Fri | Run Minervini screener |
 | 6:00pm Mon–Fri | Daily WhatsApp report |
-| Every 5 min (market hours) | Entry trigger + exit rule checks |
+| Every 5 min (market hours) | Entry trigger + exit rule checks + Data Log snapshot |
 | Sunday 8pm | Refresh ASX200 universe |
 
 ---
@@ -158,6 +171,27 @@ vcpilot/
 ├── docker-compose.yml
 └── requirements.txt
 ```
+
+---
+
+## Production & Cloudflare Tunnel Deployment
+
+To run VCPilot in a production environment behind a reverse proxy like Cloudflare Tunnel:
+
+1. **Set Production Mode**:
+   In your `.env` file, change the environment to:
+   ```bash
+   APP_ENV=production
+   ```
+   This disables auto-reloading for the web server, saves CPU usage, and stops printing verbose SQL queries to logs.
+
+2. **Configure Cloudflare Tunnel**:
+   - Point your Cloudflare Tunnel hostname (e.g. `https://vcpilot.yourdomain.com`) directly to the local container or host port `http://localhost:8501`.
+   - The web container is automatically configured with `--proxy-headers` and `--forwarded-allow-ips='*'` to correctly translate Cloudflare's `X-Forwarded-Proto` and `X-Forwarded-For` headers. This ensures that session cookies, URL schemas (`https`), and redirect headers work flawlessly without loops.
+
+3. **WhatsApp Webhooks**:
+   - Webhooks from the self-hosted WhatsApp container (`vcpilot-whatsapp` at port `3000`) to the API container (`vcpilot-api` at port `8501`) communicate internally within the Docker bridge network (`vcpilot-net`).
+   - The default `WAHA_HOOK_URL=http://api:8501/webhook/whatsapp` in `.env` is fully container-to-container and doesn't need to be exposed to the public internet, guaranteeing fast and secure webhook delivery.
 
 ---
 

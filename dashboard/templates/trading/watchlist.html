@@ -11,38 +11,144 @@
 </div>
 {% endif %}
 
+{% if request.query_params.get('msg') == 'label_created' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Label created successfully.
+</div>
+{% endif %}
+
 <!-- How watchlist works -->
 <div class="alert-info mb-5">
   <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
   <div>
-    <strong>Watchlist is built automatically.</strong> After each daily screen (5:30pm AEST), stocks passing 6+ of 8 Minervini trend criteria — but not yet a full VCP signal — are added here automatically. You don't approve them; the system watches them daily and upgrades them to a <strong>Signal</strong> once the VCP pattern completes and all rules pass. You can also add stocks manually below.
+    <strong>Watchlist is built automatically.</strong> After each daily screen (5:30pm AEST), stocks passing 6+ of 8 Minervini trend criteria are added here automatically. They upgrade to a <strong>Signal</strong> once the VCP pattern completes. Use <strong>labels</strong> to group and organise stocks — the coloured filter chips below let you filter by group instantly.
   </div>
+</div>
+
+<!-- ── Label filter chips ─────────────────────────────────────────────── -->
+<div style="display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin-bottom:1.25rem">
+  <!-- All -->
+  <a href="/watchlist"
+     style="display:inline-flex;align-items:center;gap:.35rem;padding:.3rem .85rem;border-radius:999px;font-size:.75rem;font-weight:600;border:2px solid;text-decoration:none;transition:opacity .15s;
+     {% if active_label is none %}background:var(--t-accent);color:white;border-color:var(--t-accent)
+     {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
+    All <span style="background:rgba(255,255,255,.25);border-radius:999px;padding:0 .45rem;font-size:.7rem">{{ watchlist|length if active_label is none else '' }}</span>
+  </a>
+
+  {% for lbl in labels %}
+  <a href="/watchlist?label={{ lbl.id }}"
+     style="display:inline-flex;align-items:center;gap:.35rem;padding:.3rem .85rem;border-radius:999px;font-size:.75rem;font-weight:600;border:2px solid;text-decoration:none;transition:opacity .15s;
+     {% if active_label == lbl.id %}background:{{ lbl.color }};color:white;border-color:{{ lbl.color }}
+     {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
+    <span style="width:.55rem;height:.55rem;border-radius:50%;background:{{ lbl.color }};display:inline-block;flex-shrink:0"></span>
+    {{ lbl.name }}
+  </a>
+  {% endfor %}
+
+  <!-- New label toggle -->
+  <button onclick="document.getElementById('new-label-panel').classList.toggle('hidden')"
+          style="display:inline-flex;align-items:center;gap:.3rem;padding:.3rem .75rem;border-radius:999px;font-size:.75rem;font-weight:500;border:1.5px dashed var(--border);background:transparent;color:var(--text-muted);cursor:pointer">
+    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+    New label
+  </button>
+</div>
+
+<!-- Inline new-label form (hidden by default) -->
+<div id="new-label-panel" class="hidden card p-4 mb-5">
+  <h4 class="text-xs font-semibold mb-3" style="color:var(--text)">Create Label</h4>
+  <form method="post" action="/watchlist/labels/create" style="display:flex;flex-wrap:wrap;gap:.75rem;align-items:flex-end">
+    <div style="flex:1;min-width:120px">
+      <label class="block text-xs mb-1" style="color:var(--text-muted)">Name</label>
+      <input type="text" name="name" required placeholder="e.g. Biotech Watch" maxlength="64" class="input" style="height:2.1rem;font-size:.8rem"/>
+    </div>
+    <div>
+      <label class="block text-xs mb-1" style="color:var(--text-muted)">Colour</label>
+      <div style="display:flex;gap:.4rem;align-items:center;height:2.1rem">
+        {% set palette = ['#f59e0b','#3b82f6','#10b981','#8b5cf6','#ef4444','#ec4899','#06b6d4','#f97316'] %}
+        {% for hex in palette %}
+        <label style="cursor:pointer">
+          <input type="radio" name="color" value="{{ hex }}" {% if loop.first %}checked{% endif %} style="display:none" class="colour-radio">
+          <span class="colour-swatch" style="width:1.1rem;height:1.1rem;border-radius:50%;background:{{ hex }};display:block;border:2px solid transparent;transition:border-color .1s"
+                data-hex="{{ hex }}"></span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+    <button type="submit" class="btn-primary" style="height:2.1rem;font-size:.8rem;padding:.3rem .9rem">Create</button>
+  </form>
 </div>
 
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
   <!-- Watchlist cards -->
   <div class="lg:col-span-2 space-y-4" style="display:flex;flex-direction:column;gap:1rem">
     <div class="card overflow-hidden p-4">
-      <h2 class="section-title">In Formation ({{ watchlist|length }})</h2>
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <h2 class="section-title" style="margin:0">
+          {% if active_label is not none %}
+            {% for lbl in labels %}{% if lbl.id == active_label %}
+              <span style="display:inline-flex;align-items:center;gap:.4rem">
+                <span style="width:.65rem;height:.65rem;border-radius:50%;background:{{ lbl.color }};display:inline-block"></span>
+                {{ lbl.name }}
+              </span>
+            {% endif %}{% endfor %}
+          {% else %}
+            In Formation
+          {% endif %}
+          <span style="margin-left:.5rem;font-size:.8rem;font-weight:normal;color:var(--text-subtle)">({{ watchlist|length }})</span>
+        </h2>
+      </div>
     </div>
+
     {% if watchlist %}
     {% for w in watchlist %}
     <div class="card overflow-hidden">
       <!-- Card header -->
       <div class="section-head">
         <div style="display:flex;align-items:center;gap:.625rem;flex-wrap:wrap">
-          <div style="display:flex;flex-direction:column">
-            <span class="mono font-bold text-base" style="color:var(--text);line-height:1.2">{{ w.ticker }}</span>
-            {% if w.company_name %}
-            <span style="font-size:.7rem;color:var(--text-subtle);font-weight:normal;line-height:1.2">{{ w.company_name }}</span>
+          <!-- Label colour dot + ticker -->
+          <div style="display:flex;align-items:center;gap:.4rem">
+            {% if w.label %}
+            <span title="{{ w.label.name }}" style="width:.55rem;height:.55rem;border-radius:50%;background:{{ w.label.color }};display:inline-block;flex-shrink:0"></span>
+            {% else %}
+            <span style="width:.55rem;height:.55rem;border-radius:50%;background:var(--border);display:inline-block;flex-shrink:0"></span>
             {% endif %}
+            <div style="display:flex;flex-direction:column">
+              <span class="mono font-bold text-base" style="color:var(--text);line-height:1.2;display:inline-flex;align-items:center;gap:.35rem">
+                <form method="post" action="/watchlist/toggle-favourite" style="display:inline">
+                  <input type="hidden" name="ticker" value="{{ w.ticker }}">
+                  <input type="hidden" name="redirect_url" value="{{ path }}">
+                  <button type="submit" class="focus:outline-none" style="color:#f59e0b;background:none;border:none;padding:0;cursor:pointer;font-size:1.1rem;line-height:1" title="Toggle Favourite">
+                    {% if w.ticker in favourited_tickers %}★{% else %}☆{% endif %}
+                  </button>
+                </form>
+                {{ w.ticker }}
+              </span>
+              {% if w.company_name %}
+              <span style="font-size:.7rem;color:var(--text-subtle);font-weight:normal;line-height:1.2">{{ w.company_name }}</span>
+              {% endif %}
+            </div>
           </div>
           <span class="tag">{{ 'Auto' if w.by == 'screener' else w.by }}</span>
           {% if w.rules_total > 0 %}
           <span class="tag">Rules {{ w.rules_passed }}/{{ w.rules_total }}</span>
           {% endif %}
+          {% if w.label %}
+          <span style="font-size:.65rem;padding:.15rem .5rem;border-radius:.3rem;font-weight:600;background:{{ w.label.color }}22;color:{{ w.label.color }};border:1px solid {{ w.label.color }}55">
+            {{ w.label.name }}
+          </span>
+          {% endif %}
         </div>
         <div style="display:flex;align-items:center;gap:.5rem">
+          <!-- Label picker -->
+          <form method="post" action="/watchlist/{{ w.id }}/set-label" style="display:inline">
+            <select name="label_id" onchange="this.form.submit()" class="input" style="height:1.8rem;font-size:.7rem;padding:.1rem .4rem;min-width:90px">
+              <option value="">No label</option>
+              {% for lbl in labels %}
+              <option value="{{ lbl.id }}" {% if w.label and w.label.id == lbl.id %}selected{% endif %}>{{ lbl.name }}</option>
+              {% endfor %}
+            </select>
+          </form>
           <form method="post" action="/watchlist/{{ w.id }}/promote">
             <button type="submit" class="btn-primary text-xs py-1 px-2.5" style="background:var(--pos);color:white">Promote</button>
           </form>
@@ -97,30 +203,86 @@
     {% endfor %}
     {% else %}
     <div class="card px-4 py-10 text-center">
-      <p class="text-sm" style="color:var(--text-muted)">No stocks being watched yet</p>
-      <p class="text-xs mt-1" style="color:var(--text-subtle)">Screener automatically populates this after 5:30pm AEST</p>
+      <p class="text-sm" style="color:var(--text-muted)">No stocks
+        {% if active_label is not none %}in this label{% else %}being watched{% endif %} yet</p>
+      <p class="text-xs mt-1" style="color:var(--text-subtle)">
+        {% if active_label is not none %}
+        Add stocks manually below and assign this label, or switch back to <a href="/watchlist" style="color:var(--t-accent)">All</a>
+        {% else %}
+        Screener automatically populates this after 5:30pm AEST
+        {% endif %}
+      </p>
     </div>
     {% endif %}
   </div>
 
-  <!-- Add form -->
-  <div class="card p-5 h-fit">
-    <h3 class="text-sm font-semibold mb-4" style="color:var(--text)">Add Manually</h3>
-    <form method="post" action="/watchlist/add" class="space-y-3">
-      <div>
-        <label class="block text-xs font-medium mb-1.5" style="color:var(--text-muted)">ASX Code</label>
-        <input type="text" name="ticker" required placeholder="BHP" maxlength="10"
-               class="input uppercase"/>
+  <!-- Right sidebar: Add form + label management -->
+  <div style="display:flex;flex-direction:column;gap:1rem">
+    <!-- Add manually -->
+    <div class="card p-5">
+      <h3 class="text-sm font-semibold mb-4" style="color:var(--text)">Add Manually</h3>
+      <form method="post" action="/watchlist/add" class="space-y-3">
+        <div>
+          <label class="block text-xs font-medium mb-1.5" style="color:var(--text-muted)">ASX Code</label>
+          <input type="text" name="ticker" required placeholder="BHP" maxlength="10" class="input uppercase"/>
+        </div>
+        <div>
+          <label class="block text-xs font-medium mb-1.5" style="color:var(--text-muted)">Label (optional)</label>
+          <select name="label_id" class="input">
+            <option value="">None</option>
+            {% for lbl in labels %}
+            <option value="{{ lbl.id }}" {% if active_label == lbl.id %}selected{% endif %}>{{ lbl.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium mb-1.5" style="color:var(--text-muted)">Notes (optional)</label>
+          <textarea name="notes" rows="2" placeholder="VCP forming, watch for breakout..."
+                    class="input resize-none"></textarea>
+        </div>
+        <button type="submit" class="btn-primary w-full justify-center">
+          Add to Watchlist
+        </button>
+      </form>
+    </div>
+
+    <!-- Label legend -->
+    {% if labels %}
+    <div class="card p-4">
+      <h3 class="text-xs font-semibold mb-3" style="color:var(--text)">Your Labels</h3>
+      <div style="display:flex;flex-direction:column;gap:.5rem">
+        {% for lbl in labels %}
+        <div style="display:flex;align-items:center;gap:.6rem">
+          <span style="width:.7rem;height:.7rem;border-radius:50%;background:{{ lbl.color }};flex-shrink:0;display:inline-block"></span>
+          <span style="font-size:.8rem;color:var(--text)">{{ lbl.name }}</span>
+          {% if lbl.is_default %}<span style="font-size:.65rem;color:var(--text-subtle)">(default)</span>{% endif %}
+        </div>
+        {% endfor %}
       </div>
-      <div>
-        <label class="block text-xs font-medium mb-1.5" style="color:var(--text-muted)">Notes (optional)</label>
-        <textarea name="notes" rows="2" placeholder="VCP forming, watch for breakout..."
-                  class="input resize-none"></textarea>
-      </div>
-      <button type="submit" class="btn-primary w-full justify-center">
-        Add to Watchlist
-      </button>
-    </form>
+    </div>
+    {% endif %}
   </div>
 </div>
+
+<script>
+// Highlight selected colour swatch
+document.querySelectorAll('.colour-radio').forEach(function(radio) {
+  radio.addEventListener('change', function() {
+    document.querySelectorAll('.colour-swatch').forEach(function(s) {
+      s.style.borderColor = 'transparent';
+      s.style.transform = 'scale(1)';
+    });
+    var swatch = this.closest('label').querySelector('.colour-swatch');
+    swatch.style.borderColor = swatch.dataset.hex;
+    swatch.style.transform = 'scale(1.25)';
+  });
+});
+// Set initial state for checked radio
+var checked = document.querySelector('.colour-radio:checked');
+if (checked) {
+  var s = checked.closest('label').querySelector('.colour-swatch');
+  s.style.borderColor = s.dataset.hex;
+  s.style.transform = 'scale(1.25)';
+}
+</script>
 {% endblock %}

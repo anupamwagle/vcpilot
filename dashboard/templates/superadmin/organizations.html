@@ -12,6 +12,23 @@
   <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
   Organisation created and admin user assigned successfully.
 </div>
+{% elif saved == 'welcome_email' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Organisation created successfully. A welcome email with password setup link has been sent to the admin.
+</div>
+{% elif saved == 'welcome_manual' %}
+<div class="alert-warning mb-4">
+  <p class="font-bold flex items-center gap-1.5 text-amber-800 dark:text-amber-400">
+    ⚠️ Welcome Email Delivery Offline / Skipped
+  </p>
+  <p class="text-xs mt-1 text-amber-700 dark:text-amber-300">
+    Organisation created successfully, but welcome email could not be sent to the admin (SMTP offline/skipped in development). Copy this setup link and send it manually:
+  </p>
+  <code class="block bg-slate-950 text-emerald-400 p-2 rounded mt-2 font-mono text-xs select-all border border-amber-900/30">
+    {{ request.url.scheme }}://{{ request.headers.get('host', 'localhost:8501') }}/reset-password?token={{ request.query_params.get('token') }}
+  </code>
+</div>
 {% elif msg == 'deactivated' %}
 <div class="alert-danger mb-4">
   <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm-1-9a1 1 0 012 0v4a1 1 0 01-2 0V9zm1-5a1 1 0 100 2 1 1 0 000-2z" clip-rule="evenodd"/></svg>
