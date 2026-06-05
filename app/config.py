@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     postgres_password: str = "changeme"
 
     # Redis
-    redis_url: str = "redis://redis:6379/0"
+    redis_url: str = "redis://redis:6389/0"
 
     # IBKR
     ibkr_host: str = "ibkr"
