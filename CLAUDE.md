@@ -258,6 +258,14 @@ Exit reasons: `STOP_LOSS`, `TRAILING_STOP`, `TIME_STOP`, `EARNINGS_AVOID`, `MARK
 ### 20. Background job audit trail (entry/exit tasks)
 `check_entry_triggers` and `check_exit_rules_task` write a `TASK_RUN` `AuditLog` row on every invocation, including when the market is closed. Timestamps are formatted in AEST (`Australia/Sydney`) timezone to align with the ASX. Furthermore, if `check_entry_triggers` skips checking because the market is in a BEAR regime, has reached max positions, or has trading paused, it writes a detailed `TASK_RUN` audit log row for each pending signal explaining the skip reason to populate the UI and prevent "No entry check yet" blank states.
 
+**Entry check log format (not triggered):** `❌ {ticker} @ ${price} [{data_source}] | pivot ${pivot} — {reason1}; {reason2}`  
+**Entry check log format (triggered):** `✅ {ticker}: breakout confirmed @ ${price} [{data_source}] — submitting order`  
+**Exit check log format (holding):** `Exit check @ {HH:MM}: holding | Price ${price} | P&L {pct}% | ({criteria_summary})`  
+**Exit check log format (exit triggered):** `Exit check @ {HH:MM}: EXIT triggered — {reason} | Price ${price} | P&L {pct}% | Reason: {message}`
+
+The Positions page exit check sub-row surfaces these details as structured chips: timestamp | price | P&L% | reason. Color-coded red for exit triggers, neutral for holding.
+
+
 ### 23. Intraday Price Fetcher — `get_intraday_price()`
 `app/data/fetcher.py` exports `get_intraday_price(ticker, organization_id)` which:
 1. If IBKR connected → calls `IBKRBroker.get_market_snapshot()` (real-time, 0 min delay)

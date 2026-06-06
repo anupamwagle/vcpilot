@@ -153,3 +153,25 @@ def health_check(self):
         logger.error(f"Health check failed: {e}")
         notifier = WhatsAppNotifier()
         notifier.send_health_alert("Celery Worker", str(e))
+
+
+@app.task(name="app.tasks.reporting.send_whatsapp_message", bind=True)
+def send_whatsapp_message(self, organization_id: int, method_name: str, args: list = None, kwargs: dict = None):
+    """
+    Asynchronously send a WhatsApp notification via the background worker.
+    """
+    args = args or []
+    kwargs = kwargs or {}
+    logger.info(f"Sending WhatsApp notification asynchronously for Org {organization_id} calling {method_name}...")
+    try:
+        from app.notifications.whatsapp import WhatsAppNotifier
+        notifier = WhatsAppNotifier(organization_id=organization_id)
+        func = getattr(notifier, method_name, None)
+        if func:
+            func(*args, **kwargs)
+            logger.info(f"Successfully sent WhatsApp message calling {method_name}")
+        else:
+            logger.error(f"WhatsAppNotifier does not have method {method_name}")
+    except Exception as e:
+        logger.error(f"Failed to send WhatsApp message: {e}")
+

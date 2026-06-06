@@ -8,7 +8,14 @@
 
 ### ✅ Done
 
+- **Positions & Signals UX + Log Improvements (6 Jun 2026):**
+  - **Positions: "Invested $" column**: Added `Invested $` column to the Open Positions table (entry price × quantity) so it's immediately clear how much capital is deployed per position. Tooltip shows the formula on hover.
+  - **Signals: TRIGGERED signals now visible**: Fixed a query bug — when both signals were TRIGGERED they disappeared from the Signals page because the filter only matched `PENDING` or `signal_date == today`. Added `SignalStatus.TRIGGERED` to the OR filter so triggered signals always appear alongside pending ones.
+  - **Exit check log enriched**: The exit check display on the Positions page now shows: timestamp | current price | P&L% | reason (e.g. "stop not hit; P/T not reached"). Color-coded red when exit is triggered (🚨), neutral otherwise. The underlying `trading.py` message now includes price, P&L%, and a summary of why hold/exit.
+  - **Breakout check: failed criteria inline**: When an entry check fails, the Signals page now shows an inline "Not met:" summary in the header row alongside the timestamp — e.g. `✗ Price Below Pivot — $5.20 < $5.35`. Failed rule badges still appear below for detail. Background tints red (not-triggered) vs green (triggered) for instant visual distinction.
+
 - **Performance & Error Page Enhancements (4 Jun 2026):**
+
   - Optimized the `/watchlist` page load from seconds to milliseconds by using a Redis-cached universe lookup (`get_cached_stock_names`) and eager-loading labels with SQLAlchemy's `joinedload(Watchlist.label)`.
   - Implemented Redis-based caching for latest `PriceBar` stats (`latest_price_bar:{ticker}`) with a 5-minute expiration, used in both the watchlist view and `_enrich_rule_results` rule evaluation to prevent N+1 queries.
   - Registered a custom FastAPI `RequestValidationError` exception handler mapping validation errors to the premium Flowbite-styled `error.html` template.

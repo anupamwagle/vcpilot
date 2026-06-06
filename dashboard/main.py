@@ -738,10 +738,29 @@ async def positions(request: Request, db: Session = Depends(get_db)):
                 AuditLog.entity_id == str(p.id)
             ).order_by(desc(AuditLog.created_at)).limit(2).all()
             for log_entry in log_entries:
+                d = log_entry.detail or {}
+                result = d.get("result", "")
+                close_price = d.get("close")
+                pnl_pct = d.get("pnl_pct")
+                hold_days = d.get("hold_days")
+                # Build a reason string from the message for non-holding checks
+                reason_str = ""
+                if result == "exit_triggered":
+                    # Extract reason from message: "Exit check: exit triggered (reason msg)"
+                    msg = log_entry.message
+                    if "(" in msg and msg.endswith(")"):
+                        reason_str = msg[msg.rfind("(") + 1:-1]
+                elif result == "holding":
+                    reason_str = "all rules passed — holding"
                 exit_checks.append({
                     "id": log_entry.id,
                     "time": _fmt_dt(str(log_entry.created_at), ctx.get("display_tz", "UTC")),
                     "message": log_entry.message,
+                    "result": result,
+                    "close": close_price,
+                    "pnl_pct": pnl_pct,
+                    "hold_days": hold_days,
+                    "reason": reason_str,
                 })
         except Exception:
             pass
@@ -753,6 +772,7 @@ async def positions(request: Request, db: Session = Depends(get_db)):
             "entry": entry, "current": curr,
             "stop": stop,
             "target_1": float(p.target_1 or 0),
+            "invested_aud": round(entry * p.qty, 2),
             "pnl_pct": round((curr - entry) / entry * 100, 2),
             "pnl_aud": round((curr - entry) * p.qty, 2),
             "days": (get_current_date() - p.entry_date).days,
@@ -929,7 +949,8 @@ async def signals(request: Request, db: Session = Depends(get_db)):
     sigs = db.query(Signal).filter(
         or_(
             Signal.signal_date == get_current_date(),
-            Signal.status == SignalStatus.PENDING
+            Signal.status == SignalStatus.PENDING,
+            Signal.status == SignalStatus.TRIGGERED,
         ),
         Signal.organization_id == org_id
     ).all()
@@ -1460,14 +1481,17 @@ async def close_position(
     ))
     db.commit()
 
-    # WhatsApp alert
+    # WhatsApp alert in background
     try:
-        from app.notifications.whatsapp import WhatsAppNotifier
-        WhatsAppNotifier(organization_id=org_id).send_exit_alert(
-            pos.ticker, reason.value, pnl_pct, pnl_aud, pos.is_paper
+        from app.tasks.reporting import send_whatsapp_message
+        send_whatsapp_message.delay(
+            org_id,
+            "send_exit_alert",
+            [pos.ticker, reason.value, pnl_pct, pnl_aud, pos.is_paper]
         )
-    except Exception:
-        pass
+    except Exception as e:
+        from loguru import logger
+        logger.error(f"Failed to queue exit alert WhatsApp message: {e}")
 
     return RedirectResponse("/positions?msg=closed", 302)
 
@@ -1495,71 +1519,30 @@ async def watchlist_promote(request: Request, item_id: int, db: Session = Depend
     # Super admins allowed in standard views under active organization context
     org_id = request.session.get("organization_id")
 
-    from app.models.signal import Watchlist, WatchlistStatus, Signal, SignalStatus
-    from app.models.market import PriceBar, Stock
-    from app.models.audit import AuditLog, AuditAction
+    from app.models.signal import Watchlist, WatchlistStatus
     
     w = db.query(Watchlist).filter(Watchlist.id == item_id, Watchlist.organization_id == org_id).first()
     if not w:
         return RedirectResponse("/watchlist?msg=not_found", 302)
 
-    # ── Ensure the Stock row has a company name (may be empty for manually-added tickers) ──
-    stock_row = db.query(Stock).filter(Stock.ticker == w.ticker).first()
-    if stock_row and not stock_row.name:
-        try:
-            from app.data.fetcher import get_fundamentals
-            fdata = get_fundamentals(w.ticker)
-            if fdata.get("company_name"):
-                stock_row.name     = fdata["company_name"]
-                stock_row.sector   = fdata.get("sector") or stock_row.sector
-                stock_row.industry = fdata.get("industry") or stock_row.industry
-        except Exception:
-            pass  # non-critical — name will just stay blank
-
-    bar = db.query(PriceBar).filter(PriceBar.ticker == w.ticker).order_by(desc(PriceBar.date)).first()
-    close_price = float(bar.close) if bar and bar.close else 1.0
-    
-    pivot = close_price
-    stop = close_price * 0.92
-    
-    today = get_current_date()
-    existing = db.query(Signal).filter(Signal.ticker == w.ticker, Signal.signal_date == today, Signal.organization_id == org_id).first()
-    if not existing:
-        sig = Signal(
-            ticker=w.ticker,
-            signal_date=today,
-            status=SignalStatus.PENDING,
-            close_price=close_price,
-            pivot_price=pivot,
-            stop_price=stop,
-            target_price_1=pivot * 1.20,
-            target_price_2=pivot * 1.40,
-            rs_rating=float(bar.rs_rating or 0) if bar else 0,
-            trend_score=w.rules_passed if hasattr(w, 'rules_passed') else 6,
-            rule_results=w.rule_results or {},
-            notes=f"[Manual Promotion] {request.session.get('email', 'dashboard')} | {w.notes or ''}".strip().rstrip('|').strip(),
-            organization_id=org_id,
-        )
-        db.add(sig)
-        
+    # Immediately mark as signalled/processing to prevent double triggers
     w.status = WatchlistStatus.SIGNALLED
-    db.add(AuditLog(
-        action=AuditAction.MANUAL_OVERRIDE,
-        ticker=w.ticker,
-        actor=request.session.get("email","dashboard"),
-        user_id=request.session.get("user_id"),
-        message="Watchlist item manually promoted to Signal",
-        organization_id=org_id
-    ))
     db.commit()
     
+    # Queue the slow parts in Celery
     try:
-        from app.notifications.whatsapp import WhatsAppNotifier
-        WhatsAppNotifier(organization_id=org_id).send(f"🚀 *Manual Promotion*: {w.ticker} has been manually promoted from Watchlist to Signals for entry!")
-    except Exception:
-        pass
+        from app.tasks.trading import promote_watchlist_item_task
+        promote_watchlist_item_task.delay(
+            item_id,
+            org_id,
+            request.session.get("email", "dashboard"),
+            request.session.get("user_id")
+        )
+    except Exception as e:
+        from loguru import logger
+        logger.error(f"Failed to queue watchlist promotion: {e}")
         
-    return RedirectResponse("/signals?msg=promoted", 302)
+    return RedirectResponse("/signals?msg=promotion_queued", 302)
 
 
 @app.post("/watchlist/{item_id}/remove")

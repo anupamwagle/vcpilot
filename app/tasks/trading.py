@@ -513,8 +513,17 @@ def check_exit_rules_task(self):
                 )
 
                 has_exit = any(s.should_exit for s in exit_signals)
-                msg = (f"Exit check: exit triggered ({next(s for s in exit_signals if s.should_exit).message})"
-                       if has_exit else f"Exit check @ {now_str}: holding | Price ${current:.3f}")
+                pnl_pct_val = round((current - float(pos.entry_price)) / float(pos.entry_price) * 100, 2)
+                if has_exit:
+                    triggered_sig = next(s for s in exit_signals if s.should_exit)
+                    msg = (f"Exit check @ {now_str}: EXIT triggered — {triggered_sig.reason} | "
+                           f"Price ${current:.3f} | P&L {pnl_pct_val:+.1f}% | Reason: {triggered_sig.message}")
+                else:
+                    # Summarise which exit rules were evaluated and NOT triggered
+                    not_triggered = [s.message for s in exit_signals if not s.should_exit and s.message]
+                    criteria_summary = "; ".join(not_triggered[:3]) if not_triggered else "no exit criteria met"
+                    msg = (f"Exit check @ {now_str}: holding | Price ${current:.3f} | P&L {pnl_pct_val:+.1f}% | ({criteria_summary})")
+
                 try:
                     with get_db() as _db:
                         _db.add(AuditLog(action=AuditAction.TASK_RUN, organization_id=org.id,
@@ -522,7 +531,7 @@ def check_exit_rules_task(self):
                                          entity_type="Position", entity_id=str(pos.id),
                                          detail={"position_id": pos.id, "close": current,
                                                  "stop": float(pos.current_stop),
-                                                 "pnl_pct": round((current - float(pos.entry_price)) / float(pos.entry_price) * 100, 2),
+                                                 "pnl_pct": pnl_pct_val,
                                                  "result": "exit_triggered" if has_exit else "holding",
                                                  "hold_days": (today - pos.entry_date).days}))
                         _db.commit()
@@ -591,3 +600,88 @@ def check_exit_rules_task(self):
 def sync_stop_orders(self):
     """Sync stop prices from DB to IBKR open orders."""
     logger.debug("Stop sync task: placeholder — implement IBKR modify order")
+
+
+@app.task(name="app.tasks.trading.promote_watchlist_item_task", bind=True)
+def promote_watchlist_item_task(self, item_id: int, organization_id: int, user_email: str, user_id: int):
+    """
+    Asynchronously promotes a stock from the watchlist to a signal.
+    """
+    from app.models.signal import Watchlist, WatchlistStatus, Signal, SignalStatus
+    from app.models.market import PriceBar, Stock
+    from app.models.audit import AuditLog, AuditAction
+    from app.utils.time_helper import get_current_date
+    from sqlalchemy import desc
+
+    with get_db() as db:
+        w = db.query(Watchlist).filter(Watchlist.id == item_id, Watchlist.organization_id == organization_id).first()
+        if not w:
+            logger.error(f"Watchlist item {item_id} not found for Org {organization_id}")
+            return
+
+        # Ensure the Stock row has a company name
+        stock_row = db.query(Stock).filter(Stock.ticker == w.ticker).first()
+        if stock_row and not stock_row.name:
+            try:
+                from app.data.fetcher import get_fundamentals
+                fdata = get_fundamentals(w.ticker)
+                if fdata.get("company_name"):
+                    stock_row.name     = fdata["company_name"]
+                    stock_row.sector   = fdata.get("sector") or stock_row.sector
+                    stock_row.industry = fdata.get("industry") or stock_row.industry
+            except Exception as e:
+                logger.warning(f"Failed to fetch fundamentals for {w.ticker}: {e}")
+
+        bar = db.query(PriceBar).filter(PriceBar.ticker == w.ticker).order_by(desc(PriceBar.date)).first()
+        close_price = float(bar.close) if bar and bar.close else 1.0
+        
+        pivot = close_price
+        stop = close_price * 0.92
+        
+        today = get_current_date()
+        existing = db.query(Signal).filter(
+            Signal.ticker == w.ticker, 
+            Signal.signal_date == today, 
+            Signal.organization_id == organization_id
+        ).first()
+
+        if not existing:
+            sig = Signal(
+                ticker=w.ticker,
+                signal_date=today,
+                status=SignalStatus.PENDING,
+                close_price=close_price,
+                pivot_price=pivot,
+                stop_price=stop,
+                target_price_1=pivot * 1.20,
+                target_price_2=pivot * 1.40,
+                rs_rating=float(bar.rs_rating or 0) if bar else 0,
+                trend_score=w.rules_passed if hasattr(w, 'rules_passed') else 6,
+                rule_results=w.rule_results or {},
+                notes=f"[Manual Promotion] {user_email} | {w.notes or ''}".strip().rstrip('|').strip(),
+                organization_id=organization_id,
+            )
+            db.add(sig)
+            
+        w.status = WatchlistStatus.SIGNALLED
+        db.add(AuditLog(
+            action=AuditAction.MANUAL_OVERRIDE,
+            ticker=w.ticker,
+            actor=user_email,
+            user_id=user_id,
+            message="Watchlist item manually promoted to Signal (background task)",
+            organization_id=organization_id
+        ))
+        db.commit()
+
+    # Send WhatsApp notification using the background task
+    try:
+        from app.tasks.reporting import send_whatsapp_message
+        send_whatsapp_message.delay(
+            organization_id, 
+            "send", 
+            [f"🚀 *Manual Promotion*: {w.ticker} has been manually promoted from Watchlist to Signals for entry!"]
+        )
+    except Exception as e:
+        logger.error(f"Failed to send WhatsApp notification for promotion: {e}")
+

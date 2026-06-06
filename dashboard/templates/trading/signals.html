@@ -6,13 +6,18 @@
 {% set msg = request.query_params.get('msg', '') %}
 {% if msg == 'screen' %}
 <div class="alert-success mb-4">
-  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
   Screener queued — results appear once the worker finishes. Refresh to see updates.
 </div>
 {% elif msg == 'promoted' %}
 <div class="alert-success mb-4">
   <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
   Watchlist stock promoted to signal.
+</div>
+{% elif msg == 'promotion_queued' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Watchlist stock promotion queued in the background. The signal will appear shortly.
 </div>
 {% endif %}
 
@@ -120,13 +125,42 @@
   {% if s.last_check %}
   {% set chk = s.last_check %}
   {% set triggered = chk.result == 'triggered' %}
-  <div style="padding:.625rem 1rem;border-bottom:1px solid var(--border);background:{% if triggered %}var(--pos-bg){% else %}var(--surface-alt){% endif %}">
+  {% set not_triggered = chk.result == 'not_triggered' %}
+  {# Collect failed rules for the inline summary #}
+  {% if chk.rules and not triggered %}
+    {% set ns = namespace(failed=[]) %}
+    {% for r in chk.rules %}
+      {% if not r.passed and not r.overridden %}
+        {% set ns.failed = ns.failed + [r] %}
+      {% endif %}
+    {% endfor %}
+  {% else %}
+    {% set ns = namespace(failed=[]) %}
+  {% endif %}
+  <div style="padding:.625rem 1rem;border-bottom:1px solid var(--border);background:{% if triggered %}var(--pos-bg){% elif not_triggered %}rgba(220,38,38,.04){% else %}var(--surface-alt){% endif %}">
     <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
-      <span style="font-size:.7rem;font-weight:700;color:{% if triggered %}var(--pos){% else %}var(--text-muted){% endif %}">
-        {% if triggered %}✅ Entry triggered{% else %}⏱ Last breakout check{% endif %}
+      <span style="font-size:.7rem;font-weight:700;color:{% if triggered %}var(--pos){% elif not_triggered %}var(--neg){% else %}var(--text-muted){% endif %}">
+        {% if triggered %}✅ Entry triggered{% elif not_triggered %}❌ Breakout check{% else %}⏱ Last breakout check{% endif %}
       </span>
       <span style="font-size:.7rem;color:var(--text-subtle);font-family:'SF Mono',monospace">{{ chk.time }}</span>
-      {% if chk.close %}<span style="font-size:.7rem;color:var(--text-subtle)">close ${{ "%.3f"|format(chk.close) }} · pivot ${{ "%.3f"|format(chk.pivot) }}</span>{% endif %}
+      {% if chk.close %}
+      <span style="font-size:.7rem;color:var(--text-subtle)">
+        price ${{ "%.3f"|format(chk.close) }}
+        {% if chk.pivot %} · pivot ${{ "%.3f"|format(chk.pivot) }}{% endif %}
+      </span>
+      {% endif %}
+      {# ── Inline "not met" summary ── #}
+      {% if not triggered and ns.failed %}
+      <span style="font-size:.7rem;color:var(--neg);font-weight:600;margin-left:.25rem">│ Not met:</span>
+      {% for r in ns.failed %}
+      <span style="font-size:.65rem;font-family:'SF Mono',monospace;padding:.1rem .4rem;border-radius:.25rem;
+                   background:var(--neg-bg);color:var(--neg);border:1px solid var(--bear-border);font-weight:600">
+        ✗ {{ r.label }}{% if r.message %} — <span style="font-weight:normal;opacity:.85">{{ r.message }}</span>{% endif %}
+      </span>
+      {% endfor %}
+      {% elif not triggered and not chk.rules %}
+      <span style="font-size:.7rem;color:var(--neg);font-weight:500;margin-left:.25rem">│ {{ chk.message }}</span>
+      {% endif %}
     </div>
     {% if chk.rules %}
     <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-top:.5rem">
@@ -144,10 +178,6 @@
         ⚙ {{ chk.overrides_applied|length }} rule(s) disabled for this signal
       </span>
       {% endif %}
-    </div>
-    {% else %}
-    <div style="font-size:.75rem;color:var(--text-muted);margin-top:.25rem;font-family:'SF Mono',monospace">
-      {{ chk.message }}
     </div>
     {% endif %}
   </div>

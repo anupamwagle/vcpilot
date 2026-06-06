@@ -140,6 +140,7 @@
     <table class="tbl">
       <thead><tr>
         <th>Ticker</th><th class="text-right">Qty</th><th class="text-right">Entry</th>
+        <th class="text-right">Invested $</th>
         <th class="text-right">Current</th><th class="text-right">Stop</th>
         <th class="text-right">Target</th><th class="text-center">Trade Map</th><th class="text-right">P&L %</th>
         <th class="text-right">P&L $</th><th class="text-right">Days</th><th>Mode</th>
@@ -163,6 +164,9 @@
           </td>
           <td class="text-right">{{ p.qty }}</td>
           <td class="text-right mono">${{ "%.3f"|format(p.entry) }}</td>
+          <td class="text-right mono font-semibold" style="color:var(--text-muted)" title="Total capital invested: {{ p.qty }} × ${{ '%.3f'|format(p.entry) }}">
+            ${{ "{:,.0f}".format(p.invested_aud) }}
+          </td>
           <td class="text-right mono font-semibold">${{ "%.3f"|format(p.current) }}</td>
           <td class="text-right mono pnl-neg">${{ "%.3f"|format(p.stop) }}</td>
           <td class="text-right mono" style="color:var(--pos)">${{ "%.3f"|format(p.target_1) if p.target_1 else "—" }}</td>
@@ -213,7 +217,7 @@
         {# ── Close position modal ──────────────────────────────────────── #}
         <tr id="close-modal-{{ p.id }}"
             style="display:none;background:var(--surface-alt)">
-          <td colspan="12" style="padding:1rem 1.25rem">
+          <td colspan="13" style="padding:1rem 1.25rem">
             <form method="post" action="/positions/{{ p.id }}/close"
                   onsubmit="return confirm('Close {{ p.ticker }}? This records the trade and cannot be undone.')"
                   style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:.75rem">
@@ -274,17 +278,26 @@
 
         {# ── Exit Checks sub-row ────────────────────────────────────────── #}
         <tr style="background:var(--surface-alt)">
-          <td colspan="12" style="padding:.5rem 1.25rem;border-top:none;border-bottom:1px solid var(--border)">
+          <td colspan="13" style="padding:.5rem 1.25rem;border-top:none;border-bottom:1px solid var(--border)">
             <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem">
               <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
                 <span style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">⏱ Exit Checks:</span>
                 {% if p.exit_checks %}
                   {% for chk in p.exit_checks %}
-                  <div style="display:inline-flex;align-items:center;gap:.375rem;padding:.2rem .5rem;border-radius:.375rem;background:var(--surface);border:1px solid var(--border);font-size:.7rem;color:var(--text-subtle)">
-                    <span style="font-weight:600;color:var(--text-muted)">{{ chk.time }}</span>
-                    <span class="mono" style="font-size:.65rem">{{ chk.message }}</span>
+                  <div style="display:inline-flex;align-items:center;gap:.375rem;padding:.25rem .6rem;border-radius:.375rem;
+                              background:{% if chk.result == 'exit_triggered' %}var(--neg-bg){% else %}var(--surface){% endif %};
+                              border:1px solid {% if chk.result == 'exit_triggered' %}var(--bear-border){% else %}var(--border){% endif %};
+                              font-size:.7rem;color:var(--text-subtle)">
+                    <span style="font-weight:600;color:{% if chk.result == 'exit_triggered' %}var(--neg){% else %}var(--text-muted){% endif %}">
+                      {% if chk.result == 'exit_triggered' %}🚨{% else %}⏱{% endif %} {{ chk.time }}
+                    </span>
+                    <span style="color:var(--border)">│</span>
+                    {% if chk.close %}<span class="mono" style="font-size:.65rem">${{ "%.3f"|format(chk.close) }}</span>{% endif %}
+                    {% if chk.pnl_pct is not none %}<span style="font-size:.65rem;font-weight:600;color:{% if chk.pnl_pct >= 0 %}var(--pos){% else %}var(--neg){% endif %}">{{ "{:+.1f}".format(chk.pnl_pct) }}%</span>{% endif %}
+                    {% if chk.reason %}<span style="color:var(--border)">│</span><span style="font-size:.65rem;font-style:italic">{{ chk.reason }}</span>{% endif %}
                   </div>
                   {% endfor %}
+
                 {% else %}
                   <span style="font-size:.7rem;color:var(--text-subtle);font-style:italic">No exit checks logged yet (evaluates every 5 minutes during market hours)</span>
                 {% endif %}
