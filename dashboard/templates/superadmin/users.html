@@ -18,10 +18,10 @@
 {% elif saved == 'welcome_manual' %}
 <div class="alert-warning mb-4">
   <p class="font-bold flex items-center gap-1.5 text-amber-800 dark:text-amber-400">
-    ⚠️ Welcome Email Delivery Offline / Skipped
+    ⚠️ Onboarding Link Ready
   </p>
   <p class="text-xs mt-1 text-amber-700 dark:text-amber-300">
-    User created successfully, but welcome email could not be sent (SMTP offline/skipped in development). Copy this setup link and send it manually to the user:
+    User created successfully. Copy this password setup link and send it manually to the user:
   </p>
   <code class="block bg-slate-950 text-emerald-400 p-2 rounded mt-2 font-mono text-xs select-all border border-amber-900/30">
     {{ request.url.scheme }}://{{ request.headers.get('host', 'localhost:8501') }}/reset-password?token={{ request.query_params.get('token') }}
@@ -112,6 +112,14 @@
             <option value="{{ role.id }}">{{ role.name }}</option>
           {% endfor %}
         </select>
+      </div>
+
+      <div class="flex items-center gap-2 mt-2">
+        <input type="checkbox" id="send_welcome" name="send_welcome" value="1" checked
+               class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 bg-transparent" style="border-color:var(--border)">
+        <label class="text-xs font-semibold select-none cursor-pointer" for="send_welcome" style="color:var(--text)">
+          Send onboarding email to user
+        </label>
       </div>
 
       <p class="text-[10px]" style="color:var(--text-subtle)">

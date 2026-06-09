@@ -127,25 +127,55 @@ class IBKRBroker:
         except (TypeError, ValueError):
             return None
 
+    def _build_contract(self, ticker: str, exchange_key: str = "ASX"):
+        """
+        Build an ib_insync Stock contract appropriate for the given exchange.
+
+        Exchange routing:
+          ASX             → Stock(symbol, "ASX", "AUD")       e.g. BHP
+          NYSE / NASDAQ   → Stock(symbol, "SMART", "USD")     e.g. AAPL
+          Unknown         → Stock(symbol, "SMART", "USD")     fallback
+
+        The ticker passed here is the exchange_code (display code), NOT the yfinance ticker.
+        Callers must strip the yfinance suffix before calling:
+          "BHP.AX" → "BHP"  for ASX
+          "AAPL"   → "AAPL" for NYSE
+        """
+        if not IB_AVAILABLE:
+            return None
+
+        # Strip any yfinance suffix
+        symbol = ticker.replace(".AX", "").replace("-USD", "").upper()
+
+        if exchange_key == "ASX":
+            return Stock(symbol, "ASX", "AUD")
+        elif exchange_key in ("NYSE", "NASDAQ"):
+            return Stock(symbol, "SMART", "USD")
+        else:
+            logger.warning(f"Unknown exchange_key '{exchange_key}' for IBKR — using SMART/USD")
+            return Stock(symbol, "SMART", "USD")
+
     def submit_bracket_order(
         self,
-        ticker: str,             # ASX code, e.g. "BHP"
+        ticker: str,             # yfinance format: "BHP.AX", "AAPL"
         action: str,             # "BUY"
-        qty: int,
-        entry_price: float,      # Limit price
-        stop_price: float,       # Stop loss
-        target_price: float,     # Profit target (limit sell)
+        qty: float,
+        entry_price: float,      # Limit price (native currency)
+        stop_price: float,       # Stop loss (native currency)
+        target_price: float,     # Profit target (native currency)
+        exchange_key: str = "ASX",
         order_ref: str = "",
     ) -> dict:
         """
         Submit a bracket order: entry limit + stop loss + profit target.
+        Exchange-aware: routes to ASX or US SMART router based on exchange_key.
         Returns dict with order details and IBKR order IDs.
         """
         if not self.is_connected:
             return _simulate_order(ticker, action, qty, entry_price, stop_price, order_ref)
 
         try:
-            contract = Stock(ticker, "ASX", "AUD")
+            contract = self._build_contract(ticker, exchange_key)
             self._ib.qualifyContracts(contract)
 
             bracket = self._ib.bracketOrder(
@@ -200,22 +230,35 @@ class IBKRBroker:
             logger.error(f"Cancel order failed: {e}")
             return False
 
-    def get_open_positions(self) -> list[dict]:
-        """Fetch current IBKR positions."""
+    def get_open_positions(self, exchange_key: str = None) -> list[dict]:
+        """
+        Fetch current IBKR positions.
+        If exchange_key is specified, filter to only that exchange.
+        If None, return all positions across all exchanges.
+        """
         if not self.is_connected:
             return []
         try:
             positions = self._ib.positions()
-            return [
-                {
-                    "ticker": p.contract.symbol,
-                    "qty": p.position,
-                    "avg_cost": p.avgCost,
-                    "market_value": p.marketValue if hasattr(p, "marketValue") else None,
-                }
-                for p in positions
-                if p.contract.exchange == "ASX" or p.contract.currency == "AUD"
-            ]
+            result = []
+            for p in positions:
+                contract_exchange = getattr(p.contract, "exchange", "")
+                contract_currency = getattr(p.contract, "currency", "")
+                # Map IBKR exchange to our exchange_key
+                if exchange_key:
+                    if exchange_key == "ASX" and contract_exchange != "ASX":
+                        continue
+                    if exchange_key in ("NYSE", "NASDAQ") and contract_currency != "USD":
+                        continue
+                result.append({
+                    "ticker":        p.contract.symbol,
+                    "exchange":      contract_exchange,
+                    "currency":      contract_currency,
+                    "qty":           p.position,
+                    "avg_cost":      p.avgCost,
+                    "market_value":  getattr(p, "marketValue", None),
+                })
+            return result
         except Exception as e:
             logger.error(f"Positions fetch failed: {e}")
             return []
@@ -240,18 +283,18 @@ class IBKRBroker:
             logger.error(f"Orders fetch failed: {e}")
             return []
 
-    def get_market_snapshot(self, ticker: str) -> Optional[dict]:
+    def get_market_snapshot(self, ticker: str, exchange_key: str = "ASX") -> Optional[dict]:
         """
-        Request a one-shot real-time market data snapshot for a single ASX ticker.
+        Request a real-time market data snapshot for a ticker on any supported exchange.
         Returns {last, bid, ask, volume, timestamp} or None if unavailable.
-        Requires IBKR market data subscription for ASX equities.
+        Requires active IBKR market data subscription for the exchange.
         """
         if not self.is_connected or not IB_AVAILABLE:
             return None
         try:
             from ib_insync import Stock as IBStock
             from datetime import datetime as _dt
-            contract = IBStock(ticker.replace(".AX", ""), "ASX", "AUD")
+            contract = self._build_contract(ticker, exchange_key)
             self._ib.qualifyContracts(contract)
             # reqMktData with snapshot=True returns a Ticker object immediately
             ticker_data = self._ib.reqMktData(contract, "", True, False)

@@ -4,207 +4,468 @@
 
 {% block content %}
 
-<!-- ── Worker / regime banners ────────────────────────────────── -->
+{# ── Flash messages ─────────────────────────────────────────────── #}
+{% set msg = request.query_params.get('msg', '') %}
 {% if worker_status == 'offline' %}
 <div class="alert-danger mb-4">
   <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
-  <div><strong>Celery worker is offline.</strong> Trading automatically suspended — no new entries until worker is back. Last heartbeat: <strong>{{ heartbeat }}</strong></div>
+  <div><strong>Celery worker is offline.</strong> Trading automatically suspended. Last heartbeat: <strong>{{ heartbeat }}</strong></div>
 </div>
 {% elif worker_status == 'starting' %}
 <div class="alert-warn mb-4">
   <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
-  <div><strong>Worker starting up.</strong> Heartbeat task runs every 10 min — click <strong>Ping Worker</strong> below to trigger it immediately.</div>
+  <div><strong>Worker starting up.</strong> Heartbeat runs every 10 min — click <strong>Ping Worker</strong> to confirm immediately.</div>
 </div>
 {% endif %}
 
-{% set msg = request.query_params.get('msg', '') %}
-{% if msg == 'ping' %}
-<div class="alert-success mb-4"><svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
-Worker ping queued — refresh in ~10 seconds.</div>
-{% elif msg == 'regime' %}
-<div class="alert-info mb-4"><svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
-Market regime queued — refresh in ~1 minute.</div>
-{% elif msg == 'setup' %}
-<div class="alert-info mb-4"><svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
-<div><strong>Full setup queued.</strong> The worker will: fetch ASX200 universe → download 2yr price history → evaluate market regime → run screener. This takes 5–15 minutes. Check the Signals and Watchlist pages after.</div></div>
-{% elif msg == 'data' %}
-<div class="alert-info mb-4"><svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
-Price data refresh queued — takes a few minutes for the full universe.</div>
+{% if msg == 'ping' %}<div class="alert-success mb-4">Worker ping queued — refresh in ~10 seconds.</div>
+{% elif msg == 'regime' %}<div class="alert-info mb-4">Market regime evaluation queued — refresh in ~1 minute.</div>
+{% elif msg == 'setup' %}<div class="alert-info mb-4"><strong>Full setup queued.</strong> Universe → price data → regime → screen. Takes 5–15 min.</div>
+{% elif msg == 'data' %}<div class="alert-info mb-4">Price data refresh queued — crypto exchange will auto-seed universe if not yet initialised. Check Task Log for progress.</div>
+{% elif msg == 'screen' %}<div class="alert-info mb-4">Screener queued — results appear in Signals within minutes.</div>
+{% elif msg == 'report' %}<div class="alert-info mb-4">Daily report queued — {% if notification_channel == 'telegram' %}Telegram{% else %}WhatsApp{% endif %} message incoming.</div>
+{% elif msg == 'crypto_seed' %}<div class="alert-success mb-4">Crypto universe seeding queued — top 50 tokens will be added. Then run Refresh Data to fetch prices.</div>
 {% endif %}
 
-<!-- ── First-run banner ────────────────────────────────────────── -->
 {% if is_first_run %}
 <div class="alert-warn mb-5" style="align-items:flex-start;flex-direction:column;gap:.75rem">
   <div style="display:flex;align-items:center;gap:.625rem">
     <svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
     <strong>First-time setup required.</strong>
   </div>
-  <p style="font-size:.8125rem">The stock universe table is empty — the screener has nothing to scan. Click <strong>🚀 Run Full Setup</strong> below to fetch the ASX200 universe, download 2 years of price history, evaluate the market regime, and run the first screen. This takes 5–15 minutes and requires the Celery worker to be online.</p>
-  <form method="post" action="/action/full-setup">
-    <button type="submit" class="btn-primary">🚀 Run Full Setup Now</button>
-  </form>
+  <p style="font-size:.8125rem">No stock or crypto universe found. Click <strong>Run Full Setup</strong> to initialise everything.</p>
+  <form method="post" action="/action/full-setup"><button type="submit" class="btn-primary">&#x1F680; Run Full Setup Now</button></form>
 </div>
 {% endif %}
 
-<!-- ── Status cards ───────────────────────────────────────────── -->
-<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+<!-- 1. Worker & System Status -->
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
 
   <div class="stat-card">
-    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Celery Worker</p>
+    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Worker · Equities</p>
     {% if worker_status == 'online' %}
-      <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full animate-pulse" style="background:var(--pos)"></span>
-      <span class="text-sm font-bold" style="color:var(--pos)">Online</span></div>
+      <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full animate-pulse" style="background:var(--pos)"></span><span class="text-sm font-bold" style="color:var(--pos)">Online</span></div>
       <p class="text-xs mt-1" style="color:var(--text-subtle)">{{ heartbeat }}</p>
-      <p class="text-xs mt-0.5" style="color:var(--text-subtle);opacity:.55">
-        tz: {{ display_tz }} · <a href="/admin/config" style="color:inherit;text-decoration:underline">change</a>
-      </p>
     {% elif worker_status == 'starting' %}
-      <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full animate-pulse" style="background:var(--warn)"></span>
-      <span class="text-sm font-bold" style="color:var(--warn)">Starting…</span></div>
-      <p class="text-xs mt-1" style="color:var(--text-subtle)">No heartbeat yet</p>
+      <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full animate-pulse" style="background:var(--warn)"></span><span class="text-sm font-bold" style="color:var(--warn)">Starting…</span></div>
+      <p class="text-xs mt-1" style="color:var(--text-subtle)">Awaiting heartbeat</p>
     {% else %}
-      <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full" style="background:var(--neg)"></span>
-      <span class="text-sm font-bold" style="color:var(--neg)">Offline</span></div>
+      <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full" style="background:var(--neg)"></span><span class="text-sm font-bold" style="color:var(--neg)">Offline</span></div>
       <p class="text-xs mt-1" style="color:var(--text-subtle)">Last: {{ heartbeat }}</p>
-      <p class="text-xs mt-0.5" style="color:var(--text-subtle);opacity:.55">
-        tz: {{ display_tz }} · <a href="/admin/config" style="color:inherit;text-decoration:underline">change</a>
-      </p>
     {% endif %}
+    <p class="text-xs mt-1 opacity-60" style="color:var(--text-subtle)">Queues: equities, screening, reporting</p>
   </div>
 
   <div class="stat-card">
-    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Market Regime</p>
-    {% if regime == 'BULL' %}<p class="text-sm font-bold" style="color:var(--bull)">🟢 BULL</p>
-    {% elif regime == 'CAUTION' %}<p class="text-sm font-bold" style="color:var(--caution)">🟡 CAUTION</p>
-    {% elif regime == 'BEAR' %}<p class="text-sm font-bold" style="color:var(--bear)">🔴 BEAR</p>
+    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Worker · Crypto</p>
+    {% if has_crypto %}
+      {% if worker_status == 'online' %}
+        <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full animate-pulse" style="background:var(--pos)"></span><span class="text-sm font-bold" style="color:var(--pos)">Online</span></div>
+        {% set ec = task_runs.get('entry_crypto') %}
+        <p class="text-xs mt-1" style="color:var(--text-subtle)">Last check: {{ ec.time if ec else heartbeat }}</p>
+      {% else %}
+        <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full" style="background:var(--neg)"></span><span class="text-sm font-bold" style="color:var(--neg)">Offline</span></div>
+      {% endif %}
+      <p class="text-xs mt-1 opacity-60" style="color:var(--text-subtle)">Queues: trading_crypto, screening_crypto</p>
     {% else %}
-      <p class="text-sm font-bold" style="color:var(--text-muted)">Not evaluated</p>
-      <p class="text-xs mt-1" style="color:var(--text-subtle)">Auto: 5:15pm AEST</p>
+      <p class="text-sm font-bold" style="color:var(--text-muted)">Not Active</p>
+      <p class="text-xs mt-1" style="color:var(--text-subtle)">
+        Two steps to enable:
+      </p>
+      <ol class="text-xs mt-1 ml-3" style="color:var(--text-subtle);list-style:decimal">
+        <li>Go to <a href="/admin/config" style="color:var(--t-accent)">Config</a> &rarr; add <code style="font-size:.7rem;background:var(--surface-alt);padding:0 .2rem;border-radius:.2rem">CRYPTO_INDEPENDENTRESERVE</code> to <strong>Active Exchanges</strong></li>
+        <li>Set <strong>Crypto API Key</strong> and <strong>Secret</strong></li>
+      </ol>
     {% endif %}
   </div>
 
   <div class="stat-card">
-    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Trading</p>
+    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Trading Gate</p>
     {% if trading_active %}
-      <p class="text-sm font-bold" style="color:var(--pos)">▶ Active</p>
-      <p class="text-xs mt-1" style="color:var(--text-subtle)">Entries enabled</p>
+      <p class="text-sm font-bold" style="color:var(--pos)">&#9654; Active</p>
+      <p class="text-xs mt-1" style="color:var(--text-subtle)">Auto-entries enabled</p>
     {% elif worker_status != 'online' %}
-      <p class="text-sm font-bold" style="color:var(--neg)">⚠ Blocked</p>
+      <p class="text-sm font-bold" style="color:var(--neg)">&#9888; Blocked</p>
       <p class="text-xs mt-1" style="color:var(--text-subtle)">Worker not online</p>
     {% else %}
-      <p class="text-sm font-bold" style="color:var(--warn)">⏸ Paused</p>
+      <p class="text-sm font-bold" style="color:var(--warn)">&#9208; Paused</p>
       <p class="text-xs mt-1" style="color:var(--text-subtle)">Manually paused</p>
     {% endif %}
+    <div class="mt-2 flex gap-1.5">
+      {% if trading_paused %}
+      <form method="post" action="/action/resume"><button type="submit" style="font-size:.7rem;padding:.2rem .5rem;border-radius:.3rem;font-weight:600;background:var(--pos);color:#fff;border:none;cursor:pointer">Resume</button></form>
+      {% else %}
+      <form method="post" action="/action/pause"><button type="submit" style="font-size:.7rem;padding:.2rem .5rem;border-radius:.3rem;font-weight:600;background:transparent;color:var(--warn);border:1px solid var(--warn);cursor:pointer">Pause</button></form>
+      {% endif %}
+    </div>
   </div>
 
   <div class="stat-card">
     <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Account</p>
-    <p class="text-sm font-bold" style="color:var(--t-accent)">{% if is_paper_account %}📄 Paper{% else %}💰 Live{% endif %}</p>
-    <p class="text-xs mt-1" style="color:var(--text-subtle)">${{ "{:,.0f}".format(capital) }} AUD</p>
+    <p class="text-sm font-bold" style="color:var(--t-accent)">{% if is_paper_account %}Paper{% else %}LIVE{% endif %}</p>
+    <p class="text-xs mt-1" style="color:var(--text)">${{ "{:,.0f}".format(capital) }}</p>
+    <p class="text-xs mt-0.5 opacity-60" style="color:var(--text-subtle)">Working capital</p>
   </div>
 </div>
 
-<!-- ── Data diagnostics ───────────────────────────────────────── -->
+<!-- 2. Market Regime per Exchange -->
+{% if exchange_regimes %}
 <div class="card p-4 mb-6">
-  <p class="field-label mb-3">Data State</p>
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.75rem">
-    {% for label, val, ok in [
-      ('ASX Universe', stock_count|string ~ ' stocks', stock_count > 0),
-      ('Price Bars (total)', "{:,}".format(price_bar_count), price_bar_count > 0),
-      ('Today\'s Bars', today_bars|string, today_bars > 0),
-      ('Today\'s Signals', signal_count_today|string, true),
-      ('Watchlist', watchlist_count|string ~ ' stocks', true),
-    ] %}
-    <div style="padding:.75rem;background:var(--surface-alt);border-radius:.5rem;border:1px solid var(--border)">
-      <p class="field-label">{{ label }}</p>
-      <p style="font-size:1.125rem;font-weight:700;color:{% if ok %}var(--pos){% else %}var(--neg){% endif %}">{{ val }}</p>
+  <p class="text-xs font-semibold uppercase tracking-wider mb-3" style="color:var(--text-subtle)">Market Regime by Exchange</p>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.75rem">
+    {% for exc_key, regime_val in exchange_regimes.items() %}
+    <div style="padding:.875rem;background:var(--surface-alt);border-radius:.5rem;border:1px solid var(--border)">
+      <p class="text-xs font-semibold mb-1.5" style="color:var(--text-muted)">
+        {% if exc_key == 'ASX' %}&#x1F1E6;&#x1F1FA; ASX
+        {% elif exc_key in ('NYSE','NASDAQ') %}&#x1F1FA;&#x1F1F8; {{ exc_key }}
+        {% elif exc_key.startswith('CRYPTO') %}&#x20BF; {{ exc_key | replace('CRYPTO_','') }}
+        {% else %}{{ exc_key }}{% endif %}
+      </p>
+      {% if regime_val == 'BULL' %}<p class="text-sm font-bold" style="color:var(--pos)">&#x1F7E2; BULL</p>
+      {% elif regime_val == 'CAUTION' %}<p class="text-sm font-bold" style="color:var(--warn)">&#x1F7E1; CAUTION</p>
+      {% elif regime_val == 'BEAR' %}<p class="text-sm font-bold" style="color:var(--neg)">&#x1F534; BEAR</p>
+      {% else %}<p class="text-sm" style="color:var(--text-muted)">Not evaluated</p>{% endif %}
+      <form method="post" action="/action/evaluate-regime" class="mt-2">
+        <input type="hidden" name="exchange" value="{{ exc_key }}">
+        <button type="submit" style="font-size:.7rem;padding:.2rem .5rem;border-radius:.3rem;font-weight:600;background:transparent;color:var(--text-muted);border:1px solid var(--border);cursor:pointer">Re-evaluate</button>
+      </form>
     </div>
     {% endfor %}
   </div>
-  {% if stock_count == 0 %}
-  <p style="font-size:.75rem;color:var(--warn);margin-top:.75rem">⚠ No stocks in universe — screener cannot run. Click <strong>Run Full Setup</strong> above.</p>
+</div>
+{% endif %}
+
+<!-- 3. Data State -->
+<div class="card p-4 mb-6">
+  <p class="text-xs font-semibold uppercase tracking-wider mb-3" style="color:var(--text-subtle)">Data State</p>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.75rem">
+
+    {% if has_asx or has_us %}
+    <div style="padding:.75rem;background:var(--surface-alt);border-radius:.5rem;border:1px solid var(--border)">
+      <p class="text-xs mb-1" style="color:var(--text-subtle)">Equity Universe</p>
+      <p style="font-size:1.1rem;font-weight:700;color:{% if stock_count > 0 %}var(--pos){% else %}var(--neg){% endif %}">{{ stock_count }} stocks</p>
+    </div>
+    {% endif %}
+
+    {% if has_crypto %}
+    <div style="padding:.75rem;background:var(--surface-alt);border-radius:.5rem;border:1px solid var(--border)">
+      <p class="text-xs mb-1" style="color:var(--text-subtle)">Crypto Universe</p>
+      <p style="font-size:1.1rem;font-weight:700;color:{% if crypto_count > 0 %}var(--pos){% else %}var(--neg){% endif %}">{{ crypto_count }} assets</p>
+    </div>
+    {% endif %}
+
+    <div style="padding:.75rem;background:var(--surface-alt);border-radius:.5rem;border:1px solid var(--border)">
+      <p class="text-xs mb-1" style="color:var(--text-subtle)">Price Bars (total)</p>
+      <p style="font-size:1.1rem;font-weight:700;color:{% if price_bar_count > 0 %}var(--pos){% else %}var(--neg){% endif %}">{{ "{:,}".format(price_bar_count) }}</p>
+    </div>
+
+    <div style="padding:.75rem;background:var(--surface-alt);border-radius:.5rem;border:1px solid var(--border)">
+      <p class="text-xs mb-1" style="color:var(--text-subtle)">Today's Bars</p>
+      <p style="font-size:1.1rem;font-weight:700;color:{% if today_bars > 0 %}var(--pos){% else %}var(--text-muted){% endif %}">{{ today_bars }}</p>
+    </div>
+
+    {% if has_asx or has_us %}
+    <div style="padding:.75rem;background:var(--surface-alt);border-radius:.5rem;border:1px solid var(--border)">
+      <p class="text-xs mb-1" style="color:var(--text-subtle)">Equity Signals</p>
+      <p style="font-size:1.1rem;font-weight:700;color:var(--t-accent)">{{ equity_signal_count }} today</p>
+    </div>
+    <div style="padding:.75rem;background:var(--surface-alt);border-radius:.5rem;border:1px solid var(--border)">
+      <p class="text-xs mb-1" style="color:var(--text-subtle)">Equity Watchlist</p>
+      <p style="font-size:1.1rem;font-weight:700;color:var(--text)">{{ equity_wl_count }} watching</p>
+    </div>
+    {% endif %}
+
+    {% if has_crypto %}
+    <div style="padding:.75rem;background:var(--surface-alt);border-radius:.5rem;border:1px solid var(--border)">
+      <p class="text-xs mb-1" style="color:var(--text-subtle)">Crypto Signals</p>
+      <p style="font-size:1.1rem;font-weight:700;color:var(--t-accent)">{{ crypto_signal_count }} today</p>
+    </div>
+    <div style="padding:.75rem;background:var(--surface-alt);border-radius:.5rem;border:1px solid var(--border)">
+      <p class="text-xs mb-1" style="color:var(--text-subtle)">Crypto Watchlist</p>
+      <p style="font-size:1.1rem;font-weight:700;color:var(--text)">{{ crypto_wl_count }} watching</p>
+    </div>
+    {% endif %}
+
+  </div>
+  {% if stock_count == 0 and crypto_count == 0 %}
+  <p style="font-size:.75rem;color:var(--warn);margin-top:.75rem">&#9888; No universe data — click <strong>Full Setup</strong> below.</p>
   {% elif price_bar_count == 0 %}
-  <p style="font-size:.75rem;color:var(--warn);margin-top:.75rem">⚠ No price data — run <strong>Refresh Price Data</strong> or <strong>Full Setup</strong> before screening.</p>
+  <p style="font-size:.75rem;color:var(--warn);margin-top:.75rem">&#9888; No price bars — run <strong>Refresh Price Data</strong>.</p>
   {% else %}
-  <p style="font-size:.75rem;color:var(--text-subtle);margin-top:.75rem">✓ Data looks good. Screener ready.</p>
+  <p style="font-size:.75rem;color:var(--text-subtle);margin-top:.75rem">&#10003; Data looks good.</p>
   {% endif %}
 </div>
 
-<!-- ── Manual triggers ────────────────────────────────────────── -->
+<!-- 4. Manual Triggers -->
 <div class="card p-4 mb-6">
-  <p class="field-label mb-3">Manual Triggers</p>
-  <div style="display:flex;flex-wrap:wrap;gap:.5rem">
-    <form method="post" action="/action/full-setup">
-      <button type="submit" class="btn-primary text-xs py-1.5">🚀 Full Setup</button>
-    </form>
-    <form method="post" action="/action/ping-worker">
-      <button type="submit" class="btn-ghost text-xs py-1.5">⚡ Ping Worker</button>
-    </form>
-    <form method="post" action="/action/evaluate-regime">
-      <button type="submit" class="btn-ghost text-xs py-1.5">🌡 Evaluate Market</button>
-    </form>
-    <form method="post" action="/action/refresh-data">
-      <button type="submit" class="btn-ghost text-xs py-1.5">🔄 Refresh Price Data</button>
-    </form>
-    <form method="post" action="/action/force-screen">
-      <button type="submit" class="btn-ghost text-xs py-1.5">🔍 Force Screen</button>
-    </form>
+  <p class="text-xs font-semibold uppercase tracking-wider mb-3" style="color:var(--text-subtle)">Manual Triggers</p>
+  <div style="display:flex;flex-direction:column;gap:.75rem">
+    <div style="display:flex;flex-wrap:wrap;gap:.5rem;padding-bottom:.75rem;border-bottom:1px solid var(--border)">
+      <form method="post" action="/action/full-setup"><button type="submit" class="btn-primary text-xs py-1.5">&#x1F680; Full Setup (All Markets)</button></form>
+      <form method="post" action="/action/ping-worker"><button type="submit" class="btn-ghost text-xs py-1.5">&#x26A1; Ping Worker</button></form>
+      <form method="post" action="/action/send-report"><button type="submit" class="btn-ghost text-xs py-1.5">&#x1F4E8; Send Daily Report</button></form>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
+      <span class="text-xs font-semibold" style="color:var(--text-subtle);white-space:nowrap">Per Exchange:</span>
+
+      <form method="post" action="/action/refresh-data" style="display:inline-flex;align-items:center;gap:.35rem">
+        <select name="exchange" class="input py-1 text-xs" style="width:auto">
+          {% if has_asx %}<option value="ASX">ASX</option>{% endif %}
+          {% if has_us %}<option value="NYSE">NYSE</option><option value="NASDAQ">NASDAQ</option>{% endif %}
+          {% if has_crypto %}{% for exc in active_exchanges %}{% if exc.startswith('CRYPTO') %}<option value="{{ exc }}">{{ exc | replace('CRYPTO_','') }}</option>{% endif %}{% endfor %}{% endif %}
+        </select>
+        <button type="submit" class="btn-ghost text-xs py-1.5">&#x1F504; Refresh Data</button>
+      </form>
+
+      <form method="post" action="/action/evaluate-regime" style="display:inline-flex;align-items:center;gap:.35rem">
+        <select name="exchange" class="input py-1 text-xs" style="width:auto">
+          {% if has_asx %}<option value="ASX">ASX</option>{% endif %}
+          {% if has_us %}<option value="NYSE">NYSE</option>{% endif %}
+          {% if has_crypto %}{% for exc in active_exchanges %}{% if exc.startswith('CRYPTO') %}<option value="{{ exc }}">{{ exc | replace('CRYPTO_','') }}</option>{% endif %}{% endfor %}{% endif %}
+        </select>
+        <button type="submit" class="btn-ghost text-xs py-1.5">&#x1F321; Evaluate Regime</button>
+      </form>
+
+      <form method="post" action="/action/force-screen" style="display:inline-flex;align-items:center;gap:.35rem">
+        <select name="exchange" class="input py-1 text-xs" style="width:auto">
+          {% if has_asx %}<option value="ASX">ASX</option>{% endif %}
+          {% if has_us %}<option value="NYSE">NYSE</option>{% endif %}
+          {% if has_crypto %}{% for exc in active_exchanges %}{% if exc.startswith('CRYPTO') %}<option value="{{ exc }}">{{ exc | replace('CRYPTO_','') }}</option>{% endif %}{% endfor %}{% endif %}
+        </select>
+        <button type="submit" class="btn-ghost text-xs py-1.5">&#x1F50D; Force Screen</button>
+      </form>
+
+      {% if has_crypto %}
+      <form method="post" action="/action/seed-crypto" style="display:inline-flex;align-items:center;gap:.35rem">
+        <select name="exchange" class="input py-1 text-xs" style="width:auto">
+          {% for exc in active_exchanges %}{% if exc.startswith('CRYPTO') %}<option value="{{ exc }}">{{ exc | replace('CRYPTO_','') }}</option>{% endif %}{% endfor %}
+        </select>
+        <button type="submit" class="btn-ghost text-xs py-1.5" style="color:var(--t-accent)">&#x1FA99; Seed Crypto Universe</button>
+      </form>
+      {% endif %}
+    </div>
   </div>
-  <p style="font-size:.75rem;color:var(--text-subtle);margin-top:.625rem">
-    <strong>Full Setup</strong> = universe → price data → regime → screen (use once on first run) ·
-    <strong>Force Screen</strong> = screen now regardless of day/time
-  </p>
 </div>
 
-<!-- ── IBKR + Schedule ────────────────────────────────────────── -->
-<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-  <div class="card p-4">
-    <p class="text-xs font-semibold uppercase tracking-wider mb-3" style="color:var(--text-subtle)">IBKR Gateway</p>
-    <div class="space-y-2">
-      {% for label, val in [('Host', 'ibkr:4002'), ('Port', '4002 (paper) / 4001 (live)'), ('Mode', 'Paper' if is_paper_account else '⚠ LIVE')] %}
-      <div class="flex items-center justify-between py-1.5 border-b last:border-0" style="border-color:var(--border)">
-        <span class="text-xs" style="color:var(--text-muted)">{{ label }}</span>
-        <span class="text-xs font-mono font-medium" style="color:var(--text)">{{ val }}</span>
-      </div>
-      {% endfor %}
-    </div>
-    <p class="text-xs mt-3 font-mono px-2 py-1.5 rounded" style="background:var(--surface-alt);color:var(--text-muted)">
-      docker compose --profile trading up ibkr
+<!-- 5. Scheduled Tasks with Last Run -->
+<div class="card overflow-hidden mb-6">
+  <div class="section-head px-4 py-3" style="display:flex;align-items:center;justify-content:space-between">
+    <p class="section-title">Scheduled Tasks</p>
+    <span class="text-xs" style="color:var(--text-subtle)">All times AEST &middot; last-run in {{ display_tz }}</span>
+  </div>
+  <table class="w-full text-left border-collapse">
+    <thead>
+      <tr style="background:var(--surface-alt);border-bottom:1px solid var(--border)">
+        <th class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text-muted)">Task</th>
+        <th class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text-muted)">Market</th>
+        <th class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text-muted)">Schedule (AEST)</th>
+        <th class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text-muted)">Last Run</th>
+        <th class="px-4 py-2.5 text-xs font-semibold hidden md:table-cell" style="color:var(--text-muted)">What it does</th>
+      </tr>
+    </thead>
+    <tbody>
+
+      <!-- System -->
+      {% set hb = task_runs.get('heartbeat') %}
+      <tr class="tbl-row border-b" style="border-color:var(--border)">
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Worker Heartbeat</td>
+        <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">All</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Every 10 min</td>
+        <td class="px-4 py-2.5 text-xs">{% if hb %}<span style="color:var(--pos)">&#x25CF; {{ hb.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Confirms worker is alive; gates entry checks</td>
+      </tr>
+
+      {% set r = task_runs.get('report') %}
+      <tr class="tbl-row border-b" style="border-color:var(--border)">
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Daily Report</td>
+        <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">All</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Mon&ndash;Fri 6:00pm</td>
+        <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">{% if notification_channel == 'telegram' %}Telegram{% else %}WhatsApp{% endif %} P&amp;L summary to configured admin number</td>
+      </tr>
+
+      <!-- ASX tasks -->
+      {% if has_asx %}
+
+      {% set r = task_runs.get('universe') %}
+      <tr class="tbl-row border-b" style="border-color:var(--border)">
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Refresh Universe</td>
+        <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">ASX</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Sun 8:00pm</td>
+        <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Updates ASX200 stock list from index source</td>
+      </tr>
+
+      {% set r = task_runs.get('price_asx') %}
+      <tr class="tbl-row border-b" style="border-color:var(--border)">
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Refresh Price Data</td>
+        <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">ASX</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Mon&ndash;Fri 5:00pm</td>
+        <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Downloads EOD close, volume, MA data for all ASX stocks</td>
+      </tr>
+
+      {% set r = task_runs.get('regime_asx') %}
+      <tr class="tbl-row border-b" style="border-color:var(--border)">
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Market Regime</td>
+        <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">ASX</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Mon&ndash;Fri 5:15pm</td>
+        <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Sets BULL / CAUTION / BEAR — gates whether new entries are allowed</td>
+      </tr>
+
+      {% set r = task_runs.get('screen_asx') %}
+      <tr class="tbl-row border-b" style="border-color:var(--border)">
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Minervini Screener</td>
+        <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">ASX</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Mon&ndash;Fri 5:30pm</td>
+        <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Full SEPA/VCP screen &rarr; populates Signals and Watchlist</td>
+      </tr>
+
+      {% set r = task_runs.get('entry_asx') %}
+      <tr class="tbl-row border-b" style="border-color:var(--border)">
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Entry Triggers</td>
+        <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">ASX</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Every 5 min · 10am–4:12pm</td>
+        <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Intraday breakout check &rarr; submits bracket order on confirmation</td>
+      </tr>
+
+      {% set r = task_runs.get('exit_asx') %}
+      <tr class="tbl-row border-b" style="border-color:var(--border)">
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Exit Rules</td>
+        <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">ASX</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Every 5 min · 10am–4:12pm</td>
+        <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Checks stops, profit targets, time stops on open ASX positions</td>
+      </tr>
+
+      {% endif %}
+
+      <!-- US tasks -->
+      {% if has_us %}
+
+      {% set r = task_runs.get('price_us') %}
+      <tr class="tbl-row border-b" style="border-color:var(--border)">
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Refresh Price Data</td>
+        <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">NYSE / NASDAQ</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Tue&ndash;Sat 7:00am</td>
+        <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">After NYSE session close; runs AEST morning</td>
+      </tr>
+
+      {% set r = task_runs.get('regime_us') %}
+      <tr class="tbl-row border-b" style="border-color:var(--border)">
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Market Regime</td>
+        <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">NYSE / NASDAQ</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Tue&ndash;Sat 7:15am</td>
+        <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">S&amp;P 500 breadth + distribution day count</td>
+      </tr>
+
+      {% set r = task_runs.get('screen_us') %}
+      <tr class="tbl-row border-b" style="border-color:var(--border)">
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Minervini Screener</td>
+        <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">NYSE / NASDAQ</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Tue&ndash;Sat 7:30am</td>
+        <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Full SEPA/VCP screen on US universe</td>
+      </tr>
+
+      {% set r = task_runs.get('entry_us') %}
+      <tr class="tbl-row border-b" style="border-color:var(--border)">
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Entry + Exit Checks</td>
+        <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">NYSE / NASDAQ</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Every 5 min · 11:30pm–6:05am</td>
+        <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">During NYSE session hours (AEST overnight)</td>
+      </tr>
+
+      {% endif %}
+
+      <!-- Crypto tasks -->
+      {% if has_crypto %}
+
+      {% set r = task_runs.get('price_crypto') %}
+      <tr class="tbl-row border-b" style="border-color:var(--border)">
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Refresh Price Data</td>
+        <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">Crypto</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Daily 10:30am (0:30 UTC)</td>
+        <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Daily OHLCV for all tracked crypto pairs</td>
+      </tr>
+
+      {% set r = task_runs.get('regime_crypto') %}
+      <tr class="tbl-row border-b" style="border-color:var(--border)">
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Market Regime</td>
+        <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">Crypto</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Daily 10:30am</td>
+        <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">BTC above 200-day MA &rarr; BULL / BEAR for crypto entries</td>
+      </tr>
+
+      {% set r = task_runs.get('screen_crypto') %}
+      <tr class="tbl-row border-b" style="border-color:var(--border)">
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">VCP Screener</td>
+        <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">Crypto</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Daily 11:00am</td>
+        <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Momentum + VCP screen on crypto watchlist</td>
+      </tr>
+
+      {% set r = task_runs.get('entry_crypto') %}
+      <tr class="tbl-row" style="">
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Entry + Exit Checks</td>
+        <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">Crypto</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Every 5 min · 24/7</td>
+        <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Continuous — crypto markets never close</td>
+      </tr>
+
+      {% endif %}
+
+    </tbody>
+  </table>
+  <div class="px-4 py-2.5" style="border-top:1px solid var(--border);background:var(--surface-alt)">
+    <p class="text-xs" style="color:var(--text-subtle)">
+      &#x25CF; Last run sourced from the audit log. Tasks that have never run show <em>Never</em>.
+      Times shown in <strong>{{ display_tz }}</strong>.
     </p>
   </div>
-
-  <div class="card p-4">
-    <p class="text-xs font-semibold uppercase tracking-wider mb-3" style="color:var(--text-subtle)">Automatic Schedule (AEST)</p>
-    <div class="space-y-1.5">
-      {% for time, task in [
-        ('Sun 8pm', 'Refresh ASX200 universe'),
-        ('Mon–Fri 5:00pm', 'Refresh price data'),
-        ('Mon–Fri 5:15pm', 'Evaluate market regime'),
-        ('Mon–Fri 5:30pm', 'Run Minervini screener'),
-        ('Mon–Fri 6:00pm', 'Send WhatsApp report'),
-        ('Every 5 min (mkt hrs)', 'Entry + exit rule checks'),
-        ('Every 10 min', 'Worker heartbeat'),
-      ] %}
-      <div class="flex items-center gap-2 text-xs">
-        <span class="font-mono rounded px-1.5 py-0.5 flex-shrink-0 text-xs" style="background:var(--surface-alt);color:var(--text-muted)">{{ time }}</span>
-        <span style="color:var(--text-muted)">{{ task }}</span>
-      </div>
-      {% endfor %}
-    </div>
-  </div>
 </div>
 
-<!-- ── Recent events ──────────────────────────────────────────── -->
+<!-- 6. IBKR Gateway -->
+<div class="card p-4 mb-6">
+  <p class="text-xs font-semibold uppercase tracking-wider mb-3" style="color:var(--text-subtle)">IBKR Gateway</p>
+  <div class="space-y-2">
+    <div class="flex items-center justify-between py-1.5 border-b" style="border-color:var(--border)">
+      <span class="text-xs" style="color:var(--text-muted)">Host</span>
+      <span class="text-xs font-mono" style="color:var(--text)">ibkr</span>
+    </div>
+    <div class="flex items-center justify-between py-1.5 border-b" style="border-color:var(--border)">
+      <span class="text-xs" style="color:var(--text-muted)">Port</span>
+      <span class="text-xs font-mono" style="color:var(--text)">4002 (paper) / 4001 (live)</span>
+    </div>
+    <div class="flex items-center justify-between py-1.5" style="border-color:var(--border)">
+      <span class="text-xs" style="color:var(--text-muted)">Mode</span>
+      <span class="text-xs font-mono font-semibold" style="color:{% if is_paper_account %}var(--text-muted){% else %}var(--neg){% endif %}">{{ 'Paper' if is_paper_account else 'LIVE' }}</span>
+    </div>
+  </div>
+  <p class="text-xs mt-3 font-mono px-2 py-1.5 rounded" style="background:var(--surface-alt);color:var(--text-muted)">docker compose --profile trading up ibkr -d</p>
+</div>
+
+<!-- 7. Recent Events -->
 <div class="card overflow-hidden">
-  <div class="section-head">
+  <div class="section-head px-4 py-3" style="display:flex;align-items:center;justify-content:space-between">
     <p class="section-title">Recent Events</p>
-    <a href="/admin/audit" class="text-xs font-medium" style="color:var(--a-accent)">Full log →</a>
+    <a href="/admin/audit" class="text-xs font-medium" style="color:var(--a-accent)">Full log &rarr;</a>
   </div>
   {% if recent_logs %}
   <div>
     {% for log in recent_logs %}
-    <div class="flex items-start gap-3 px-4 py-2.5 tbl-row">
-      <span class="text-xs font-mono flex-shrink-0 w-12 mt-0.5" style="color:var(--text-subtle)">{{ log.time }}</span>
+    <div class="flex items-start gap-3 px-4 py-2.5 tbl-row border-b last:border-0" style="border-color:var(--border)">
+      <span class="text-xs font-mono flex-shrink-0 w-14 mt-0.5" style="color:var(--text-subtle)">{{ log.time }}</span>
       <div class="flex-1 min-w-0">
         <span class="text-xs font-semibold" style="color:var(--a-accent)">{{ log.action }}</span>
         {% if log.ticker != '—' %}<span class="text-xs font-mono ml-1.5" style="color:var(--text-muted)">{{ log.ticker }}</span>{% endif %}
@@ -215,7 +476,7 @@ Price data refresh queued — takes a few minutes for the full universe.</div>
     {% endfor %}
   </div>
   {% else %}
-  <div class="px-4 py-10 text-center text-xs" style="color:var(--text-subtle)">No events yet — run the screener or ping the worker above.</div>
+  <div class="px-4 py-10 text-center text-xs" style="color:var(--text-subtle)">No events yet — run the screener or ping the worker.</div>
   {% endif %}
 </div>
 

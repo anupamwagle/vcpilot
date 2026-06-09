@@ -3,50 +3,357 @@
 {% block page_title %}System Configuration{% endblock %}
 
 {% block content %}
+
 {% if saved %}
 <div class="alert-success mb-4">
-  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
   Configuration saved and audit-logged.
 </div>
 {% endif %}
+{% if error %}
+<div class="alert-warn mb-4">⚠️ {{ error }}</div>
+{% endif %}
+
+<style>
+/* Config row layout */
+.cfg-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+}
+.cfg-row + .cfg-row { border-top: 1px solid var(--border); }
+.cfg-label   { font-size:.875rem; font-weight:600; color:var(--text); line-height:1.3 }
+.cfg-desc    { font-size:.75rem; color:var(--text-muted); margin-top:.2rem; line-height:1.5 }
+.cfg-key     { font-family:'SF Mono',monospace; font-size:.68rem; color:var(--text-subtle);
+               background:var(--surface-alt); padding:.1rem .4rem; border-radius:.25rem;
+               display:inline-block; margin-top:.3rem }
+.cfg-hint    { font-size:.7rem; color:var(--text-subtle); margin-top:.3rem }
+.cfg-hint a  { color:var(--t-accent); text-decoration:none }
+.cfg-hint a:hover { text-decoration:underline }
+.cfg-example { font-size:.68rem; color:var(--text-subtle); font-style:italic; margin-top:.2rem }
+.cfg-status  { font-size:.65rem; font-weight:600; padding:.15rem .45rem; border-radius:.25rem;
+               display:inline-block; margin-top:.3rem }
+.cfg-status.set     { background:var(--pos-bg); color:var(--pos) }
+.cfg-status.unset   { background:var(--neg-bg);  color:var(--neg) }
+.cfg-status.default { background:var(--surface-alt); color:var(--text-subtle) }
+
+/* Control area */
+.cfg-control { display:flex; align-items:center; gap:.5rem; flex-shrink:0; flex-wrap:wrap; justify-content:flex-end }
+.cfg-input   { width:13rem; }
+.cfg-input-sm{ width:9rem; }
+.cfg-input-lg{ width:16rem; }
+.cfg-save    { white-space:nowrap }
+
+/* Number input with prefix */
+.input-prefix-wrap { display:flex; align-items:center; gap:0; border:1px solid var(--border);
+                     border-radius:.375rem; background:var(--surface); overflow:hidden }
+.input-prefix-wrap .prefix { padding:.45rem .6rem; font-size:.75rem; color:var(--text-subtle);
+                              background:var(--surface-alt); border-right:1px solid var(--border);
+                              white-space:nowrap; user-select:none }
+.input-prefix-wrap input { border:none; background:transparent; outline:none; padding:.45rem .6rem;
+                            font-size:.8rem; color:var(--text); width:7rem; font-family:'SF Mono',monospace }
+
+/* Exchange multi-select chips */
+.exc-chips { display:flex; flex-wrap:wrap; gap:.4rem; margin-top:.25rem }
+.exc-chip  { display:inline-flex; align-items:center; gap:.3rem; padding:.3rem .7rem;
+             border-radius:999px; font-size:.75rem; font-weight:500; cursor:pointer;
+             border:1.5px solid var(--border); background:var(--surface-alt); color:var(--text-muted);
+             transition:all .15s; user-select:none }
+.exc-chip.active { background:var(--t-accent); color:#fff; border-color:var(--t-accent) }
+.exc-chip:hover:not(.active) { border-color:var(--t-accent); color:var(--t-accent) }
+
+/* Password show/hide */
+.pw-wrap { position:relative; display:flex; align-items:center }
+.pw-wrap input { padding-right:2.25rem }
+.pw-toggle { position:absolute; right:.5rem; background:none; border:none; cursor:pointer;
+             color:var(--text-muted); padding:.25rem; line-height:1 }
+.pw-toggle:hover { color:var(--text) }
+
+/* Readonly badge */
+.cfg-readonly { font-size:.8rem; font-family:'SF Mono',monospace; padding:.35rem .65rem;
+                background:var(--surface-alt); border-radius:.375rem; color:var(--text-muted);
+                border:1px solid var(--border); max-width:15rem; overflow:hidden;
+                text-overflow:ellipsis; white-space:nowrap }
+
+/* Group header */
+.cfg-group-head { display:flex; align-items:center; gap:.625rem; padding:.875rem 1.25rem;
+                  border-bottom:1px solid var(--border) }
+.cfg-group-icon { font-size:1.1rem; line-height:1 }
+.cfg-group-title{ font-size:.8rem; font-weight:700; text-transform:uppercase;
+                  letter-spacing:.06em; color:var(--text-muted) }
+
+@media (max-width:640px) {
+  .cfg-row { grid-template-columns: 1fr; }
+  .cfg-control { justify-content:flex-start; }
+  .cfg-input, .cfg-input-lg { width:100% }
+}
+</style>
 
 <div style="display:flex;flex-direction:column;gap:1.5rem">
 {% for group, configs in configs_by_group.items() %}
+
+{% set gm = group_meta.get(group, {"icon": "⚙️", "title": group|capitalize}) %}
 <div class="card overflow-hidden">
-  <div class="section-head">
-    <p class="section-title" style="text-transform:capitalize">{{ group }}</p>
-    <span class="tag">{{ configs|length }} keys</span>
+
+  <!-- Group header -->
+  <div class="cfg-group-head">
+    <span class="cfg-group-icon">{{ gm.icon }}</span>
+    <span class="cfg-group-title">{{ gm.title }}</span>
+    <span class="tag" style="margin-left:auto">{{ configs|length }}</span>
   </div>
+
   {% for cfg in configs %}
-  <form method="post" action="/admin/config/{{ cfg.id }}/update"
-        style="display:flex;align-items:center;gap:1rem;padding:.875rem 1rem;{% if not loop.last %}border-bottom:1px solid var(--border){% endif %}">
-    <div style="flex:1;min-width:0">
-      <p style="font-size:.875rem;font-weight:500;color:var(--text)">{{ cfg.label }}</p>
-      {% if cfg.description %}<p style="font-size:.75rem;color:var(--text-muted);margin-top:.125rem">{{ cfg.description }}</p>{% endif %}
-      <p class="code" style="margin-top:.25rem;display:inline-block">{{ cfg.key }}</p>
+  {% set hint = cfg.hint %}
+  {% set ctrl = hint.get('control', 'text') %}
+  {% set has_value = cfg.has_value %}
+  {% set channel_keys = {'whatsapp_enabled': 'whatsapp', 'whatsapp_admin_number': 'whatsapp', 'whatsapp_api_key': 'whatsapp', 'whatsapp_session_name': 'whatsapp', 'telegram_enabled': 'telegram', 'telegram_bot_token': 'telegram', 'telegram_chat_id': 'telegram'} %}
+
+  <form method="post" action="/admin/config/{{ cfg.id }}/update" class="cfg-row" {% if cfg.key in channel_keys %}data-channel="{{ channel_keys[cfg.key] }}"{% endif %}>
+
+    {# ── Left: label + description + key + hints ── #}
+    <div>
+      <p class="cfg-label">{{ cfg.label }}</p>
+      {% if cfg.description %}
+      <p class="cfg-desc">{{ cfg.description }}</p>
+      {% endif %}
+      <span class="cfg-key">{{ cfg.key }}</span>
+
+      {# Status badge #}
+      {% if ctrl != 'readonly' %}
+        {% if has_value %}
+          <span class="cfg-status set">● Set</span>
+        {% elif cfg.value_type == 'BOOLEAN' %}
+          {# boolean — always set #}
+        {% else %}
+          <span class="cfg-status unset">○ Not configured</span>
+        {% endif %}
+      {% endif %}
+
+      {# Extra hint #}
+      {% if hint.get('hint_extra') %}
+      <p class="cfg-hint">{{ hint.hint_extra }}
+        {% if hint.get('link_url') %}
+        <a href="{{ hint.link_url }}" target="_blank" rel="noopener">{{ hint.get('link_text', 'Learn more →') }}</a>
+        {% endif %}
+      </p>
+      {% endif %}
+
+      {# Example #}
+      {% if hint.get('example') %}
+      <p class="cfg-example">Example: <code style="background:var(--surface-alt);padding:.1rem .3rem;border-radius:.2rem;font-size:.68rem">{{ hint.example }}</code></p>
+      {% endif %}
     </div>
-    <div style="display:flex;align-items:center;gap:.5rem;flex-shrink:0">
+
+    {# ── Right: control ── #}
+    <div class="cfg-control">
+
+      {# BOOLEAN — toggle (auto-saves) #}
       {% if cfg.value_type == 'BOOLEAN' %}
       <input type="hidden" name="value" id="val-{{ cfg.id }}" value="{{ cfg.value }}"/>
-      <label class="toggle-wrap" style="margin-right:1rem">
+      <label class="toggle-wrap">
         <input type="checkbox" class="toggle-inp"
                {% if (cfg.value or '').lower() == 'true' %}checked{% endif %}
                onchange="document.getElementById('val-{{ cfg.id }}').value = this.checked ? 'true' : 'false'; this.form.submit();"/>
         <div class="toggle-track"></div>
         <div class="toggle-thumb"></div>
       </label>
+      <span style="font-size:.75rem;color:var(--text-muted)">{{ 'On' if (cfg.value or '').lower() == 'true' else 'Off' }}</span>
+
+      {# READONLY — display only #}
+      {% elif ctrl == 'readonly' %}
+      <span class="cfg-readonly" title="{{ cfg.value }}">{{ cfg.value or '—' }}</span>
+
+      {# EXCHANGE MULTISELECT #}
+      {% elif ctrl == 'exchange_multiselect' %}
+      {% set current_keys = cfg.value.split(',') | map('trim') | list if cfg.value else [] %}
+      <div>
+        <input type="hidden" name="value" id="exc-val-{{ cfg.id }}" value="{{ cfg.value or '' }}"/>
+        <div class="exc-chips" id="exc-chips-{{ cfg.id }}">
+          {% for exc in enabled_exchanges %}
+          <span class="exc-chip {% if exc.key in current_keys %}active{% endif %}"
+                data-key="{{ exc.key }}"
+                data-input="exc-val-{{ cfg.id }}"
+                data-chips="exc-chips-{{ cfg.id }}"
+                onclick="toggleExchange(this)">
+            {{ exc.flag }} {{ exc.name }}
+          </span>
+          {% endfor %}
+        </div>
+        <button type="submit" class="btn-admin text-xs cfg-save" style="margin-top:.5rem">Save</button>
+      </div>
+
+      {# TIMEZONE SELECT #}
+      {% elif ctrl == 'timezone_select' %}
+      <div style="display:flex;align-items:center;gap:.5rem">
+        <select name="value" class="input cfg-input">
+          {% for tz_val, tz_label in hint.get('options', []) %}
+          <option value="{{ tz_val }}" {% if cfg.value == tz_val %}selected{% endif %}>{{ tz_label }}</option>
+          {% endfor %}
+          {# Custom entry if value not in list #}
+          {% if cfg.value and cfg.value not in (hint.get('options', []) | map(attribute=0) | list) %}
+          <option value="{{ cfg.value }}" selected>{{ cfg.value }}</option>
+          {% endif %}
+        </select>
+        <button type="submit" class="btn-admin text-xs cfg-save">Save</button>
+      </div>
+
+      {# GENERIC SELECT #}
+      {% elif ctrl == 'select' %}
+      <div style="display:flex;align-items:center;gap:.5rem">
+        <select name="value" class="input cfg-input" {% if cfg.key == 'notification_channel' %}id="notification-channel-select"{% endif %}>
+          {% for opt_val, opt_label in hint.get('options', []) %}
+          <option value="{{ opt_val }}" {% if cfg.value == opt_val %}selected{% endif %}>{{ opt_label }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn-admin text-xs cfg-save">Save</button>
+      </div>
+
+      {# CRYPTO EXCHANGE SELECT #}
+      {% elif ctrl == 'crypto_exchange_select' %}
+      {% set crypto_exchanges = enabled_exchanges | selectattr('asset_type', 'eq', 'CRYPTO') | list %}
+      {% if crypto_exchanges %}
+      <div style="display:flex;align-items:center;gap:.5rem">
+        <select name="value" class="input cfg-input">
+          <option value="">— Not configured —</option>
+          {% for exc in crypto_exchanges %}
+          <option value="{{ exc.key }}" {% if cfg.value == exc.key %}selected{% endif %}>{{ exc.flag }} {{ exc.name }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn-admin text-xs cfg-save">Save</button>
+      </div>
       {% else %}
-      <input type="{% if cfg.is_secret %}password{% else %}text{% endif %}"
-             name="value"
-             value="{{ cfg.value if not cfg.is_secret else '' }}"
-             placeholder="{{ '••••••' if cfg.is_secret else ((cfg.value or '')[:24] if (cfg.value or '')|length > 24 else (cfg.value or '')) }}"
-             class="input" style="width:12rem;font-family:'SF Mono',monospace;font-size:.75rem"/>
-      <button type="submit" class="btn-admin text-xs" style="white-space:nowrap;padding:.5rem .875rem">Save</button>
+      <span style="font-size:.75rem;color:var(--text-subtle)">No crypto exchanges enabled.<br>
+        <a href="/superadmin/exchanges" style="color:var(--t-accent);text-decoration:none">Enable in SaaS → Exchanges →</a>
+      </span>
       {% endif %}
+
+      {# NUMBER INPUT #}
+      {% elif ctrl == 'number' %}
+      <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+        {% if hint.get('prefix') %}
+        <div class="input-prefix-wrap">
+          <span class="prefix">{{ hint.prefix }}</span>
+          <input type="number"
+                 name="value"
+                 value="{{ cfg.value or '' }}"
+                 placeholder="{{ hint.get('placeholder', '') }}"
+                 min="{{ hint.get('min', '') }}"
+                 max="{{ hint.get('max', '') }}"
+                 step="{{ hint.get('step', 'any') }}"/>
+        </div>
+        {% else %}
+        <input type="number"
+               name="value"
+               value="{{ cfg.value or '' }}"
+               placeholder="{{ hint.get('placeholder', '') }}"
+               min="{{ hint.get('min', '') }}"
+               max="{{ hint.get('max', '') }}"
+               step="{{ hint.get('step', 'any') }}"
+               class="input cfg-input-sm" style="font-family:'SF Mono',monospace;font-size:.8rem"/>
+        {% endif %}
+        <button type="submit" class="btn-admin text-xs cfg-save">Save</button>
+      </div>
+
+      {# PASSWORD INPUT with show/hide #}
+      {% elif ctrl == 'password' or cfg.is_secret %}
+      <div style="display:flex;align-items:center;gap:.5rem">
+        <div class="pw-wrap">
+          <input type="password"
+                 id="pw-{{ cfg.id }}"
+                 name="value"
+                 value=""
+                 placeholder="{{ hint.get('placeholder', '••••••••') }}"
+                 autocomplete="new-password"
+                 class="input cfg-input" style="font-size:.8rem"/>
+          <button type="button" class="pw-toggle" title="Show/hide"
+                  onclick="togglePw('pw-{{ cfg.id }}', this)">
+            <svg id="eye-{{ cfg.id }}" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+            </svg>
+          </button>
+        </div>
+        {% if has_value %}
+        <span style="font-size:.7rem;color:var(--pos)">✓ Saved</span>
+        {% endif %}
+        <button type="submit" class="btn-admin text-xs cfg-save">Save</button>
+      </div>
+
+      {# DEFAULT: plain text input #}
+      {% else %}
+      <div style="display:flex;align-items:center;gap:.5rem">
+        {% if cfg.key == 'working_capital_currency' and user_role != 'superadmin' %}
+        <span class="cfg-readonly" title="{{ cfg.value }}">{{ cfg.value or '—' }}</span>
+        {% else %}
+        <input type="text"
+               name="value"
+               value="{{ cfg.value or '' }}"
+               placeholder="{{ hint.get('placeholder', '') }}"
+               class="input cfg-input" style="font-size:.8rem"/>
+        <button type="submit" class="btn-admin text-xs cfg-save">Save</button>
+        {% endif %}
+      </div>
+      {% endif %}
+
     </div>
   </form>
   {% endfor %}
 </div>
 {% endfor %}
 </div>
+
+<script>
+// Exchange multi-select chip toggle
+function toggleExchange(chip) {
+  chip.classList.toggle('active');
+  const inputId = chip.getAttribute('data-input');
+  const chipsId = chip.getAttribute('data-chips');
+  const chips = document.querySelectorAll('#' + chipsId + ' .exc-chip');
+  const activeKeys = [];
+  chips.forEach(c => { if (c.classList.contains('active')) activeKeys.push(c.getAttribute('data-key')); });
+  document.getElementById(inputId).value = activeKeys.join(',');
+}
+
+// Password show/hide toggle
+function togglePw(inputId, btn) {
+  const input = document.getElementById(inputId);
+  const isPassword = input.type === 'password';
+  input.type = isPassword ? 'text' : 'password';
+  const eyeIcon = btn.querySelector('svg');
+  if (!isPassword) {
+    // Switch back to eye icon
+    eyeIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>';
+  } else {
+    // Switch to eye-off icon
+    eyeIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 4.411m0 0L21 21"/>';
+  }
+}
+
+// Notification channel — show/hide rows tagged with data-channel based on selection
+function applyChannelVisibility(channel) {
+  document.querySelectorAll('[data-channel]').forEach(row => {
+    row.style.display = (row.getAttribute('data-channel') === channel) ? '' : 'none';
+  });
+}
+(function() {
+  const channelSelect = document.getElementById('notification-channel-select');
+  if (channelSelect) {
+    applyChannelVisibility(channelSelect.value);
+    channelSelect.addEventListener('change', function() {
+      applyChannelVisibility(this.value);
+    });
+  }
+})();
+
+// Inline save feedback — briefly flash row green on submit
+document.querySelectorAll('.cfg-row form, .cfg-row').forEach(form => {
+  if (form.tagName === 'FORM') {
+    form.addEventListener('submit', function() {
+      this.classList.add('flash-save');
+    });
+  }
+});
+</script>
 {% endblock %}

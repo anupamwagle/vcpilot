@@ -10,24 +10,40 @@ from __future__ import annotations
 import httpx
 from loguru import logger
 from app.config import settings
+from app.notifications.base import BaseNotifier
 
 
-class WhatsAppNotifier:
+class WhatsAppNotifier(BaseNotifier):
     """Send messages to the admin WhatsApp via WAHA."""
+
+    _waha_tier = None  # Cache tier ("CORE" or "PLUS") to avoid hitting the endpoint on every instance
+
+    def _get_waha_tier(self) -> str:
+        """Query WAHA /api/version to determine the tier (CORE or PLUS)."""
+        if WhatsAppNotifier._waha_tier is not None:
+            return WhatsAppNotifier._waha_tier
+        try:
+            headers = {"X-Api-Key": self.api_key, "Content-Type": "application/json"}
+            resp = httpx.get(f"{self.base_url}/api/version", headers=headers, timeout=0.5)
+            if resp.status_code == 200:
+                tier = resp.json().get("tier", "CORE").upper()
+                WhatsAppNotifier._waha_tier = tier
+                return tier
+        except Exception as e:
+            logger.debug(f"Failed to query WAHA version/tier: {e}")
+        return "CORE"
 
     def __init__(self, organization_id=None):
         self.organization_id = organization_id
         self.base_url  = settings.waha_api_url.rstrip("/")
-        if organization_id:
-            self.session = f"org_{organization_id}"
-        else:
-            self.session = settings.waha_session   # always "default" for WAHA Core
         self.api_key   = settings.waha_api_key
+        self.session   = settings.waha_session or "default"
         
         # Default fallback configurations
         self.whatsapp_enabled = settings.whatsapp_enabled
         self.admin_jid = settings.admin_jid
         
+        session_val = None
         if organization_id:
             try:
                 from app.database import SessionLocal
@@ -55,14 +71,25 @@ class WhatsAppNotifier:
                         self.api_key = api_key_val
 
                     session_val = cfg("whatsapp_session_name")
-                    if session_val:
-                        self.session = session_val
-                    else:
-                        self.session = f"org_{organization_id}"
                 finally:
                     db.close()
             except Exception:
                 pass
+
+        # Determine WAHA tier to see if we should enforce "default"
+        is_plus = False
+        try:
+            is_plus = (self._get_waha_tier() == "PLUS")
+        except Exception:
+            pass
+
+        if is_plus:
+            if session_val:
+                self.session = session_val
+            elif organization_id:
+                self.session = f"org_{organization_id}"
+        else:
+            self.session = "default"
 
         self._headers  = {"X-Api-Key": self.api_key, "Content-Type": "application/json"}
 

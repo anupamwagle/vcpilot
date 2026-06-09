@@ -142,10 +142,16 @@ function resetSimulation() {
           
           <!-- Rule Info -->
           <div class="flex-1">
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 flex-wrap">
               <span class="text-sm font-semibold" style="color:var(--text)">{{ r.label }}</span>
               {% if r.is_mandatory %}
                 <span class="text-[10px] font-bold px-1.5 py-0.5 rounded" style="background:var(--border);color:var(--text-subtle)">Mandatory</span>
+              {% endif %}
+              {% set at = r.asset_types | default('BOTH') %}
+              {% if at == 'EQUITY' %}
+                <span class="text-[10px] font-bold px-1.5 py-0.5 rounded" style="background:#dbeafe;color:#1d4ed8">Equity only</span>
+              {% elif at == 'CRYPTO' %}
+                <span class="text-[10px] font-bold px-1.5 py-0.5 rounded" style="background:#fef9c3;color:#b45309">Crypto only</span>
               {% endif %}
             </div>
             <p class="text-xs mt-0.5" style="color:var(--text-subtle)">{{ r.description or '' }}</p>

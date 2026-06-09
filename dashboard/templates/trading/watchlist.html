@@ -26,10 +26,181 @@
   </div>
 </div>
 
+<!-- ── Exchange filter bar ───────────────────────────────────────────── -->
+{% set base_url = "/watchlist" %}
+{% set extra_params = ("label=" ~ active_label) if active_label is not none else "" %}
+{% include "components/exchange_filter.html" %}
+<div style="display:flex;justify-content:flex-end;padding:.25rem 0 .25rem;margin-bottom:-.5rem">
+  <span id="wl-refresh-timer" style="font-size:.65rem;color:var(--text-subtle);font-family:'SF Mono',monospace">Auto-refreshes every 90s</span>
+</div>
+
+{% if has_crypto and crypto_tickers %}
+<!-- ── Crypto Live Market Data ──────────────────────────────────────────── -->
+<div class="card overflow-hidden mb-5" id="crypto-live-panel">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:.75rem 1rem;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:.5rem">
+    <div style="display:flex;align-items:center;gap:.625rem">
+      <span style="font-size:.9rem">₿</span>
+      <span class="text-sm font-semibold" style="color:var(--text)">Crypto Watchlist — Live Market Data</span>
+      <span id="cl-badge" class="badge-sm" style="font-size:.65rem;background:#fef9c3;color:#b45309">Loading…</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:.75rem">
+      <span id="cl-timer" class="text-xs" style="color:var(--text-muted)"></span>
+      <button onclick="clRefresh(true)" style="font-size:.75rem;padding:.25rem .625rem;border-radius:.3rem;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer">↻ Refresh</button>
+    </div>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="w-full" style="border-collapse:separate;border-spacing:0;font-size:.82rem" id="cl-table">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border);background:var(--surface-alt)">
+          <th style="padding:.5rem .75rem;text-align:left;font-size:.7rem;font-weight:600;color:var(--text-muted);white-space:nowrap">Coin</th>
+          <th style="padding:.5rem .75rem;text-align:right;font-size:.7rem;font-weight:600;color:var(--text-muted);white-space:nowrap">Price (AUD)</th>
+          <th style="padding:.5rem .75rem;text-align:right;font-size:.7rem;font-weight:600;color:var(--text-muted);white-space:nowrap">1h %</th>
+          <th style="padding:.5rem .75rem;text-align:right;font-size:.7rem;font-weight:600;color:var(--text-muted);white-space:nowrap">24h %</th>
+          <th style="padding:.5rem .75rem;text-align:right;font-size:.7rem;font-weight:600;color:var(--text-muted);white-space:nowrap">7d %</th>
+          <th style="padding:.5rem .75rem;text-align:right;font-size:.7rem;font-weight:600;color:var(--text-muted);white-space:nowrap">24h Vol (AUD)</th>
+          <th style="padding:.5rem .75rem;text-align:right;font-size:.7rem;font-weight:600;color:var(--text-muted);white-space:nowrap">Mkt Cap</th>
+          <th style="padding:.5rem .75rem;text-align:center;font-size:.7rem;font-weight:600;color:var(--text-muted);white-space:nowrap;width:80px">7d Trend</th>
+        </tr>
+      </thead>
+      <tbody id="cl-tbody">
+        <tr><td colspan="8" style="padding:1.5rem;text-align:center;color:var(--text-muted);font-size:.8rem">
+          <svg style="width:1rem;height:1rem;animation:spin 1s linear infinite;display:inline-block;vertical-align:middle;margin-right:.3rem;color:var(--t-accent)" fill="none" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" style="opacity:.25"></circle>
+            <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" style="opacity:.75"></path>
+          </svg>Fetching…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+(function(){
+  const GK = 'https://api.coingecko.com/api/v3';
+
+  // Tickers from server-rendered watchlist — yfinance format (e.g. "BTC-AUD", "ETH-AUD")
+  const WL_TICKERS = {{ crypto_tickers | tojson }};
+  // Strip exchange suffix to get base symbol: "BTC-AUD" → "BTC"
+  const SYMBOLS = WL_TICKERS.map(t => t.replace(/-AUD$/,'').replace(/-USD$/,'').replace(/-USDT$/,'').toUpperCase());
+
+  let _countdown = 60, _timer = null;
+
+  function fmtPrice(n) {
+    n = parseFloat(n);
+    if (isNaN(n)) return '—';
+    return n < 1 ? 'A$' + n.toPrecision(4) : 'A$' + n.toLocaleString('en-AU', {minimumFractionDigits:2, maximumFractionDigits:2});
+  }
+  function fmtVol(n) {
+    n = parseFloat(n);
+    if (isNaN(n)) return '—';
+    if (n >= 1e9) return 'A$' + (n/1e9).toFixed(2) + 'B';
+    if (n >= 1e6) return 'A$' + (n/1e6).toFixed(2) + 'M';
+    if (n >= 1e3) return 'A$' + (n/1e3).toFixed(1) + 'K';
+    return 'A$' + n.toFixed(2);
+  }
+  function pctSpan(v) {
+    if (v === null || v === undefined || isNaN(parseFloat(v)))
+      return '<span style="color:var(--text-subtle)">—</span>';
+    const f = parseFloat(v), s = f >= 0 ? '+' : '';
+    const c = f > 0 ? 'var(--pos)' : f < 0 ? 'var(--neg)' : 'var(--text-muted)';
+    return `<span style="font-weight:600;color:${c}">${s}${f.toFixed(2)}%</span>`;
+  }
+  function spark(prices, up) {
+    if (!prices || prices.length < 2) return '<span style="color:var(--text-subtle)">—</span>';
+    const mn = Math.min(...prices), mx = Math.max(...prices), rng = mx - mn || 1;
+    const W = 72, H = 24, p = 2;
+    const pts = prices.map((v, i) => {
+      const x = p + (i / (prices.length-1)) * (W - 2*p);
+      const y = H - p - ((v - mn) / rng) * (H - 2*p);
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+    const clr = up ? 'var(--pos)' : 'var(--neg)';
+    return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="display:block;margin:auto"><polyline points="${pts}" fill="none" stroke="${clr}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+  }
+
+  async function clRefresh(force) {
+    if (!SYMBOLS.length) {
+      document.getElementById('cl-tbody').innerHTML = '<tr><td colspan="8" style="padding:1.5rem;text-align:center;color:var(--text-muted);font-size:.8rem">No crypto on watchlist</td></tr>';
+      document.getElementById('cl-badge').textContent = 'No tickers';
+      return;
+    }
+    document.getElementById('cl-badge').textContent = 'Refreshing…';
+    try {
+      // CoinGecko: fetch top 250 by market cap in AUD — covers all common coins
+      // Free tier has rate limits; 60s refresh is safe.
+      const [page1, page2] = await Promise.all([
+        fetch(`${GK}/coins/markets?vs_currency=aud&order=market_cap_desc&per_page=100&page=1&sparkline=true&price_change_percentage=1h,24h,7d`)
+          .then(r => r.json()).catch(() => []),
+        fetch(`${GK}/coins/markets?vs_currency=aud&order=market_cap_desc&per_page=100&page=2&sparkline=true&price_change_percentage=1h,24h,7d`)
+          .then(r => r.json()).catch(() => []),
+      ]);
+      const allCoins = [...(Array.isArray(page1) ? page1 : []), ...(Array.isArray(page2) ? page2 : [])];
+
+      // Build lookup by symbol (uppercase)
+      const cgMap = {};
+      allCoins.forEach(c => { cgMap[c.symbol.toUpperCase()] = c; });
+
+      // Render rows for each watchlist symbol
+      const rows = SYMBOLS.map(sym => {
+        const c = cgMap[sym];
+        if (!c) {
+          // Not in CoinGecko top 200 — show placeholder
+          return `<tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:.5rem .75rem;white-space:nowrap">
+              <span class="font-mono font-bold" style="color:var(--t-accent)">${sym}</span>
+              <span class="text-xs" style="color:var(--text-subtle);margin-left:.25rem">/ AUD</span>
+            </td>
+            <td colspan="7" style="padding:.5rem .75rem;text-align:center;color:var(--text-subtle);font-size:.75rem">Price data unavailable via CoinGecko</td>
+          </tr>`;
+        }
+        const prices7d = c.sparkline_in_7d ? c.sparkline_in_7d.price : null;
+        const change7d = c.price_change_percentage_7d_in_currency;
+        const up = (change7d !== null && change7d !== undefined) ? change7d >= 0
+                 : (c.price_change_percentage_24h || 0) >= 0;
+        return `<tr style="border-bottom:1px solid var(--border)" class="hover-row">
+          <td style="padding:.5rem .75rem;white-space:nowrap">
+            <span class="font-mono font-bold" style="color:var(--t-accent)">${sym}</span>
+            <span class="text-xs" style="color:var(--text-subtle);margin-left:.25rem">/ AUD</span>
+          </td>
+          <td style="padding:.5rem .75rem;text-align:right;font-family:monospace;font-weight:600;color:var(--text)">${fmtPrice(c.current_price)}</td>
+          <td style="padding:.5rem .75rem;text-align:right">${pctSpan(c.price_change_percentage_1h_in_currency)}</td>
+          <td style="padding:.5rem .75rem;text-align:right">${pctSpan(c.price_change_percentage_24h_in_currency)}</td>
+          <td style="padding:.5rem .75rem;text-align:right">${pctSpan(change7d)}</td>
+          <td style="padding:.5rem .75rem;text-align:right;font-family:monospace;font-size:.75rem;color:var(--text-muted)">${fmtVol(c.total_volume)}</td>
+          <td style="padding:.5rem .75rem;text-align:right;font-family:monospace;font-size:.75rem;color:var(--text-muted)">${fmtVol(c.market_cap)}</td>
+          <td style="padding:.5rem .75rem">${spark(prices7d, up)}</td>
+        </tr>`;
+      });
+      document.getElementById('cl-tbody').innerHTML = rows.join('');
+      document.getElementById('cl-badge').textContent = 'Independent Reserve · data: CoinGecko (AUD)';
+    } catch(e) {
+      document.getElementById('cl-badge').textContent = 'Error — CoinGecko rate limit? Retry in 60s';
+      console.error('Crypto live panel error:', e);
+    }
+    _countdown = 60;
+  }
+  window.clRefresh = clRefresh;
+
+  function startTimer() {
+    clearInterval(_timer);
+    _timer = setInterval(() => {
+      _countdown--;
+      const el = document.getElementById('cl-timer');
+      if (el) el.textContent = `Refreshing in ${_countdown}s`;
+      if (_countdown <= 0) clRefresh(true);
+    }, 1000);
+  }
+
+  clRefresh(true);
+  startTimer();
+})();
+</script>
+{% endif %}
+
 <!-- ── Label filter chips ─────────────────────────────────────────────── -->
 <div style="display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin-bottom:1.25rem">
-  <!-- All -->
-  <a href="/watchlist"
+  <!-- All labels -->
+  {% set exc_param = ("&exchange=" ~ active_exchange_filter) if active_exchange_filter and active_exchange_filter != 'ALL' else "" %}
+  <a href="/watchlist{{ exc_param.replace('&','?') }}"
      style="display:inline-flex;align-items:center;gap:.35rem;padding:.3rem .85rem;border-radius:999px;font-size:.75rem;font-weight:600;border:2px solid;text-decoration:none;transition:opacity .15s;
      {% if active_label is none %}background:var(--t-accent);color:white;border-color:var(--t-accent)
      {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
@@ -37,7 +208,7 @@
   </a>
 
   {% for lbl in labels %}
-  <a href="/watchlist?label={{ lbl.id }}"
+  <a href="/watchlist?label={{ lbl.id }}{% if active_exchange_filter and active_exchange_filter != 'ALL' %}&exchange={{ active_exchange_filter }}{% endif %}"
      style="display:inline-flex;align-items:center;gap:.35rem;padding:.3rem .85rem;border-radius:999px;font-size:.75rem;font-weight:600;border:2px solid;text-decoration:none;transition:opacity .15s;
      {% if active_label == lbl.id %}background:{{ lbl.color }};color:white;border-color:{{ lbl.color }}
      {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
@@ -122,7 +293,13 @@
                     {% if w.ticker in favourited_tickers %}★{% else %}☆{% endif %}
                   </button>
                 </form>
-                {{ w.ticker }}
+                {{ w.ticker.replace('.AX','').replace('-USD','').replace('-USDT','').replace('-AUD','') }}
+                {# Exchange badge #}
+                {% if w.exchange_key and w.exchange_key != 'ASX' %}
+                <span style="font-size:.6rem;font-weight:600;padding:.1rem .35rem;border-radius:.25rem;background:var(--surface-alt);color:var(--text-muted);border:1px solid var(--border);vertical-align:middle">
+                  {{ w.flag_emoji or '' }} {{ w.exchange_key.replace('CRYPTO_','') }}
+                </span>
+                {% endif %}
               </span>
               {% if w.company_name %}
               <span style="font-size:.7rem;color:var(--text-subtle);font-weight:normal;line-height:1.2">{{ w.company_name }}</span>
@@ -181,6 +358,22 @@
         </div>
         {% endfor %}
       </div>
+      {% if w.stats.bar_date or w.stats.live_price %}
+      <div style="padding:.3rem .75rem;border-bottom:1px solid var(--border)">
+        {% if w.stats.live_price %}
+          <span style="font-size:.65rem;color:var(--pos);font-weight:600">⚡ Live price</span>
+          {% if w.stats.delay_mins and w.stats.delay_mins > 0 %}
+            <span style="font-size:.65rem;color:var(--text-subtle)"> (~{{ w.stats.delay_mins }}min delay · {{ w.stats.data_source }})</span>
+          {% else %}
+            <span style="font-size:.65rem;color:var(--text-subtle)"> ({{ w.stats.data_source or 'IR API' }} · 0-delay · MA/RS from EOD {{ w.stats.bar_date }})</span>
+          {% endif %}
+        {% else %}
+          <span style="font-size:.65rem;color:var(--text-subtle)" title="ASX prices refresh daily at 5pm AEST after market close. Intraday prices require IBKR connection.">
+            📅 EOD close as of {{ w.stats.bar_date }}
+          </span>
+        {% endif %}
+      </div>
+      {% endif %}
       {% endif %}
 
       {% if w.rule_results %}
@@ -222,9 +415,31 @@
     <div class="card p-5">
       <h3 class="text-sm font-semibold mb-4" style="color:var(--text)">Add Manually</h3>
       <form method="post" action="/watchlist/add" class="space-y-3">
+        <!-- Exchange selector -->
         <div>
-          <label class="block text-xs font-medium mb-1.5" style="color:var(--text-muted)">ASX Code</label>
-          <input type="text" name="ticker" required placeholder="BHP" maxlength="10" class="input uppercase"/>
+          <label class="block text-xs font-medium mb-1.5" style="color:var(--text-muted)">Exchange</label>
+          <select name="exchange_key" id="exchange-select" class="input" onchange="updateTickerPlaceholder(this)">
+            {% if enabled_exchanges %}
+              {% for exc in enabled_exchanges %}
+              <option value="{{ exc.key }}"
+                data-placeholder="{{ 'BHP' if exc.key == 'ASX' else ('AAPL' if exc.key in ('NYSE','NASDAQ') else 'BTC') }}"
+                data-label="{{ exc.flag }} {{ exc.name }}">
+                {{ exc.flag }} {{ exc.name }}
+              </option>
+              {% endfor %}
+            {% else %}
+              <option value="ASX">🇦🇺 ASX</option>
+              <option value="NYSE">🇺🇸 NYSE</option>
+              <option value="NASDAQ">🇺🇸 NASDAQ</option>
+            {% endif %}
+          </select>
+        </div>
+        <!-- Ticker input — placeholder updates with exchange selection -->
+        <div>
+          <label class="block text-xs font-medium mb-1.5" style="color:var(--text-muted)">Ticker / Symbol</label>
+          <input type="text" name="ticker" id="ticker-input" required placeholder="BHP" maxlength="16" class="input uppercase"
+                 title="ASX: enter code without .AX (e.g. BHP). US: enter symbol (e.g. AAPL). Crypto: enter coin (e.g. BTC)."/>
+          <p class="text-xs mt-1" style="color:var(--text-subtle)" id="ticker-hint">Enter ASX code without the .AX suffix</p>
         </div>
         <div>
           <label class="block text-xs font-medium mb-1.5" style="color:var(--text-muted)">Label (optional)</label>
@@ -243,6 +458,9 @@
         <button type="submit" class="btn-primary w-full justify-center">
           Add to Watchlist
         </button>
+        <p class="text-xs text-center" style="color:var(--text-subtle)">
+          Data is fetched on-demand and screened automatically
+        </p>
       </form>
     </div>
 
@@ -265,6 +483,25 @@
 </div>
 
 <script>
+// Update ticker input placeholder based on exchange selection
+function updateTickerPlaceholder(select) {
+  var opt = select.options[select.selectedIndex];
+  var placeholder = opt.getAttribute('data-placeholder') || 'TICKER';
+  var tickerInput = document.getElementById('ticker-input');
+  var hint = document.getElementById('ticker-hint');
+  if (tickerInput) tickerInput.placeholder = placeholder;
+  var key = select.value;
+  if (hint) {
+    if (key === 'ASX') hint.textContent = 'Enter ASX code without .AX suffix (e.g. BHP)';
+    else if (key === 'NYSE' || key === 'NASDAQ') hint.textContent = 'Enter US stock symbol (e.g. AAPL, MSFT)';
+    else if (key.startsWith('CRYPTO_')) hint.textContent = 'Enter coin symbol (e.g. BTC, ETH) — no slash or suffix needed';
+    else hint.textContent = 'Enter ticker symbol for this exchange';
+  }
+}
+// Run on page load
+var sel = document.getElementById('exchange-select');
+if (sel) updateTickerPlaceholder(sel);
+
 // Highlight selected colour swatch
 document.querySelectorAll('.colour-radio').forEach(function(radio) {
   radio.addEventListener('change', function() {
@@ -284,5 +521,27 @@ if (checked) {
   s.style.borderColor = s.dataset.hex;
   s.style.transform = 'scale(1.25)';
 }
+</script>
+<style>@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}</style>
+<script>
+// ── Watchlist soft reload every 90s (new signals / watchlist changes) ────────
+(function() {
+  const INTERVAL = 90;
+  let t = INTERVAL;
+  const el = document.getElementById('wl-refresh-timer');
+  setInterval(() => {
+    t--;
+    if (el) el.textContent = 'Page refreshes in ' + t + 's';
+    if (t <= 0) {
+      // Preserve scroll position across reload
+      sessionStorage.setItem('wl-scroll', window.scrollY);
+      location.reload();
+    }
+  }, 1000);
+  // Restore scroll after reload
+  const saved = sessionStorage.getItem('wl-scroll');
+  if (saved) { window.scrollTo(0, parseInt(saved)); sessionStorage.removeItem('wl-scroll'); }
+  if (el) el.textContent = 'Page refreshes in ' + t + 's';
+})();
 </script>
 {% endblock %}

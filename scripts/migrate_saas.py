@@ -18,6 +18,21 @@ def migrate():
     logger.info("Starting SaaS/Multi-tenant database migration...")
 
     with engine.connect() as conn:
+        # 0. Alter rulecategory enum if needed (for existing database instances)
+        try:
+            enum_vals = conn.execute(text("""
+                SELECT enumlabel FROM pg_enum 
+                JOIN pg_type ON pg_enum.enumtypid = pg_type.oid 
+                WHERE pg_type.typname = 'rulecategory';
+            """)).fetchall()
+            enum_vals = [r[0] for r in enum_vals]
+            if enum_vals and "CRYPTO" not in enum_vals:
+                logger.info("Adding 'CRYPTO' value to rulecategory enum...")
+                conn.commit()
+                conn.execute(text("ALTER TYPE rulecategory ADD VALUE 'CRYPTO';"))
+        except Exception as e:
+            logger.debug(f"Could not verify/alter rulecategory enum: {e}")
+
         # 1. Create organizations table first (so foreign keys resolve)
         logger.info("Creating 'organizations' table...")
         conn.execute(text("""
@@ -216,7 +231,8 @@ def migrate():
                     SET organization_id = :org_id 
                     WHERE organization_id IS NULL 
                       AND key NOT IN ('last_market_regime', 'last_regime_check', 'last_heartbeat',
-                                      'mock_time_enabled', 'mock_current_time', 'ibkr_simulate', 'mock_market_regime');
+                                      'mock_time_enabled', 'mock_current_time', 'ibkr_simulate', 'mock_market_regime',
+                                      'mcp_base_url');
                 """), {"org_id": default_org_id})
             else:
                 conn.execute(text(f"""
@@ -369,21 +385,22 @@ def migrate():
             ("whatsapp_admin_number", "", "STRING", "WhatsApp Admin Number", "Number to send alerts and receive commands JID format", "whatsapp", False),
             ("whatsapp_api_key", settings.waha_api_key, "STRING", "WhatsApp API Key", "API key for the WhatsApp (WAHA) service", "whatsapp", True),
             ("whatsapp_session_name", "default", "STRING", "WhatsApp Session Name", "WAHA session name (always \'default\' for WAHA Core)", "whatsapp", False),
+            ("notification_channel", "telegram", "STRING", "Notification Channel", "Active communication channel ('whatsapp' or 'telegram')", "whatsapp", False),
+            ("telegram_enabled", "true", "BOOLEAN", "Telegram Alerts Enabled", "Enable or disable Telegram notifications", "whatsapp", False),
+            ("telegram_bot_token", "", "STRING", "Telegram Bot Token", "The Telegram Bot Token from @BotFather", "whatsapp", True),
+            ("telegram_chat_id", "", "STRING", "Telegram Chat ID", "The Telegram Chat ID to send alerts to", "whatsapp", False),
             ("ibkr_account", "", "STRING", "IBKR Account ID", "Interactive Brokers account number", "broker", False),
             ("ibkr_username", "", "STRING", "IBKR Username", "Interactive Brokers login username", "broker", False),
             ("ibkr_password", "", "STRING", "IBKR Password", "Interactive Brokers login password", "broker", True),
             ("ibkr_paper_mode", "true", "BOOLEAN", "IBKR Paper Mode", "Use paper trading environment", "broker", False),
             ("fmp_api_key", "", "STRING", "FMP API Key", "Financial Modeling Prep API key", "general", True),
             ("working_capital_aud", "5000.0", "FLOAT", "Working Capital (AUD)", "Working capital used for sizing and risk calculations", "general", False),
+            ("working_capital_currency", "AUD", "STRING", "Working Capital Currency", "Currency of the working capital (e.g. AUD, USD, USDT, BNB)", "general", False),
+            ("weekly_injection_aud", "0", "FLOAT", "Weekly Capital Injection (AUD)", "Amount of capital added to the account each week. Used for compounding position sizing calculations.", "risk", False),
             ("org_timezone", "Australia/Sydney", "STRING", "Display Timezone",
              "IANA timezone for displaying timestamps (e.g. UTC, Australia/Sydney). "
              "Beat schedules always run on AEST since ASX is in Sydney.", "general", False),
         ]
-        try:
-            conn.execute(text("DELETE FROM system_configs WHERE key = 'weekly_injection_aud';"))
-            conn.commit()
-        except Exception:
-            pass
         orgs_res = conn.execute(text("SELECT id FROM organizations;")).fetchall()
         for org in orgs_res:
             org_id = org[0]
@@ -396,11 +413,12 @@ def migrate():
                 """), {"key": key, "org_id": org_id}).fetchone()
                 if not existing_cfg:
                     logger.info(f"Seeding missing config '{key}' for organization ID {org_id}...")
+                    actual_val = f"org_{org_id}" if key == "whatsapp_session_name" else val
                     conn.execute(text("""
                         INSERT INTO system_configs (key, value, value_type, label, description, organization_id, "group", is_secret)
                         VALUES (:key, :value, :value_type, :label, :description, :org_id, :group, :is_secret);
                     """), {
-                        "key": key, "value": val, "value_type": vtype, "label": label,
+                        "key": key, "value": actual_val, "value_type": vtype, "label": label,
                         "description": desc, "org_id": org_id, "group": group, "is_secret": is_secret
                     })
 
@@ -411,6 +429,13 @@ def migrate():
                     description = 'IANA timezone for displaying timestamps. Beat schedules always run on AEST.'
                 WHERE key = 'org_timezone' AND organization_id = :org_id;
             """), {"org_id": org_id})
+            
+            # Force update any tenant organization's whatsapp_session_name to match their org ID
+            conn.execute(text("""
+                UPDATE system_configs
+                SET value = 'org_' || organization_id
+                WHERE key = 'whatsapp_session_name' AND (value = 'default' OR value = '') AND organization_id = :org_id;
+            """), {"org_id": org_id})
             conn.commit()
 
             # Seed default watchlist labels for org if none exist
@@ -420,10 +445,10 @@ def migrate():
             if not has_labels:
                 logger.info(f"Seeding default watchlist labels for org {org_id}...")
                 default_labels = [
-                    ("Favourites", "#f59e0b", True, 0),
+                    ("Favourites",    "#f59e0b", True,  0),
                     ("High Priority", "#ef4444", False, 1),
-                    ("VCP Forming", "#3b82f6", False, 2),
-                    ("Under Review", "#8b5cf6", False, 3),
+                    ("VCP Forming",   "#3b82f6", False, 2),
+                    ("Under Review",  "#8b5cf6", False, 3),
                 ]
                 for lname, lcolor, lis_default, lorder in default_labels:
                     conn.execute(text("""
@@ -432,6 +457,33 @@ def migrate():
                         ON CONFLICT DO NOTHING;
                     """), {"org_id": org_id, "name": lname, "color": lcolor,
                            "is_default": lis_default, "sort_order": lorder})
+                conn.commit()
+
+            # Seed crypto-specific watchlist labels if org has a CRYPTO exchange active
+            active_exc_row = conn.execute(text("""
+                SELECT value FROM system_configs
+                WHERE key = 'active_exchanges' AND organization_id = :org_id LIMIT 1;
+            """), {"org_id": org_id}).fetchone()
+            active_exc_val = (active_exc_row[0] if active_exc_row else "") or ""
+            has_crypto_active = any(k.strip().startswith("CRYPTO_") for k in active_exc_val.split(",") if k.strip())
+            if has_crypto_active:
+                crypto_labels = [
+                    ("Crypto Core",  "#06b6d4", False, 10),
+                    ("DeFi",         "#10b981", False, 11),
+                    ("Altcoins",     "#8b5cf6", False, 12),
+                    ("Crypto Watch", "#f97316", False, 13),
+                ]
+                for lname, lcolor, lis_default, lorder in crypto_labels:
+                    exists = conn.execute(text("""
+                        SELECT 1 FROM watchlist_labels
+                        WHERE organization_id = :org_id AND name = :name LIMIT 1;
+                    """), {"org_id": org_id, "name": lname}).fetchone()
+                    if not exists:
+                        conn.execute(text("""
+                            INSERT INTO watchlist_labels (organization_id, name, color, is_default, sort_order)
+                            VALUES (:org_id, :name, :color, :is_default, :sort_order);
+                        """), {"org_id": org_id, "name": lname, "color": lcolor,
+                               "is_default": lis_default, "sort_order": lorder})
                 conn.commit()
 
             # Clone global template rules for org if none exist
@@ -481,6 +533,334 @@ def migrate():
                 ), {"key": key, "val": val, "vtype": vtype, "label": label, "desc": desc, "group": group})
         conn.commit()
 
+        # ── Migration 002 — Multi-Market Support ─────────────────────────────
+        # NOTE: Uses Python ALTER TABLE calls (not SQL file) to avoid issues
+        # with DO $$ ... $$ blocks that contain embedded semicolons.
+        logger.info("Running migration 002 — multi-market support...")
+
+        def _col_exists(tbl, col):
+            return conn.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name=:t AND column_name=:c"
+            ), {"t": tbl, "c": col}).fetchone() is not None
+
+        def _table_exists(tbl):
+            return conn.execute(text(
+                "SELECT 1 FROM information_schema.tables WHERE table_name=:t"
+            ), {"t": tbl}).fetchone() is not None
+
+        def _safe(stmt):
+            try:
+                conn.execute(text(stmt))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                logger.debug(f"Migration 002 stmt skipped: {str(e)[:100]}")
+
+        # 1. exchange_configs table
+        if not _table_exists("exchange_configs"):
+            logger.info("Creating exchange_configs table...")
+            _safe("""
+                CREATE TABLE exchange_configs (
+                    id SERIAL PRIMARY KEY,
+                    exchange_key VARCHAR(32) UNIQUE NOT NULL,
+                    display_name VARCHAR(128) NOT NULL,
+                    asset_type VARCHAR(16) NOT NULL DEFAULT 'EQUITY',
+                    broker_type VARCHAR(16) NOT NULL DEFAULT 'IBKR',
+                    is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                    trading_currency VARCHAR(8) NOT NULL DEFAULT 'USD',
+                    flag_emoji VARCHAR(8),
+                    calendar_key VARCHAR(32),
+                    timezone VARCHAR(64) NOT NULL DEFAULT 'UTC',
+                    market_open_utc VARCHAR(8),
+                    market_close_utc VARCHAR(8),
+                    index_ticker VARCHAR(32),
+                    ibkr_exchange VARCHAR(32),
+                    ibkr_currency VARCHAR(8),
+                    ccxt_provider VARCHAR(64),
+                    ccxt_sandbox BOOLEAN DEFAULT FALSE,
+                    ticker_suffix VARCHAR(8),
+                    yfinance_suffix VARCHAR(8),
+                    sort_order INTEGER DEFAULT 0,
+                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT TIMEZONE('utc', NOW()),
+                    updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT TIMEZONE('utc', NOW())
+                )
+            """)
+
+        # 2. market_regimes table
+        if not _table_exists("market_regimes"):
+            logger.info("Creating market_regimes table...")
+            _safe("""
+                CREATE TABLE market_regimes (
+                    id SERIAL PRIMARY KEY,
+                    exchange_key VARCHAR(32) NOT NULL,
+                    organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+                    regime VARCHAR(16) NOT NULL,
+                    evaluated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT TIMEZONE('utc', NOW()),
+                    index_close NUMERIC(14,4),
+                    index_ma200 NUMERIC(14,4),
+                    breadth_pct NUMERIC(6,2),
+                    distribution_days INTEGER,
+                    rule_results JSONB DEFAULT '{}',
+                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT TIMEZONE('utc', NOW())
+                )
+            """)
+            _safe("CREATE INDEX IF NOT EXISTS ix_market_regimes_exchange_org ON market_regimes (exchange_key, organization_id)")
+            _safe("CREATE INDEX IF NOT EXISTS ix_market_regimes_evaluated_at ON market_regimes (evaluated_at DESC)")
+
+        # 3. stocks — new columns
+        for col, defn in [
+            ("exchange_key", "VARCHAR(32) NOT NULL DEFAULT 'ASX'"),
+            ("exchange_code", "VARCHAR(16)"),
+            ("asset_type",   "VARCHAR(16) NOT NULL DEFAULT 'EQUITY'"),
+            ("currency",     "VARCHAR(8) NOT NULL DEFAULT 'AUD'"),
+            ("in_index",     "BOOLEAN DEFAULT FALSE"),
+            ("index_name",   "VARCHAR(32)"),
+        ]:
+            if not _col_exists("stocks", col):
+                logger.info(f"Adding stocks.{col}...")
+                _safe(f"ALTER TABLE stocks ADD COLUMN {col} {defn}")
+        # Backfill exchange_code from asx_code
+        _safe("UPDATE stocks SET exchange_code = asx_code WHERE exchange_code IS NULL AND asx_code IS NOT NULL")
+        _safe("UPDATE stocks SET exchange_code = ticker WHERE exchange_code IS NULL")
+        _safe("UPDATE stocks SET in_index = in_asx200, index_name = 'ASX200' WHERE in_asx200 = TRUE AND in_index IS NOT TRUE")
+        _safe("ALTER TABLE stocks ALTER COLUMN asx_code DROP NOT NULL")
+        _safe("CREATE INDEX IF NOT EXISTS ix_stocks_exchange_key ON stocks (exchange_key)")
+        _safe("ALTER TABLE stocks ALTER COLUMN ticker TYPE VARCHAR(32)")
+
+        # 4. price_bars — add exchange_key
+        if not _col_exists("price_bars", "exchange_key"):
+            logger.info("Adding price_bars.exchange_key...")
+            _safe("ALTER TABLE price_bars ADD COLUMN exchange_key VARCHAR(32) NOT NULL DEFAULT 'ASX'")
+            _safe("CREATE INDEX IF NOT EXISTS ix_pricebar_exchange_date ON price_bars (exchange_key, date)")
+        _safe("ALTER TABLE price_bars ALTER COLUMN ticker TYPE VARCHAR(32)")
+
+        # 5. watchlist — add exchange/currency/asset_type
+        for col, defn in [
+            ("exchange_key", "VARCHAR(32) NOT NULL DEFAULT 'ASX'"),
+            ("asset_type",   "VARCHAR(16) NOT NULL DEFAULT 'EQUITY'"),
+            ("currency",     "VARCHAR(8) NOT NULL DEFAULT 'AUD'"),
+        ]:
+            if not _col_exists("watchlist", col):
+                logger.info(f"Adding watchlist.{col}...")
+                _safe(f"ALTER TABLE watchlist ADD COLUMN {col} {defn}")
+        _safe("CREATE INDEX IF NOT EXISTS ix_watchlist_exchange ON watchlist (exchange_key)")
+        _safe("ALTER TABLE watchlist ALTER COLUMN ticker TYPE VARCHAR(32)")
+
+        # 6. signals — add exchange/currency/asset_type + FX
+        for col, defn in [
+            ("exchange_key",        "VARCHAR(32) NOT NULL DEFAULT 'ASX'"),
+            ("asset_type",          "VARCHAR(16) NOT NULL DEFAULT 'EQUITY'"),
+            ("currency",            "VARCHAR(8) NOT NULL DEFAULT 'AUD'"),
+            ("suggested_size_local","NUMERIC(14,2)"),
+            ("fx_rate_aud",         "NUMERIC(10,6)"),
+        ]:
+            if not _col_exists("signals", col):
+                logger.info(f"Adding signals.{col}...")
+                _safe(f"ALTER TABLE signals ADD COLUMN {col} {defn}")
+        _safe("CREATE INDEX IF NOT EXISTS ix_signals_exchange ON signals (exchange_key)")
+        _safe("ALTER TABLE signals ALTER COLUMN ticker TYPE VARCHAR(32)")
+        for price_col in ["close_price","pivot_price","stop_price","target_price_1","target_price_2"]:
+            _safe(f"ALTER TABLE signals ALTER COLUMN {price_col} TYPE NUMERIC(14,4)")
+
+        # 7. positions — add exchange/currency + FX
+        for col, defn in [
+            ("exchange_key",         "VARCHAR(32) NOT NULL DEFAULT 'ASX'"),
+            ("asset_type",           "VARCHAR(16) NOT NULL DEFAULT 'EQUITY'"),
+            ("currency",             "VARCHAR(8) NOT NULL DEFAULT 'AUD'"),
+            ("entry_fx_rate",        "NUMERIC(10,6)"),
+            ("current_fx_rate",      "NUMERIC(10,6)"),
+            ("unrealised_pnl_local", "NUMERIC(14,2)"),
+        ]:
+            if not _col_exists("positions", col):
+                logger.info(f"Adding positions.{col}...")
+                _safe(f"ALTER TABLE positions ADD COLUMN {col} {defn}")
+        _safe("CREATE INDEX IF NOT EXISTS ix_positions_exchange ON positions (exchange_key)")
+        _safe("ALTER TABLE positions ALTER COLUMN ticker TYPE VARCHAR(32)")
+
+        # 8. trades — add exchange/currency + FX + local P&L
+        for col, defn in [
+            ("exchange_key",    "VARCHAR(32) NOT NULL DEFAULT 'ASX'"),
+            ("asset_type",      "VARCHAR(16) NOT NULL DEFAULT 'EQUITY'"),
+            ("currency",        "VARCHAR(8) NOT NULL DEFAULT 'AUD'"),
+            ("entry_fx_rate",   "NUMERIC(10,6)"),
+            ("exit_fx_rate",    "NUMERIC(10,6)"),
+            ("gross_pnl_local", "NUMERIC(14,2)"),
+            ("commission_local","NUMERIC(12,4) DEFAULT 0"),
+            ("net_pnl_local",   "NUMERIC(14,2)"),
+        ]:
+            if not _col_exists("trades", col):
+                logger.info(f"Adding trades.{col}...")
+                _safe(f"ALTER TABLE trades ADD COLUMN {col} {defn}")
+        _safe("CREATE INDEX IF NOT EXISTS ix_trades_exchange ON trades (exchange_key)")
+        _safe("ALTER TABLE trades ALTER COLUMN ticker TYPE VARCHAR(32)")
+
+        # 9. orders — add exchange/currency + external_order_id
+        for col, defn in [
+            ("exchange_key",      "VARCHAR(32) NOT NULL DEFAULT 'ASX'"),
+            ("asset_type",        "VARCHAR(16) NOT NULL DEFAULT 'EQUITY'"),
+            ("currency",          "VARCHAR(8) NOT NULL DEFAULT 'AUD'"),
+            ("external_order_id", "VARCHAR(128)"),
+            ("commission_local",  "NUMERIC(12,4) DEFAULT 0"),
+            ("fx_rate_aud",       "NUMERIC(10,6)"),
+        ]:
+            if not _col_exists("orders", col):
+                logger.info(f"Adding orders.{col}...")
+                _safe(f"ALTER TABLE orders ADD COLUMN {col} {defn}")
+        _safe("CREATE INDEX IF NOT EXISTS ix_orders_exchange ON orders (exchange_key)")
+        _safe("ALTER TABLE orders ALTER COLUMN ticker TYPE VARCHAR(32)")
+
+        # 10. entry_check_logs — add exchange_key
+        if not _col_exists("entry_check_logs", "exchange_key"):
+            _safe("ALTER TABLE entry_check_logs ADD COLUMN exchange_key VARCHAR(32) DEFAULT 'ASX'")
+        _safe("ALTER TABLE entry_check_logs ALTER COLUMN ticker TYPE VARCHAR(32)")
+
+        # 11. Seed default ExchangeConfig rows
+        logger.info("Seeding ExchangeConfig rows...")
+        exchange_seeds = [
+            ("ASX",    "Australian Securities Exchange", "EQUITY", "IBKR",  True,  "AUD",  "🇦🇺", "ASX",    "Australia/Sydney",  "00:00", "06:12", "^AXJO",  "ASX",   "AUD",  None,     False, ".AX",  ".AX",  10),
+            ("NYSE",   "New York Stock Exchange",        "EQUITY", "IBKR",  True,  "USD",  "🇺🇸", "NYSE",   "America/New_York",  "14:30", "21:00", "^GSPC",  "SMART", "USD",  None,     False, None,   None,   20),
+            ("NASDAQ", "NASDAQ",                         "EQUITY", "IBKR",  True,  "USD",  "🇺🇸", "NASDAQ", "America/New_York",  "14:30", "21:00", "^IXIC",  "SMART", "USD",  None,     False, None,   None,   30),
+            ("CRYPTO_INDEPENDENTRESERVE", "Independent Reserve",   "CRYPTO", "CCXT", True,  "AUD",  "🇦🇺", None, "Australia/Sydney", "00:00", "23:59", "BTC-AUD", None, None, "independentreserve", False, "-AUD", "-AUD", 40),
+            ("CRYPTO_BINANCE",            "Binance",               "CRYPTO", "CCXT", False, "USDT", "₿", None, "UTC", "00:00", "23:59", "BTC-USD", None, None, "binance",            False, "-USD", "-USD", 50),
+            ("CRYPTO_COINBASE",           "Coinbase Advanced",     "CRYPTO", "CCXT", False, "USD",  "₿", None, "UTC", "00:00", "23:59", "BTC-USD", None, None, "coinbase",           False, "-USD", "-USD", 60),
+            ("CRYPTO_KRAKEN",             "Kraken",                "CRYPTO", "CCXT", False, "USD",  "₿", None, "UTC", "00:00", "23:59", "BTC-USD", None, None, "kraken",             False, "-USD", "-USD", 70),
+            ("CRYPTO_MEXC",               "MEXC",                  "CRYPTO", "CCXT", False, "USDT", "₿", None, "UTC", "00:00", "23:59", "BTC-USD", None, None, "mexc",               False, "-USD", "-USD", 80),
+        ]
+        for row in exchange_seeds:
+            (ek, dn, at, bt, ie, tc, fe, ck, tz, mo, mc, it, ie2, ic, cp, cs, ts, ys, so) = row
+            exists = conn.execute(text(
+                "SELECT 1 FROM exchange_configs WHERE exchange_key = :k"
+            ), {"k": ek}).fetchone()
+            if not exists:
+                conn.execute(text("""
+                    INSERT INTO exchange_configs
+                    (exchange_key,display_name,asset_type,broker_type,is_enabled,trading_currency,
+                     flag_emoji,calendar_key,timezone,market_open_utc,market_close_utc,index_ticker,
+                     ibkr_exchange,ibkr_currency,ccxt_provider,ccxt_sandbox,ticker_suffix,yfinance_suffix,sort_order)
+                    VALUES (:ek,:dn,:at,:bt,:ie,:tc,:fe,:ck,:tz,:mo,:mc,:it,:ie2,:ic,:cp,:cs,:ts,:ys,:so)
+                """), dict(ek=ek,dn=dn,at=at,bt=bt,ie=ie,tc=tc,fe=fe,ck=ck,tz=tz,mo=mo,mc=mc,
+                           it=it,ie2=ie2,ic=ic,cp=cp,cs=cs,ts=ts,ys=ys,so=so))
+        conn.commit()
+        logger.info("Migration 002 complete.")
+
+        # ── Migration 003 — asset_types on RuleConfig ─────────────────────────
+        logger.info("Running migration 003 — asset_types on RuleConfig...")
+        # Add asset_types column to rule_configs
+        at_exists = conn.execute(text("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'rule_configs' AND column_name = 'asset_types';
+        """)).fetchone()
+        if not at_exists:
+            logger.info("Adding rule_configs.asset_types column...")
+            conn.execute(text("""
+                ALTER TABLE rule_configs ADD COLUMN asset_types VARCHAR(16) NOT NULL DEFAULT 'BOTH';
+            """))
+            conn.commit()
+
+        # Backfill EQUITY-only rules
+        equity_only = [
+            'fundamental_eps_growth_recent', 'fundamental_eps_growth_accel',
+            'fundamental_eps_growth_annual', 'fundamental_sales_growth',
+            'fundamental_roe', 'fundamental_profit_margin', 'fundamental_institutional_own',
+            'regime_pct_stocks_above_200ma', 'regime_distribution_days',
+            'entry_sector_leadership', 'exit_earnings_avoid',
+            'trend_rs_rating_min',   # RS vs ASX200 has no meaning for crypto
+        ]
+        for rule_id in equity_only:
+            conn.execute(text("""
+                UPDATE rule_configs SET asset_types = 'EQUITY'
+                WHERE rule_id = :rule_id AND asset_types = 'BOTH';
+            """), {"rule_id": rule_id})
+        # Widen threshold_max for trend_pct_below_52w_high so crypto users can set 65-75%
+        conn.execute(text("""
+            UPDATE rule_configs SET threshold_max = 80
+            WHERE rule_id = 'trend_pct_below_52w_high' AND (threshold_max IS NULL OR threshold_max < 80);
+        """))
+        conn.commit()
+        logger.info("Migration 003 complete.")
+
+        # ── Migration 004 — numeric column types on RuleConfig ────────────────
+        logger.info("Running migration 004 — numeric column types on RuleConfig...")
+        conn.execute(text("""
+            ALTER TABLE rule_configs ALTER COLUMN threshold TYPE NUMERIC(20, 4);
+            ALTER TABLE rule_configs ALTER COLUMN threshold_min TYPE NUMERIC(20, 4);
+            ALTER TABLE rule_configs ALTER COLUMN threshold_max TYPE NUMERIC(20, 4);
+        """))
+        conn.commit()
+        logger.info("Migration 004 complete.")
+
+        # ── Migration 005 — seed Independent Reserve + update Kraken sort_order ─
+        logger.info("Running migration 005 — add Independent Reserve exchange...")
+        ir_exists = conn.execute(text(
+            "SELECT 1 FROM exchange_configs WHERE exchange_key = 'CRYPTO_INDEPENDENTRESERVE'"
+        )).fetchone()
+        if not ir_exists:
+            logger.info("Inserting CRYPTO_INDEPENDENTRESERVE into exchange_configs...")
+            conn.execute(text("""
+                INSERT INTO exchange_configs
+                  (exchange_key, display_name, asset_type, broker_type, is_enabled,
+                   trading_currency, flag_emoji, calendar_key, timezone,
+                   market_open_utc, market_close_utc, index_ticker,
+                   ibkr_exchange, ibkr_currency, ccxt_provider, ccxt_sandbox,
+                   ticker_suffix, yfinance_suffix, sort_order)
+                VALUES
+                  ('CRYPTO_INDEPENDENTRESERVE', 'Independent Reserve', 'CRYPTO', 'CCXT', TRUE,
+                   'AUD', '🇦🇺', NULL, 'Australia/Sydney',
+                   '00:00', '23:59', 'BTC-AUD',
+                   NULL, NULL, 'independentreserve', FALSE,
+                   '-AUD', '-AUD', 40)
+            """))
+        # Ensure IR is enabled and at sort_order 40 (primary crypto exchange)
+        conn.execute(text("""
+            UPDATE exchange_configs
+            SET is_enabled = TRUE, sort_order = 40
+            WHERE exchange_key = 'CRYPTO_INDEPENDENTRESERVE'
+        """))
+        # Update other crypto exchanges sort_order to follow IR
+        conn.execute(text("""
+            UPDATE exchange_configs SET sort_order = 50
+            WHERE exchange_key = 'CRYPTO_BINANCE' AND sort_order < 50
+        """))
+        conn.commit()
+        logger.info("Migration 005 complete.")
+
+        # ── Seed per-org multi-market config keys ──────────────────────────────
+        multi_market_configs = [
+            ("active_exchanges", "ASX,CRYPTO_INDEPENDENTRESERVE", "STRING",
+             "Active Exchanges", "Comma-separated exchange keys: ASX,CRYPTO_INDEPENDENTRESERVE etc.", "trading", False),
+            ("ibkr_account_usd", "", "STRING",
+             "IBKR USD Account", "IBKR account for USD trades. Leave blank to use main account.", "ibkr", False),
+            ("fx_audusd_override", "", "STRING",
+             "AUD/USD Rate Override", "Manual FX override. Leave blank for live rate.", "trading", False),
+            ("crypto_exchange_key", "CRYPTO_INDEPENDENTRESERVE", "STRING",
+             "Crypto Exchange", "Active crypto exchange key, e.g. CRYPTO_INDEPENDENTRESERVE", "crypto", False),
+            ("crypto_api_key", "", "STRING",
+             "Crypto API Key", "API key for org's crypto exchange account.", "crypto", True),
+            ("crypto_api_secret", "", "STRING",
+             "Crypto API Secret", "API secret for org's crypto exchange account.", "crypto", True),
+            ("crypto_testnet", "false", "BOOLEAN",
+             "Crypto Testnet Mode", "Use exchange testnet for crypto orders.", "crypto", False),
+            ("last_market_regime_ASX",    "UNKNOWN", "STRING", "ASX Market Regime",    "", "system", False),
+            ("last_market_regime_NYSE",   "UNKNOWN", "STRING", "NYSE Market Regime",   "", "system", False),
+            ("last_market_regime_NASDAQ", "UNKNOWN", "STRING", "NASDAQ Market Regime", "", "system", False),
+            ("onboarding_completed", "true", "BOOLEAN", "Onboarding Completed", "Whether the organization has completed first-time setup", "general", False),
+        ]
+        orgs_res = conn.execute(text("SELECT id FROM organizations;")).fetchall()
+        for org in orgs_res:
+            org_id = org[0]
+            for key, val, vtype, label, desc, group, is_secret in multi_market_configs:
+                exists = conn.execute(text("""
+                    SELECT 1 FROM system_configs WHERE key = :key AND organization_id = :org_id;
+                """), {"key": key, "org_id": org_id}).fetchone()
+                if not exists:
+                    conn.execute(text("""
+                        INSERT INTO system_configs (key, value, value_type, label, description, organization_id, "group", is_secret)
+                        VALUES (:key, :val, :vtype, :label, :desc, :org_id, :group, :is_secret);
+                    """), {"key": key, "val": val, "vtype": vtype, "label": label,
+                           "desc": desc, "org_id": org_id, "group": group, "is_secret": is_secret})
+        conn.commit()
+
         # ── entry_check_logs table ─────────────────────────────────────────────
         logger.info("Creating 'entry_check_logs' table...")
         conn.execute(text("""
@@ -488,35 +868,113 @@ def migrate():
                 id              SERIAL PRIMARY KEY,
                 organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
                 signal_id       INTEGER REFERENCES signals(id) ON DELETE SET NULL,
-                ticker          VARCHAR(16) NOT NULL,
-                checked_at      TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT TIMEZONE('utc', NOW()),
-                price_current   NUMERIC(12, 4),
-                price_pivot     NUMERIC(12, 4),
-                price_stop      NUMERIC(12, 4),
-                price_vs_pivot  NUMERIC(8, 4),
+                ticker          VARCHAR(32) NOT NULL,
+                exchange_key    VARCHAR(32),
+                checked_at      TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
+                price_current   NUMERIC(14,4),
+                price_pivot     NUMERIC(14,4),
+                price_stop      NUMERIC(14,4),
+                price_vs_pivot  NUMERIC(8,4),
                 vol_current     BIGINT,
-                vol_avg_50      NUMERIC(18, 2),
-                vol_ratio       NUMERIC(8, 4),
-                ma_10           NUMERIC(12, 4),
-                ma_50           NUMERIC(12, 4),
-                ma_150          NUMERIC(12, 4),
-                ma_200          NUMERIC(12, 4),
-                high_52w        NUMERIC(12, 4),
-                low_52w         NUMERIC(12, 4),
-                pct_from_52w_high NUMERIC(8, 4),
-                rs_rating       NUMERIC(6, 2),
-                breakout_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+                vol_avg_50      NUMERIC(20,2),
+                vol_ratio       NUMERIC(8,4),
+                ma_10           NUMERIC(14,4),
+                ma_50           NUMERIC(14,4),
+                ma_150          NUMERIC(14,4),
+                ma_200          NUMERIC(14,4),
+                high_52w        NUMERIC(14,4),
+                low_52w         NUMERIC(14,4),
+                pct_from_52w_high NUMERIC(8,4),
+                rs_rating       NUMERIC(6,2),
+                breakout_confirmed BOOLEAN DEFAULT FALSE,
                 rule_results    JSONB DEFAULT '{}'::jsonb,
-                data_source     VARCHAR(32) DEFAULT 'yfinance',
-                data_delay_mins INTEGER DEFAULT 20,
+                data_source     VARCHAR(32),
+                data_delay_mins INTEGER,
                 bar_timestamp   TIMESTAMP WITHOUT TIME ZONE,
-                created_at      TIMESTAMP WITHOUT TIME ZONE DEFAULT TIMEZONE('utc', NOW())
+                bar_date        DATE
             );
-            CREATE INDEX IF NOT EXISTS ix_ecl_org_checked ON entry_check_logs (organization_id, checked_at DESC);
-            CREATE INDEX IF NOT EXISTS ix_ecl_ticker      ON entry_check_logs (ticker);
-            CREATE INDEX IF NOT EXISTS ix_ecl_signal      ON entry_check_logs (signal_id);
+        """))
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_ecl_org_checked
+              ON entry_check_logs (organization_id, checked_at DESC);
+        """))
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_ecl_ticker
+              ON entry_check_logs (ticker);
         """))
         conn.commit()
+        logger.info("entry_check_logs table ready.")
+
+    # ── Migration 004 — MCP credential store ──────────────────────────────────
+    logger.info("Running migration 004 — MCP credential store...")
+
+    with engine.connect() as conn:
+        def _table_exists_m4(tbl):
+            return conn.execute(text(
+                "SELECT 1 FROM information_schema.tables WHERE table_name=:t"
+            ), {"t": tbl}).fetchone() is not None
+
+        if not _table_exists_m4("mcp_credentials"):
+            logger.info("Creating mcp_credentials table...")
+            conn.execute(text("""
+                CREATE TABLE mcp_credentials (
+                    id                    SERIAL PRIMARY KEY,
+                    organization_id       INTEGER NOT NULL
+                                          REFERENCES organizations(id) ON DELETE CASCADE,
+                    name                  VARCHAR(128) NOT NULL DEFAULT 'Default',
+                    client_id             VARCHAR(64)  UNIQUE NOT NULL,
+                    client_secret_hash    VARCHAR(256) NOT NULL,
+                    client_secret_preview VARCHAR(16)  NOT NULL,
+                    scopes                JSONB        NOT NULL DEFAULT '[]',
+                    expires_at            TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+                    is_active             BOOLEAN      NOT NULL DEFAULT TRUE,
+                    created_at            TIMESTAMP WITHOUT TIME ZONE DEFAULT TIMEZONE('utc', NOW()),
+                    created_by            VARCHAR(128),
+                    last_used_at          TIMESTAMP WITHOUT TIME ZONE,
+                    revoked_at            TIMESTAMP WITHOUT TIME ZONE,
+                    revoked_by            VARCHAR(128),
+                    notes                 TEXT
+                );
+            """))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_mcp_cred_org ON mcp_credentials (organization_id);"
+            ))
+            conn.commit()
+            logger.info("mcp_credentials table created.")
+
+        # Ensure mcp_base_url is always global — remove any org-scoped rows that
+        # may have been created by an earlier partial migration run
+        try:
+            conn.execute(text(
+                "DELETE FROM system_configs WHERE key = 'mcp_base_url' AND organization_id IS NOT NULL;"
+            ))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+
+        # Seed global mcp_base_url SystemConfig (no org_id — super admin configurable)
+        mcp_url_exists = conn.execute(text(
+            "SELECT 1 FROM system_configs WHERE key = 'mcp_base_url' AND organization_id IS NULL;"
+        )).fetchone()
+        if not mcp_url_exists:
+            logger.info("Seeding global system config 'mcp_base_url'...")
+            conn.execute(text("""
+                INSERT INTO system_configs
+                    (key, value, value_type, label, description, "group", organization_id, is_secret)
+                VALUES (
+                    'mcp_base_url',
+                    'https://vcpilot.astradigital.com.au',
+                    'STRING',
+                    'MCP Base URL',
+                    'Public base URL used in MCP client config snippets. '
+                    'Change this if hosted at a different domain.',
+                    'mcp',
+                    NULL,
+                    FALSE
+                ) ON CONFLICT DO NOTHING;
+            """))
+            conn.commit()
+            logger.info("mcp_base_url seeded.")
 
     logger.info("SaaS/Multi-tenant migration and seeding complete!")
 

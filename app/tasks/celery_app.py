@@ -37,8 +37,8 @@ app.conf.update(
 
     # Queues
     task_routes={
-        "app.tasks.screening.*": {"queue": "screening"},
-        "app.tasks.trading.*":   {"queue": "trading"},
+        "app.tasks.screening.*": {"queue": "screening_equities"},
+        "app.tasks.trading.*":   {"queue": "trading_equities"},
         "app.tasks.reporting.*": {"queue": "reporting"},
     },
     task_default_queue="default",
@@ -59,7 +59,7 @@ app.conf.update(
         "refresh-price-data": {
             "task": "app.tasks.screening.refresh_price_data",
             "schedule": crontab(hour=17, minute=0, day_of_week="mon-fri"),
-            "options": {"queue": "screening"},
+            "options": {"queue": "screening_equities"},
         },
 
         # =================================================================
@@ -68,7 +68,7 @@ app.conf.update(
         "run-screener": {
             "task": "app.tasks.screening.run_daily_screen",
             "schedule": crontab(hour=17, minute=30, day_of_week="mon-fri"),
-            "options": {"queue": "screening"},
+            "options": {"queue": "screening_equities"},
         },
 
         # =================================================================
@@ -77,7 +77,7 @@ app.conf.update(
         "evaluate-market-regime": {
             "task": "app.tasks.screening.evaluate_market_regime_task",
             "schedule": crontab(hour=17, minute=15, day_of_week="mon-fri"),
-            "options": {"queue": "screening"},
+            "options": {"queue": "screening_equities"},
         },
 
         # =================================================================
@@ -87,7 +87,7 @@ app.conf.update(
         "check-entry-triggers": {
             "task": "app.tasks.trading.check_entry_triggers",
             "schedule": crontab(hour="10-16", minute="*/5", day_of_week="mon-fri"),
-            "options": {"queue": "trading"},
+            "options": {"queue": "trading_equities"},
         },
 
         # =================================================================
@@ -96,7 +96,7 @@ app.conf.update(
         "check-exit-rules": {
             "task": "app.tasks.trading.check_exit_rules_task",
             "schedule": crontab(hour="10-16", minute="*/5", day_of_week="mon-fri"),
-            "options": {"queue": "trading"},
+            "options": {"queue": "trading_equities"},
         },
 
         # =================================================================
@@ -105,7 +105,7 @@ app.conf.update(
         "sync-positions": {
             "task": "app.tasks.trading.sync_ibkr_positions_task",
             "schedule": crontab(hour="10-16", minute="*/5", day_of_week="mon-fri"),
-            "options": {"queue": "trading"},
+            "options": {"queue": "trading_equities"},
         },
 
         # =================================================================
@@ -114,7 +114,7 @@ app.conf.update(
         "sync-stops": {
             "task": "app.tasks.trading.sync_stop_orders",
             "schedule": crontab(hour="10-16", minute="*/15", day_of_week="mon-fri"),
-            "options": {"queue": "trading"},
+            "options": {"queue": "trading_equities"},
         },
 
         # =================================================================
@@ -141,7 +141,128 @@ app.conf.update(
         "refresh-universe": {
             "task": "app.tasks.screening.refresh_universe",
             "schedule": crontab(hour=20, minute=0, day_of_week="sun"),
-            "options": {"queue": "screening"},
+            "options": {"queue": "screening_equities"},
+        },
+
+        # =================================================================
+        # US MARKET — NYSE/NASDAQ
+        # NYSE: 9:30am–4:00pm ET = ~11:30pm–6:00am AEST (next day)
+        # All times below in AEST/AEDT (Sydney timezone).
+        # Note: AEDT (UTC+11) is active Oct–Apr; AEST (UTC+10) May–Sep.
+        # Use hour ranges that cover both offsets conservatively.
+        # =================================================================
+
+        # Price data refresh after NYSE close (~6am AEST Tue–Sat)
+        "refresh-price-data-us": {
+            "task": "app.tasks.screening.refresh_price_data",
+            "schedule": crontab(hour=7, minute=0, day_of_week="tue,wed,thu,fri,sat"),
+            "kwargs": {"exchange_key": "NYSE"},
+            "options": {"queue": "screening_equities"},
+        },
+
+        # US screener (after US data refresh ~7:30am AEST Tue–Sat)
+        "run-screener-us": {
+            "task": "app.tasks.screening.run_daily_screen",
+            "schedule": crontab(hour=7, minute=30, day_of_week="tue,wed,thu,fri,sat"),
+            "kwargs": {"exchange_key": "NYSE"},
+            "options": {"queue": "screening_equities"},
+        },
+
+        # US market regime (after data refresh ~7:15am AEST)
+        "evaluate-market-regime-us": {
+            "task": "app.tasks.screening.evaluate_market_regime_task",
+            "schedule": crontab(hour=7, minute=15, day_of_week="tue,wed,thu,fri,sat"),
+            "kwargs": {"exchange_key": "NYSE"},
+            "options": {"queue": "screening_equities"},
+        },
+
+        # US intraday entry triggers (every 5 min during NYSE hours, ~11:30pm–6:05am AEST)
+        # Cover hour range 23–5 (UTC+10); Beat uses AEST so this fires across midnight
+        "check-entry-triggers-us-evening": {
+            "task": "app.tasks.trading.check_entry_triggers",
+            "schedule": crontab(hour="23", minute="*/5", day_of_week="mon-fri"),
+            "kwargs": {"exchange_key": "NYSE"},
+            "options": {"queue": "trading_equities"},
+        },
+        "check-entry-triggers-us-morning": {
+            "task": "app.tasks.trading.check_entry_triggers",
+            "schedule": crontab(hour="0,1,2,3,4,5,6", minute="*/5", day_of_week="tue,wed,thu,fri,sat"),
+            "kwargs": {"exchange_key": "NYSE"},
+            "options": {"queue": "trading_equities"},
+        },
+
+        # US exit rules (same window as entry triggers)
+        "check-exit-rules-us-evening": {
+            "task": "app.tasks.trading.check_exit_rules_task",
+            "schedule": crontab(hour="23", minute="*/5", day_of_week="mon-fri"),
+            "kwargs": {"exchange_key": "NYSE"},
+            "options": {"queue": "trading_equities"},
+        },
+        "check-exit-rules-us-morning": {
+            "task": "app.tasks.trading.check_exit_rules_task",
+            "schedule": crontab(hour="0,1,2,3,4,5,6", minute="*/5", day_of_week="tue,wed,thu,fri,sat"),
+            "kwargs": {"exchange_key": "NYSE"},
+            "options": {"queue": "trading_equities"},
+        },
+
+        # =================================================================
+        # CRYPTO — 24/7 trading (5-min entry/exit checks, live P&L refresh)
+        # =================================================================
+        "check-entry-triggers-crypto": {
+            "task": "app.tasks.trading.check_entry_triggers",
+            "schedule": crontab(minute="*/5"),    # every 5 min, 24/7
+            "kwargs": {"exchange_key": "CRYPTO"},
+            "options": {"queue": "trading_crypto"},
+        },
+        "check-exit-rules-crypto": {
+            "task": "app.tasks.trading.check_exit_rules_task",
+            "schedule": crontab(minute="*/5"),    # every 5 min, 24/7
+            "kwargs": {"exchange_key": "CRYPTO"},
+            "options": {"queue": "trading_crypto"},
+        },
+        # Stop sync + ATR trailing stop — every 5 min, 24/7
+        "sync-stop-orders-crypto": {
+            "task": "app.tasks.trading.sync_stop_orders",
+            "schedule": crontab(minute="*/5"),
+            "options": {"queue": "trading_crypto"},
+        },
+        # Live P&L refresh — every 5 min for all exchanges (keeps UI current)
+        "update-position-pnl": {
+            "task": "app.tasks.trading.update_position_pnl_task",
+            "schedule": crontab(minute="*/5"),
+            "options": {"queue": "trading_equities"},
+        },
+        # Crypto data refresh — every 6 hours, 24/7 (price bars stay fresh)
+        "refresh-price-data-crypto": {
+            "task": "app.tasks.screening.refresh_price_data",
+            "schedule": crontab(hour="0,6,12,18", minute=30),
+            "kwargs": {"exchange_key": "CRYPTO"},
+            "options": {"queue": "screening_equities"},
+        },
+        # Crypto screener — 4× daily: after each data refresh (catches intraday VCP completions)
+        "run-screen-crypto-midnight": {
+            "task": "app.tasks.screening.run_daily_screen",
+            "schedule": crontab(hour=0, minute=45),
+            "kwargs": {"exchange_key": "CRYPTO"},
+            "options": {"queue": "screening_equities"},
+        },
+        "run-screen-crypto-6am": {
+            "task": "app.tasks.screening.run_daily_screen",
+            "schedule": crontab(hour=6, minute=45),
+            "kwargs": {"exchange_key": "CRYPTO"},
+            "options": {"queue": "screening_equities"},
+        },
+        "run-screen-crypto-noon": {
+            "task": "app.tasks.screening.run_daily_screen",
+            "schedule": crontab(hour=12, minute=45),
+            "kwargs": {"exchange_key": "CRYPTO"},
+            "options": {"queue": "screening_equities"},
+        },
+        "run-screen-crypto-6pm": {
+            "task": "app.tasks.screening.run_daily_screen",
+            "schedule": crontab(hour=18, minute=45),
+            "kwargs": {"exchange_key": "CRYPTO"},
+            "options": {"queue": "screening_equities"},
         },
     },
 )

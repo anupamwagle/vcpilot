@@ -63,6 +63,7 @@
 
     <form method="post" action="/login/verify-otp" class="space-y-4">
       <input type="hidden" name="email" value="{{ email }}" />
+      <input type="hidden" name="next" value="{{ next }}"/>
       
       <div>
         <label for="otp_code">Enter 6-Digit Passcode</label>

@@ -6,7 +6,7 @@
 
 ## What This Is
 
-VCPilot is a fully automated ASX (Australian Securities Exchange) stock trading system built on **Mark Minervini's SEPA (Specific Entry Point Analysis)** methodology — specifically the Volatility Contraction Pattern (VCP). It screens ASX stocks daily, detects VCP formations, sizes positions using Minervini's risk rules, and executes bracket orders through Interactive Brokers. It is controlled remotely via WhatsApp.
+VCPilot is a multi-market automated stock trading system built on **Mark Minervini's SEPA (Specific Entry Point Analysis)** methodology — specifically the Volatility Contraction Pattern (VCP). It supports ASX equities, US equities (NYSE/NASDAQ), and has a crypto trading foundation. Users build custom watchlists by adding instruments from any supported exchange; VCPilot fetches price data on-demand, screens against Minervini rules, generates signals, and executes bracket orders through Interactive Brokers (equities) or ccxt (crypto). It is controlled remotely via WhatsApp.
 
 **Owner:** admin@astradigital.com.au (Australia — AU-based, not US)  
 **Repo:** github.com/anupamwagle/vcpilot  
@@ -17,11 +17,12 @@ VCPilot is a fully automated ASX (Australian Securities Exchange) stock trading 
 ## Architecture
 
 ```
-Docker Compose (8 services):
+Docker Compose (9 services):
   database        TimescaleDB (PostgreSQL 16 + timescaledb extension)
   redis           Redis 7 — Celery broker + result backend
   app             Database setup & migration runner — runs init_db + migrate_saas
-  worker          Celery worker (queues: screening, trading, reporting, default)
+  worker-equities Celery worker for equities (queues: screening_equities, trading_equities, reporting, default)
+  worker-crypto   Celery worker for crypto (queues: trading_crypto, screening_crypto)
   beat            Celery Beat — AEST-aligned schedule
   api             FastAPI + Jinja2 + Flowbite/Tailwind — port 8501
   whatsapp        WAHA (WhatsApp HTTP API, self-hosted) — port 3000
@@ -30,10 +31,10 @@ Docker Compose (8 services):
 
 **Data flow:**
 ```
-yfinance (EOD data) → Celery screening task → Minervini rule engine
-→ Signal generated → Risk manager sizes position → IBKR bracket order
-→ Position tracked → Exit rules evaluated → Trade closed → Audit logged
-→ WhatsApp report via WAHA
+yfinance (EOD history) → Celery screen → Minervini rule engine → Watchlist
+Intraday (Broker API / IR API / yfinance) → Signal monitor → Entry trigger
+Position tracked (Trailing Stop / ATR) → Exit rules → Trade closed → Audit logged
+Comms Hub (WhatsApp/Telegram) report
 ```
 
 ---
@@ -53,7 +54,7 @@ yfinance (EOD data) → Celery screening task → Minervini rule engine
 | Fundamentals | yfinance quarterly_financials | Free, sufficient for Minervini criteria |
 | Supplemental data | FMP free tier (250 calls/day) | Only for shortlisted stocks |
 | Broker API | ib_insync → IBKR Gateway | Developer familiar with IBKR |
-| Notifications | WAHA → WhatsApp | Self-hosted, no Meta approval needed |
+| Notifications | app/notifications/ | WhatsApp/WAHA & Telegram (Two-way) |
 | Containers | Docker Compose | Local-first, cloud-deployable |
 
 ---
@@ -85,7 +86,7 @@ vcpilot/
 │   │
 │   ├── data/
 │   │   ├── fetcher.py     ← yfinance wrapper: get_price_history(), get_fundamentals(),
-│   │   │                     compute_rs_ratings(), get_asx200_tickers()
+│   │   │                     compute_rs_ratings(), get_asx200_tickers(), get_asx200_metadata()
 │   │   └── calendar.py    ← pandas_market_calendars ASX — is_trading_day(), market_is_open_now()
 │   │
 │   ├── screener/          ← Minervini rule engine
@@ -218,6 +219,22 @@ docker compose --profile trading up ibkr -d
 ```
 It does NOT start with `docker compose up`. This is intentional — prevents accidental live connections. The broker falls back to `_simulate_order()` when IBKR is not connected. Always start paper mode first: `IBKR_PAPER_MODE=true`, `IBKR_PORT=4002`.
 
+### 29. Crypto Universe Bootstrap
+There is no scheduled `refresh_universe` equivalent for crypto — unlike ASX which scrapes Wikipedia weekly. Instead:
+- `get_top_crypto_tickers(exchange_key)` in `fetcher.py` returns the top-100 crypto tickers (hardcoded by market cap) in yfinance format. `TOP_CRYPTO_SYMBOLS` is the base list.
+- `refresh_crypto_universe(exchange_key)` Celery task seeds `Stock` records for these 100 tokens.
+- `refresh_price_data(exchange_key=CRYPTO_*)` auto-calls `refresh_crypto_universe` inline when zero stocks found — no manual step needed.
+- Health page has a **"🪙 Seed Crypto Universe"** button per exchange for explicit manual seeding.
+- `/action/refresh-data` for crypto exchanges chains `refresh_crypto_universe → refresh_price_data`.
+
+**Crypto first-run order**: Seed Universe → Refresh Data → Evaluate Regime → Force Screen.
+
+**Critical gotchas:**
+- Signal `exchange_key` must be the Stock's actual key (e.g. `CRYPTO_INDEPENDENTRESERVE`), NOT the generic `"CRYPTO"` sweep key. `_run_screen_force` always resolves via `stock_obj.exchange_key`.
+- Trading task crypto filter: `Signal.exchange_key.in_(["CRYPTO","CRYPTO_INDEPENDENTRESERVE","CRYPTO_BINANCE","CRYPTO_COINBASE","CRYPTO_KRAKEN"])` — not `.like("CRYPTO_%")` which misses the generic key.
+- Crypto is always a trading day (calendar returns `True`). `refresh_price_data` skips the trading-day gate for all CRYPTO* exchange keys.
+- Date gate in `refresh_price_data` is relaxed for crypto: accepts yesterday's bar (yfinance returns UTC date, can lag AEST by one day).
+
 ### 9. Screener action routes — always use `_run_screen_force`, not `run_daily_screen`
 Dashboard screener buttons (`/action/run-screener`, `/action/force-screen`) both call `_run_screen_force.delay()`.  
 **Never** wire a UI button to `run_daily_screen.delay()` — that task has a `today_is_trading_day()` guard at the top and silently returns on weekends/holidays with no user feedback.  
@@ -284,6 +301,97 @@ To ensure the dashboard remains fast and responsive:
 - Use `joinedload()` (e.g., `joinedload(Watchlist.label)`) to eager-load relationships inside loops to prevent N+1 query bottlenecks.
 - Throttle external API fetches (like yfinance/FMP) on missing data using a 24-hour marker (`missing_name_fetch:{ticker}`).
 
+### 25. Multi-Market Architecture — Exchange, Currency, On-Demand Data
+
+**ExchangeConfig** (`app/models/exchange.py`) is a global table managed by super admin. One row per trading venue. Super admin enables/disables exchanges. Orgs activate from the enabled set via `active_exchanges` SystemConfig key.
+
+**Ticker conventions (canonical yfinance format):**
+| Exchange    | yfinance ticker | Display code | IBKR contract          |
+|-------------|-----------------|--------------|------------------------|
+| ASX         | `BHP.AX`        | `BHP`        | `Stock("BHP","ASX","AUD")` |
+| NYSE/NASDAQ | `AAPL`          | `AAPL`       | `Stock("AAPL","SMART","USD")` |
+| Crypto      | `BTC-USD`       | `BTC`        | ccxt `BTC/USDT` symbol |
+
+**`normalize_ticker(user_input, exchange_key)`** in `fetcher.py` converts raw user input to yfinance format. Always call this before storing or fetching.
+
+**On-demand data flow:** User adds AAPL + NYSE on /watchlist → `screen_single_ticker.delay("AAPL", exchange_key="NYSE")` → fetches 2yr yfinance history → stores in central `price_bars` table (shared across orgs) → runs Minervini rules → Signal or Watchlist entry. Price data is NEVER per-org — it lives in global `stocks` + `price_bars` tables.
+
+**FX rate:** `get_fx_rate("AUD", "USD")` fetches AUDUSD=X from yfinance, cached 1hr in Redis. Never hardcode FX. `calculate_position_size()` accepts `currency` + `fx_rate_aud` params and returns both native and AUD-equivalent values. Portfolio heat always aggregates in AUD.
+
+**MarketRegimeRecord** replaces the single `last_market_regime` SystemConfig key. One row per evaluation per exchange. `evaluate_market_regime_task(exchange_key="ASX")` writes here + updates `last_market_regime_ASX` SystemConfig key per org (for dashboard display). Crypto regime only checks index-above-200MA (skips breadth + distribution days).
+
+**Celery Beat — multi-market schedules (all AEST):**
+- ASX: data 5pm, screener 5:30pm, entry/exit every 5min 10am–4:12pm Mon–Fri
+- NYSE: data 7am Tue–Sat, screener 7:30am, entry/exit checks 11pm–6am (NYSE session)
+- Crypto: entry/exit every 15min 24/7, data refresh midnight UTC
+- All trading tasks accept `exchange_key` kwarg.
+
+**IBKR multi-exchange routing:** `IBKRBroker._build_contract(ticker, exchange_key)` routes correctly. Strip `.AX` or `-USD` suffix before passing to IBKR. US orders use `"SMART"` primary exchange with USD currency.
+
+**Crypto broker:** `app/broker/crypto.py::CryptoBroker` wraps ccxt. Simulate mode when no credentials. `_yfinance_to_ccxt("BTC-USD")` → `"BTC/USDT"`. Bracket orders emulated: entry limit + stop-market + take-profit limit (not native OCO). Org admin provides API key/secret via `/admin/config`.
+
+**New global config keys (super admin, no org_id):** None added — ExchangeConfig rows replace the need for global keys.
+
+**New per-org SystemConfig keys:**
+- `active_exchanges` — comma-separated: `"ASX"`, `"ASX,NYSE"`, `"ASX,CRYPTO_BINANCE"`
+- `working_capital_currency` — base currency code for position sizing (e.g. AUD, USD, USDT, BNB; read-only for org admins, updated by super admin)
+- `ibkr_account_usd` — USD account (leave blank to use same account as AUD)
+- `fx_audusd_override` — manual rate override for testing
+- `crypto_exchange_key` — active crypto exchange: `"CRYPTO_BINANCE"`
+- `crypto_api_key` / `crypto_api_secret` / `crypto_testnet`
+- `last_market_regime_ASX` / `last_market_regime_NYSE` / `last_market_regime_NASDAQ`
+
+### 26. Exchange Filter Bar — `_get_exchange_filters()` + `components/exchange_filter.html`
+`_get_exchange_filters(org_id, db)` in `dashboard/main.py` reads `active_exchanges` SystemConfig for the org and returns filter tab options: `[{key, label, flag, asset_type}]`. Always includes "All". Groups NYSE+NASDAQ as "US", all `CRYPTO_*` keys as "Crypto". If only ASX is active, returns only `[{All}]` — no filter bar renders.
+
+`_apply_exchange_filter(query, model, exchange_filter)` applies the filter to a SQLAlchemy query:
+- `"ASX"` → `model.exchange_key == "ASX"`
+- `"US"` → `model.exchange_key.in_(["NYSE","NASDAQ"])`
+- `"CRYPTO"` → `model.asset_type == "CRYPTO"`
+- `"ALL"` / `""` → no filter (return query unchanged)
+
+The template include `dashboard/templates/components/exchange_filter.html` renders the pill tabs using `exchange_filters`, `active_exchange_filter`, `base_url`, and optional `extra_params`. Included in Watchlist, Signals, and Positions pages. The filter is a `?exchange=` query param.
+
+### 27. Admin Config — `FIELD_HINTS` Pattern
+`admin_config` GET route in `main.py` defines a `FIELD_HINTS` dict mapping config `key` → UI control metadata:
+- `control`: `"text"` | `"number"` | `"password"` | `"select"` | `"timezone_select"` | `"exchange_multiselect"` | `"crypto_exchange_select"` | `"readonly"`
+- `placeholder`, `prefix`, `example`, `hint_extra`, `link_url`, `link_text` — rendered as hints in the template
+- `options` — list of `(value, label)` tuples for select controls
+
+Each config row dict passed to the template includes a `"hint"` key containing the matching metadata (or `{}` if not in `FIELD_HINTS`). The template branches on `ctrl = hint.get('control', 'text')` and renders the appropriate control. To add a new config key with smart UI, just add an entry to `FIELD_HINTS` in the route — no template changes needed.
+
+### 28. Crypto Labels Auto-Seeding
+When `active_exchanges` is updated via `/admin/config` to include a `CRYPTO_*` key, the config update route automatically seeds four crypto watchlist labels (Crypto Core / DeFi / Altcoins / Crypto Watch) for that org if they don't already exist. Also seeded by `migrate_saas.py` on startup for any org whose `active_exchanges` already includes crypto. Labels use sort_order 10–13 so they appear after the default equity labels (0–3).
+
+### 30. ⚠️ `Position` vs `Trade` — exit detail belongs on `Trade`, never on `Position`
+This exact confusion caused a critical live-trading bug (see STATUS.md, "Critical Bug Audit" 8 Jun Session 4): `sync_stop_orders` and the MCP `close_position` tool both tried to set `exit_price`/`exit_reason`/`closed_at`/`realised_pnl`/`opened_at` on a `Position` object and pass those as `Trade(...)` kwargs. **None of these are `Position` columns, and `Trade` doesn't accept them as constructor kwargs either** — the real `Trade` columns are `entry_date`/`exit_date`/`hold_days`/`entry_price`/`exit_price`/`gross_pnl_aud`/`net_pnl_aud`/`pnl_pct`/`initial_stop`/`exit_reason`/`cgt_eligible_discount`. SQLAlchemy raised `AttributeError`/`TypeError` on every attempt, swallowed by a broad `except Exception` — so stopped-out positions simply **stayed open forever with no visible error**, which is about the worst failure mode possible once real money is involved.
+
+**The correct, proven pattern when closing a position** (used in the dashboard's `/positions/{id}/close` route, now also in `sync_stop_orders` and MCP `close_position`):
+1. Flip `position.status = TradeStatus.CLOSED` (that's the *only* exit-related field `Position` carries, besides what it already has from being open).
+2. Create a new `Trade` row with the real columns above — this is where `exit_price`, `exit_reason`, `exit_date`, P&L, etc. live.
+3. Write an `AuditLog` entry.
+
+`tests/test_position_close_paths.py` contains **schema guard tests** (`test_position_model_has_no_phantom_close_fields`, `test_trade_model_does_not_accept_phantom_kwargs`) that fail loudly if this pattern is ever violated again — run them after touching any code that closes a position.
+
+### 31. Regression test suite — `tests/` (pytest)
+A pytest suite covering the critical watchlist→signal→position→trade lifecycle lives in `tests/`. It runs the **real production code** (Celery tasks via `.run()`, FastAPI routes via direct async invocation, MCP tools via monkeypatched context) against an **isolated in-memory SQLite DB** — zero risk to the live org database.
+
+**How it works (`tests/conftest.py`):**
+- `create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)` — in-memory DB shared across connections in a test
+- An autouse fixture monkeypatches `app.database.SessionLocal` to a sessionmaker bound to this test engine, so **every** code path under test (tasks, routes, MCP tools) transparently writes to the isolated DB instead of the live one
+- Seed fixtures: `org_and_account` (Organization + AccountTier + Account), `open_crypto_position` (an OPEN TRX-AUD Position), `watching_trx_item` (a WATCHING Watchlist row)
+- This works because every SQLAlchemy model in this project is Postgres/SQLite-portable — no JSONB/ARRAY/UUID/Postgres-only types
+
+**Run with:** `pytest` from the project root (or `wsl bash -c "cd /mnt/c/vcpilot && pytest"`). Config in `pytest.ini` (`testpaths = tests`).
+
+**Test files:**
+- `test_watchlist_promotion.py` — dashboard rollback on Celery queue failure, happy-path success, duplicate-signal no-op handling, no-price-data rollback
+- `test_position_close_paths.py` — schema guards (see #30) + end-to-end `sync_stop_orders` and MCP `close_position` tests + invalid-exit-reason rejection
+- `test_crypto_position_classification.py` — crypto vs equity `Position` classification regression
+- `test_mcp_get_positions.py` — `get_positions(include_closed=True)` correctness and 30-day cutoff filtering
+
+**When to extend this suite:** any time you touch the watchlist→signal→position→trade lifecycle, `sync_stop_orders`, MCP trading tools, or anything that writes `Trade`/`Position`/`AuditLog` rows — these are the paths where a silent failure means real capital sits unmanaged. Add a test before/alongside the fix, following the monkeypatch patterns already established (`app.utils.time_helper.get_current_date`, `app.data.fetcher.get_intraday_price`, `get_notifier`/`get_mcp_context`/`assert_scope`).
+
 ### 22. Custom Exception Handlers (FastAPI/Starlette)
 FastAPI/Starlette exceptions are captured dynamically to render Flowbite/Tailwind custom error pages instead of exposing raw JSON payloads:
 - `StarletteHTTPException` (custom 404, etc.)
@@ -332,19 +440,37 @@ All rules have `enabled_globally=True` by default. Admin can toggle any non-mand
 
 ---
 
-## Celery Beat Schedule (AEST)
+## Celery Beat Schedule (AEST) — Updated
 
+### ASX / Equities
 | Time | Task |
 |---|---|
 | Sunday 8:00pm | `refresh_universe` — update ASX200 constituents from Wikipedia |
-| Mon–Fri 5:00pm | `refresh_price_data` — yfinance EOD for full universe |
-| Mon–Fri 5:15pm | `evaluate_market_regime_task` — BULL/CAUTION/BEAR |
-| Mon–Fri 5:30pm | `run_daily_screen` — full Minervini screen, generate signals |
+| Mon–Fri 5:00pm | `refresh_price_data(ASX)` — yfinance EOD for full ASX universe |
+| Mon–Fri 5:15pm | `evaluate_market_regime_task(ASX)` — BULL/CAUTION/BEAR |
+| Mon–Fri 5:30pm | `run_daily_screen(ASX)` — full Minervini screen, generate signals |
 | Mon–Fri 6:00pm | `send_daily_report` — WhatsApp P&L summary |
-| Every 5 min (10am–4:12pm) | `check_entry_triggers` — intraday breakout detection |
-| Every 5 min (10am–4:12pm) | `check_exit_rules_task` — evaluate exit conditions |
-| Every 15 min (market hours) | `sync_stop_orders` — sync stops with IBKR |
+| Every 5 min (10am–4:12pm Mon–Fri) | `check_entry_triggers(ASX)` — intraday breakout detection |
+| Every 5 min (10am–4:12pm Mon–Fri) | `check_exit_rules_task(ASX)` — evaluate exit conditions |
+| Every 15 min (market hours Mon–Fri) | `sync_stop_orders` — ASX stop sync (IBKR modify-order TBD) |
 | Every 10 min | `health_check` — heartbeat to SystemConfig |
+
+### CRYPTO (Independent Reserve) — 24/7
+| Time | Task |
+|---|---|
+| Every 5 min (24/7) | `check_entry_triggers(CRYPTO)` — live IR price vs pivot |
+| Every 5 min (24/7) | `check_exit_rules_task(CRYPTO)` — evaluate exit conditions |
+| Every 5 min (24/7) | `sync_stop_orders` — crypto ATR trailing stop + stop-out detection |
+| Every 5 min (24/7) | `update_position_pnl_task` — refresh current_price + unrealised_pnl in DB |
+| 12:30am, 6:30am, 12:30pm, 6:30pm | `refresh_price_data(CRYPTO)` — 6-hour price refresh |
+| 12:45am, 6:45am, 12:45pm, 6:45pm | `run_daily_screen(CRYPTO)` — 4× daily VCP screen |
+
+### NYSE/NASDAQ (US Equities)
+| Time | Task |
+|---|---|
+| Tue–Sat 7:00am | `refresh_price_data(NYSE)` — yfinance EOD for US universe |
+| Tue–Sat 7:30am | `run_daily_screen(NYSE)` — US Minervini screen |
+| 11pm Mon–Fri, 12-6am Tue–Sat | `check_entry_triggers(NYSE)` — NYSE session hours (AEST) |
 
 ---
 
@@ -439,17 +565,74 @@ The WAHA webhook routes incoming messages to `http://api:8501/webhook/whatsapp`.
 
 ---
 
-## What's NOT Built Yet (Phase 2+)
+## Session Handoff — Where We Are (8 Jun 2026)
+
+**Current operational state (pick up here in next session):**
+
+- **Fixed Watchlist Exchange Filtering Bug:** Resolved the issue where crypto (e.g., TRX-AUD, SOL-USD) and US stock (e.g., AAPL, MSFT) tickers on the watchlist defaulted to `exchange_key="ASX"` and `asset_type="EQUITY"` inside the database because `_upsert_watchlist` and `screen_single_ticker`'s update branch did not propagate these columns (defaulting to model values). Also made `toggle_favourite` in `dashboard/main.py` multi-market aware. Ran a recovery script to retroactively update all 13 incorrect watchlist records in the DB.
+- **Added Exchange Filters to Dashboard Watchlist Card:** Implemented the top-level exchange filters (All / ASX / US / Crypto) on the main dashboard (`/`) Watchlist Market Data section. The filter is fully integrated with the asynchronous `wlFilter` transition, preserving the active state of labels, custom stocks, and exchange selections together.
+
+### AW Org (id=10) — Verified Live
+
+| Item | State |
+|---|---|
+| Exchange | ASX + CRYPTO_INDEPENDENTRESERVE (IR) |
+| Capital | A$5,000 (paper=True) |
+| Crypto rules | 11 ON (6 original + 5 enhanced: RSI/MACD/vol/RR/BTC-RS) |
+| Equity rules | 45 ON |
+| IR universe | 100 tokens seeded |
+| IR live prices | Confirmed: BTC $89,847 \| ETH $2,393 \| SOL $94 \| XRP $1.63 |
+| Market regime | CAUTION (BTC -21% vs 200MA) — no signals, correct |
+| Celery beat | 5-min entry/exit/stop/P&L crypto; 4× daily screener |
+
+### Step 2 Pre-flight Checklist
+
+Before the next session can begin trading, complete ALL of:
+
+- [ ] `wsl bash /mnt/c/vcpilot/refresh_asx.sh` — verify ASX pipeline end-to-end
+- [ ] `/admin/config` → set `crypto_api_key`, `crypto_api_secret`, `crypto_testnet=false` (IR live)
+- [ ] `/admin/config` → set `ibkr_username`, `ibkr_password`, `ibkr_account`, `ibkr_paper_mode=true`
+- [ ] `wsl docker compose --profile trading up ibkr -d` → start IBKR paper gateway
+- [ ] `/admin/whatsapp` → scan QR code for AW org
+- [ ] `/superadmin/organizations` → AW → MCP Credentials → Generate (all scopes) → configure in Claude Desktop
+- [ ] Fund IR account → set `Account.is_paper=False` when ready for live
+
+### Next Session Prompt
+
+> "VCPilot Step 2 — live trading session. AW org (id=10) is ready. MCP is connected.  
+> Market regime: CAUTION. Run `get_portfolio_stats()` and `get_market_regime('CRYPTO_INDEPENDENTRESERVE')`  
+> then let's review any pending signals and decide on entries."
+
+### Recovery Watchlist (when to expect first signals)
+
+```
+BTC needs to recover +21% to A$113,533 to trigger BULL regime
+First signals expected from: BTC, DOGE, LINK, XRP (closest to 200MA)
+Watch: check_entry_triggers fires every 5 min 24/7 — it will auto-detect breakouts
+```
+
+### Utility Scripts (in /mnt/c/vcpilot/)
+
+| Script | Purpose |
+|---|---|
+| `refresh_aw.sh` | Full 7-step pipeline refresh for AW org (crypto) |
+| `diag_aw.sh` | Complete diagnostic of AW org state |
+| `fix_aw3.sh` | Used to seed enhanced rules + fix watchlist |
+| `refresh_asx.sh` | ASX universe → price → regime → screen + IBKR test |
+
+---
+
+## What's NOT Built Yet (Phase 4+)
 
 - [ ] Backtest page (Vectorbt integration — stub exists at `/admin/backtest`)  
-- [ ] Stop order modification via IBKR (`sync_stop_orders` is a placeholder)
-- [ ] Pyramid add-on order logic in `trading.py`
+- [ ] IBKR stop order modification API (`sync_stop_orders` works for crypto; equity stop sync TBD)
+- [ ] Pyramid add-on order logic in `trading.py` (rule seeded, task logic TBD)
 - [ ] CGT report export
-- [ ] Multi-account support (tier system is designed, single account only)
-- [ ] Cloud deployment (Railway/DigitalOcean)
-- [ ] Sector RS ranking (entry rule `entry_sector_leadership` not implemented in screener)
+- [ ] Multi-account support (tier system designed, single account only)
+- [ ] Cloud deployment (Railway/DigitalOcean + Cloudflare tunnel)
+- [ ] Sector RS ranking (entry rule seeded but not implemented in screener)
 - [ ] IBKR position sync on startup (reconcile DB vs live IBKR positions)
-- [ ] Intraday price feed (currently EOD only — entry checks use last close)
+- [ ] Intraday 4h/1h crypto screener (currently EOD/daily only)
 
 ---
 

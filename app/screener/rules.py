@@ -47,11 +47,21 @@ class RuleEngine:
     """
     Loads active rules from the database and evaluates them against stock data.
     Instantiate once per screener run; rules are cached for the run duration.
+
+    asset_type: "EQUITY" | "CRYPTO" — filters which rules are evaluated.
+      Rules marked asset_types="EQUITY" are skipped when asset_type="CRYPTO" and vice-versa.
+      Rules marked asset_types="BOTH" are always evaluated.
     """
 
-    def __init__(self, organization_id: Optional[int] = None, tier: str = "GOLD"):
+    def __init__(
+        self,
+        organization_id: Optional[int] = None,
+        tier: str = "GOLD",
+        asset_type: str = "EQUITY",
+    ):
         self.organization_id = organization_id
         self.tier = tier
+        self.asset_type = asset_type.upper()   # "EQUITY" or "CRYPTO"
         self._rules: dict[str, RuleConfig] = {}
         self._signal_overrides: dict[str, bool] = {}   # per-signal temporary overrides
         self._load_rules()
@@ -74,9 +84,19 @@ class RuleEngine:
             self._rules = {r.rule_id: r for r in rules}
         logger.debug(f"RuleEngine loaded {len(self._rules)} rules for org={self.organization_id}, tier={self.tier}")
 
+    def _rule_applies_to_asset(self, rule: RuleConfig) -> bool:
+        """Return True if this rule applies to the current asset_type."""
+        rule_scope = (rule.asset_types or "BOTH").upper()
+        if rule_scope == "BOTH":
+            return True
+        return rule_scope == self.asset_type
+
     def is_enabled(self, rule_id: str) -> bool:
         rule = self._rules.get(rule_id)
         if not rule:
+            return False
+        # Skip rules that don't apply to this asset type
+        if not self._rule_applies_to_asset(rule):
             return False
         # Signal override: respected only when rule is globally enabled and not mandatory
         if rule_id in self._signal_overrides and rule.enabled_globally and not rule.is_mandatory:
@@ -133,7 +153,9 @@ class RuleEngine:
     def get_enabled_by_category(self, category: RuleCategory) -> list[RuleConfig]:
         return [
             r for r in self._rules.values()
-            if r.category == category and r.is_enabled_for_tier(self.tier)
+            if r.category == category
+            and r.is_enabled_for_tier(self.tier)
+            and self._rule_applies_to_asset(r)
         ]
 
     @staticmethod

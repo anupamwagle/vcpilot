@@ -12,7 +12,7 @@ from app.models.signal import Signal
 from app.models.trade import Position, Trade, TradeStatus
 from app.models.audit import AuditLog, AuditAction
 from app.models.config import SystemConfig
-from app.notifications.whatsapp import WhatsAppNotifier
+from app.notifications import get_notifier
 
 
 def generate_daily_report(organization_id: int = None) -> dict:
@@ -79,17 +79,16 @@ def send_daily_report(self, organization_id: int = None):
         for org in orgs:
             try:
                 report = generate_daily_report(organization_id=org.id)
-                notifier = WhatsAppNotifier(organization_id=org.id)
-                if notifier.whatsapp_enabled and notifier.admin_jid:
-                    notifier.send_daily_report(report)
-                    with get_db() as db:
-                        db.add(AuditLog(
-                            action=AuditAction.HEALTH_CHECK,
-                            message=f"Daily report sent to Org {org.name}",
-                            detail=report,
-                            organization_id=org.id
-                        ))
-                    logger.info(f"Daily report sent to Org {org.name} (ID: {org.id}): {report}")
+                notifier = get_notifier(organization_id=org.id)
+                notifier.send_daily_report(report)
+                with get_db() as db:
+                    db.add(AuditLog(
+                        action=AuditAction.HEALTH_CHECK,
+                        message=f"Daily report sent to Org {org.name}",
+                        detail=report,
+                        organization_id=org.id
+                    ))
+                logger.info(f"Daily report sent to Org {org.name} (ID: {org.id}): {report}")
             except Exception as org_err:
                 logger.error(f"Failed sending daily report for Org {org.name} (ID: {org.id}): {org_err}")
     except Exception as e:
@@ -151,7 +150,7 @@ def health_check(self):
         logger.debug(f"Health check OK: {now_str}")
     except Exception as e:
         logger.error(f"Health check failed: {e}")
-        notifier = WhatsAppNotifier()
+        notifier = get_notifier()
         notifier.send_health_alert("Celery Worker", str(e))
 
 
@@ -164,14 +163,14 @@ def send_whatsapp_message(self, organization_id: int, method_name: str, args: li
     kwargs = kwargs or {}
     logger.info(f"Sending WhatsApp notification asynchronously for Org {organization_id} calling {method_name}...")
     try:
-        from app.notifications.whatsapp import WhatsAppNotifier
-        notifier = WhatsAppNotifier(organization_id=organization_id)
+        from app.notifications import get_notifier
+        notifier = get_notifier(organization_id=organization_id)
         func = getattr(notifier, method_name, None)
         if func:
             func(*args, **kwargs)
-            logger.info(f"Successfully sent WhatsApp message calling {method_name}")
+            logger.info(f"Successfully sent alert message calling {method_name}")
         else:
-            logger.error(f"WhatsAppNotifier does not have method {method_name}")
+            logger.error(f"Notifier does not have method {method_name}")
     except Exception as e:
         logger.error(f"Failed to send WhatsApp message: {e}")
 

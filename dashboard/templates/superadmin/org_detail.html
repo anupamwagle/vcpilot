@@ -68,7 +68,7 @@
         <tr style="background:var(--surface-alt);border-bottom:1px solid var(--border)">
           <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Account Name</th>
           <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">IBKR Account</th>
-          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Capital (AUD)</th>
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Capital ({{ working_capital_currency }})</th>
           <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Environment</th>
         </tr>
       </thead>
@@ -77,7 +77,7 @@
         <tr class="tbl-row border-b last:border-0" style="border-color:var(--border)">
           <td class="p-3 text-sm font-semibold" style="color:var(--text)">{{ acc.name }}</td>
           <td class="p-3 text-xs font-mono" style="color:var(--text-subtle)">{{ acc.ibkr_account_id or '—' }}</td>
-          <td class="p-3 text-sm font-bold" style="color:var(--text)">${{ "{:,.2f}".format(acc.capital_aud) }}</td>
+          <td class="p-3 text-sm font-bold" style="color:var(--text)">{{ "{:,.2f}".format(acc.capital_aud) if acc.capital_aud == acc.capital_aud|int else "{:,.4f}".format(acc.capital_aud) }} {{ working_capital_currency }}</td>
           <td class="p-3 text-xs">
             {% if acc.is_paper %}
               <span class="text-xs font-semibold px-2 py-0.5 rounded" style="background:var(--surface-alt);color:var(--text-subtle)">📄 Paper</span>
@@ -164,6 +164,257 @@
   <div class="p-10 text-center text-xs" style="color:var(--text-subtle)">No activity logged yet for this organisation.</div>
   {% endif %}
 </div>
+
+
+{# ── MCP Credentials ───────────────────────────────────────────────────── #}
+
+{# Flash messages for MCP actions #}
+{% set msg = request.query_params.get('msg', '') %}
+{% set mcp_client_id = request.query_params.get('mcp_client_id', '') %}
+{% set mcp_secret    = request.query_params.get('mcp_secret', '') %}
+{% set mcp_name      = request.query_params.get('mcp_name', 'Default') %}
+
+{% if msg == 'mcp_generated' and mcp_secret %}
+<div class="card p-4 mb-6" style="border-color:var(--pos);background:var(--surface)">
+  <p class="text-sm font-bold mb-2" style="color:var(--pos)">✅ MCP Credential Generated — Copy Now</p>
+  <p class="text-xs mb-3" style="color:var(--text-subtle)">
+    The client secret is shown <strong>only once</strong>. Store it securely before leaving this page.
+  </p>
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+    <div>
+      <p class="text-xs font-semibold mb-1" style="color:var(--text-muted)">Client ID</p>
+      <code class="text-xs font-mono px-3 py-2 rounded block select-all" style="background:var(--surface-alt);color:var(--text);word-break:break-all">{{ mcp_client_id }}</code>
+    </div>
+    <div>
+      <p class="text-xs font-semibold mb-1" style="color:var(--text-muted)">Client Secret</p>
+      <code class="text-xs font-mono px-3 py-2 rounded block select-all" style="background:var(--surface-alt);color:var(--pos);word-break:break-all">{{ mcp_secret }}</code>
+    </div>
+  </div>
+  <div class="mt-3 p-3 rounded text-xs" style="background:var(--surface-alt);color:var(--text-subtle)">
+    <strong>Token URL:</strong> <code class="font-mono" style="color:var(--t-accent)">{{ mcp_base_url }}/mcp/oauth/token</code><br>
+    <strong>MCP SSE URL:</strong> <code class="font-mono" style="color:var(--t-accent)">{{ mcp_base_url }}/mcp/sse</code><br>
+    <strong>Grant type:</strong> <code class="font-mono">client_credentials</code>
+  </div>
+  <div class="mt-3 p-3 rounded text-xs" style="background:var(--surface-alt)">
+    <p class="font-semibold mb-1" style="color:var(--text-muted)">Claude Desktop config snippet (<code>claude_desktop_config.json</code>)</p>
+    <pre class="overflow-x-auto text-xs font-mono" style="color:var(--text-subtle);white-space:pre">{
+  "mcpServers": {
+    "vcpilot-{{ organization.name | lower | replace(' ', '-') }}": {
+      "transport": {
+        "type": "sse",
+        "url": "{{ mcp_base_url }}/mcp/sse"
+      },
+      "auth": {
+        "type": "oauth2",
+        "tokenUrl": "{{ mcp_base_url }}/mcp/oauth/token",
+        "clientId": "{{ mcp_client_id }}",
+        "clientSecret": "{{ mcp_secret }}",
+        "grantType": "client_credentials"
+      }
+    }
+  }
+}</pre>
+  </div>
+</div>
+{% elif msg == 'mcp_revoked' %}
+<div class="alert-danger mb-4">MCP credential revoked successfully.</div>
+{% elif msg == 'mcp_renewed' %}
+<div class="alert-success mb-4">MCP credential renewed for 12 months.</div>
+{% endif %}
+
+<div class="card overflow-hidden mb-6">
+  <div class="section-head px-4 py-3" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem">
+    <div>
+      <p class="section-title">🔌 MCP API Credentials</p>
+      <p class="text-xs mt-0.5" style="color:var(--text-subtle)">
+        OAuth 2.0 client_credentials for connecting AI agents (Claude, etc.) to VCPilot.
+        Each credential expires after 12 months.
+      </p>
+    </div>
+    <button onclick="document.getElementById('mcp-generate-form').classList.toggle('hidden')"
+            style="font-size:.75rem;padding:.375rem .875rem;border-radius:.375rem;font-weight:700;
+                   background:var(--t-accent);color:#fff;border:none;cursor:pointer;white-space:nowrap">
+      + Generate Credential
+    </button>
+  </div>
+
+  {# Generate form (hidden by default) #}
+  <div id="mcp-generate-form" class="hidden px-4 py-3" style="border-bottom:1px solid var(--border);background:var(--surface-alt)">
+    <form method="post" action="/superadmin/organizations/{{ organization.id }}/mcp/generate">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+        <div>
+          <label class="block text-xs font-semibold mb-1" style="color:var(--text-muted)">Credential Name</label>
+          <input type="text" name="name" value="Default" placeholder="e.g. Claude Desktop" required
+                 class="input w-full" style="font-size:.8rem">
+        </div>
+        <div class="md:col-span-2">
+          <label class="block text-xs font-semibold mb-1" style="color:var(--text-muted)">Notes (optional)</label>
+          <input type="text" name="notes" placeholder="What will this credential be used for?"
+                 class="input w-full" style="font-size:.8rem">
+        </div>
+      </div>
+      <div class="mb-3">
+        <label class="block text-xs font-semibold mb-1" style="color:var(--text-muted)">Scopes</label>
+        <div class="flex flex-wrap gap-2">
+          {% for scope in mcp_all_scopes %}
+          <label class="flex items-center gap-1.5 text-xs cursor-pointer">
+            <input type="checkbox" name="scopes" value="{{ scope }}" checked
+                   style="accent-color:var(--t-accent)">
+            <code class="font-mono" style="color:var(--text)">{{ scope }}</code>
+            <span style="color:var(--text-subtle)">— {{ mcp_scope_descriptions.get(scope, '') }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="flex gap-2">
+        <button type="submit"
+                style="font-size:.75rem;padding:.375rem .875rem;border-radius:.375rem;font-weight:700;
+                       background:var(--t-accent);color:#fff;border:none;cursor:pointer">
+          Generate
+        </button>
+        <button type="button" onclick="document.getElementById('mcp-generate-form').classList.add('hidden')"
+                style="font-size:.75rem;padding:.375rem .875rem;border-radius:.375rem;font-weight:700;
+                       background:transparent;color:var(--text-muted);border:1px solid var(--border);cursor:pointer">
+          Cancel
+        </button>
+      </div>
+    </form>
+  </div>
+
+  {# Credential list #}
+  {% if mcp_credentials %}
+  <table class="w-full text-left border-collapse">
+    <thead>
+      <tr style="background:var(--surface-alt);border-bottom:1px solid var(--border)">
+        <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Name</th>
+        <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Client ID</th>
+        <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Secret Preview</th>
+        <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Scopes</th>
+        <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Expires</th>
+        <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Status</th>
+        <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Last Used</th>
+        <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for cred in mcp_credentials %}
+      <tr class="tbl-row border-b last:border-0" style="border-color:var(--border)">
+        <td class="p-3 text-sm font-semibold" style="color:var(--text)">
+          {{ cred.name }}
+          {% if cred.notes %}<p class="text-xs font-normal mt-0.5" style="color:var(--text-subtle)">{{ cred.notes }}</p>{% endif %}
+        </td>
+        <td class="p-3 text-xs font-mono" style="color:var(--text-subtle)">{{ cred.client_id }}</td>
+        <td class="p-3 text-xs font-mono">
+          {% if cred.plain_secret %}
+            <div style="display:flex;align-items:center;gap:.25rem">
+              <code class="px-1.5 py-0.5 rounded select-all font-bold" style="background:var(--surface-alt);color:var(--pos);word-break:break-all">{{ cred.plain_secret }}</code>
+              <span class="text-xs px-1 rounded font-sans" style="background:#fef3c7;color:#d97706;font-weight:600;white-space:nowrap" title="Visible for 10 minutes after generation">⏱ Temp</span>
+            </div>
+          {% else %}
+            <span style="color:var(--text-subtle)">…{{ cred.client_secret_preview }}</span>
+          {% endif %}
+        </td>
+        <td class="p-3 text-xs">
+          <div class="flex flex-wrap gap-1">
+            {% for scope in (cred.scopes or []) %}
+            <span class="px-1.5 py-0.5 rounded text-xs font-mono" style="background:var(--surface-alt);color:var(--t-accent)">{{ scope }}</span>
+            {% endfor %}
+          </div>
+        </td>
+        <td class="p-3 text-xs" style="color:var(--text-muted)">
+          {% if cred.expires_at %}
+            {{ cred.expires_at.strftime('%Y-%m-%d') }}
+            {% if cred.is_active and not cred.is_expired %}
+              <br><span style="color:{% if cred.days_remaining <= 14 %}var(--warn){% else %}var(--pos){% endif %}">
+                {{ cred.days_remaining }}d left
+              </span>
+            {% endif %}
+          {% else %}—{% endif %}
+        </td>
+        <td class="p-3 text-xs font-bold">
+          {% if cred.status_label == 'active' %}
+            <span style="color:var(--pos)">● Active</span>
+          {% elif cred.status_label == 'expiring_soon' %}
+            <span style="color:var(--warn)">⚠ Expiring</span>
+          {% elif cred.status_label == 'expired' %}
+            <span style="color:var(--neg)">Expired</span>
+          {% else %}
+            <span style="color:var(--neg)">Revoked</span>
+          {% endif %}
+        </td>
+        <td class="p-3 text-xs" style="color:var(--text-subtle)">
+          {{ cred.last_used_at.strftime('%Y-%m-%d %H:%M') if cred.last_used_at else '—' }}
+        </td>
+        <td class="p-3 text-xs">
+          <div class="flex gap-1 flex-wrap">
+            {% if cred.is_active and not cred.is_expired %}
+            <form method="post" action="/superadmin/organizations/{{ organization.id }}/mcp/{{ cred.id }}/revoke"
+                  onsubmit="return confirm('Revoke credential \'{{ cred.name }}\'? Any connected MCP client will lose access immediately.')">
+              <button type="submit"
+                      style="font-size:.7rem;padding:.25rem .6rem;border-radius:.3rem;font-weight:600;
+                             background:transparent;color:var(--neg);border:1px solid var(--neg);cursor:pointer">
+                Revoke
+              </button>
+            </form>
+            {% endif %}
+            <form method="post" action="/superadmin/organizations/{{ organization.id }}/mcp/{{ cred.id }}/renew"
+                  onsubmit="return confirm('Renew credential \'{{ cred.name }}\' for another 12 months?')">
+              <button type="submit"
+                      style="font-size:.7rem;padding:.25rem .6rem;border-radius:.3rem;font-weight:600;
+                             background:transparent;color:var(--a-accent);border:1px solid var(--a-accent);cursor:pointer">
+                +12 months
+              </button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="p-8 text-center">
+    <p class="text-sm font-semibold mb-1" style="color:var(--text-muted)">No MCP credentials yet</p>
+    <p class="text-xs" style="color:var(--text-subtle)">
+      Generate a credential to connect Claude Desktop, Claude.ai, or any MCP-compatible AI agent to VCPilot.
+    </p>
+  </div>
+  {% endif %}
+
+  <div class="px-4 py-3" style="border-top:1px solid var(--border);background:var(--surface-alt)">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem">
+      <p class="text-xs" style="color:var(--text-subtle)">
+        <strong>Token URL:</strong>
+        <code class="font-mono" style="color:var(--t-accent)">{{ mcp_base_url }}/mcp/oauth/token</code>
+        &nbsp;|&nbsp;
+        <strong>MCP SSE URL:</strong>
+        <code class="font-mono" style="color:var(--t-accent)">{{ mcp_base_url }}/mcp/sse</code>
+      </p>
+      <button onclick="document.getElementById('mcp-url-form').classList.toggle('hidden')"
+              style="font-size:.7rem;padding:.25rem .6rem;border-radius:.3rem;font-weight:600;
+                     background:transparent;color:var(--text-muted);border:1px solid var(--border);cursor:pointer">
+        ✏ Edit Base URL
+      </button>
+    </div>
+    <div id="mcp-url-form" class="hidden mt-2">
+      <form method="post" action="/superadmin/mcp/base-url" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+        <input type="hidden" name="redirect_org_id" value="{{ organization.id }}">
+        <input type="url" name="mcp_base_url" value="{{ mcp_base_url }}" required
+               class="input" style="font-size:.75rem;flex:1;min-width:280px">
+        <button type="submit"
+                style="font-size:.75rem;padding:.3rem .75rem;border-radius:.3rem;font-weight:700;
+                       background:var(--t-accent);color:#fff;border:none;cursor:pointer;white-space:nowrap">
+          Save URL
+        </button>
+      </form>
+      <p class="text-xs mt-1" style="color:var(--text-subtle)">
+        This is a <strong>global</strong> setting — changing it updates the URL shown in all org credential config snippets.
+      </p>
+    </div>
+  </div>
+</div>
+{% if msg == 'mcp_url_saved' %}
+<div class="alert-success mb-4" style="margin-top:-1rem">MCP base URL updated globally.</div>
+{% endif %}
 
 
 {# ── Danger Zone ───────────────────────────────────────────────────────── #}

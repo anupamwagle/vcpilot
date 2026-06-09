@@ -1,0 +1,23 @@
+{#
+  Exchange filter bar — reusable component.
+  Requires template context:
+    exchange_filters:       list of {key, label, flag, asset_type}
+    active_exchange_filter: currently selected key (default "ALL")
+    base_url:               the page URL without query params (e.g. "/watchlist")
+  Optional:
+    extra_params:           any other query params to preserve (e.g. "label=3&")
+#}
+{% if exchange_filters and exchange_filters|length > 1 %}
+<div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.75rem">
+  <span class="text-xs font-medium" style="color:var(--text-subtle);white-space:nowrap">Market:</span>
+  {% for ef in exchange_filters %}
+  {% set is_active = (active_exchange_filter == ef.key) or (active_exchange_filter in ('', 'ALL') and ef.key == 'ALL') %}
+  <a href="{{ base_url }}?exchange={{ ef.key }}{% if extra_params %}&{{ extra_params }}{% endif %}"
+     class="text-xs px-2.5 py-1 rounded-full font-medium transition-colors"
+     style="{% if is_active %}background:var(--t-accent);color:#fff;{% else %}background:var(--surface-alt);color:var(--text-muted);border:1px solid var(--border);{% endif %}
+            text-decoration:none;white-space:nowrap">
+    {% if ef.flag %}{{ ef.flag }} {% endif %}{{ ef.label }}
+  </a>
+  {% endfor %}
+</div>
+{% endif %}

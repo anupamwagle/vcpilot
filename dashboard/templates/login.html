@@ -64,6 +64,7 @@
 
     <!-- OTP Login Form -->
     <form id="form-otp" method="post" action="/login/request-otp" class="space-y-4 block">
+      <input type="hidden" name="next" value="{{ next }}"/>
       <div>
         <label for="email-otp">Email Address</label>
         <input type="email" id="email-otp" name="email" required
@@ -74,6 +75,7 @@
 
     <!-- Password Login Form -->
     <form id="form-pass" method="post" action="/login" class="space-y-4 hidden">
+      <input type="hidden" name="next" value="{{ next }}"/>
       <div>
         <label for="email-pass">Email Address</label>
         <input type="email" id="email-pass" name="email"

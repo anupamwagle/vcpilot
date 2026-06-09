@@ -89,13 +89,13 @@ services:
     command: sh -c "python -m scripts.init_db && python -m scripts.migrate_saas"
 
   # ---------------------------------------------------------------------------
-  # Worker — Celery Worker
+  # Worker Equities — Celery Worker
   # ---------------------------------------------------------------------------
-  worker:
+  worker-equities:
     build:
       context: .
       dockerfile: docker/Dockerfile.app
-    container_name: vcpilot-worker
+    container_name: vcpilot-worker-equities
     restart: unless-stopped
     <<: *app-env
     depends_on:
@@ -109,7 +109,35 @@ services:
       - ./app:/app/app
     networks:
       - vcpilot-net
-    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4 -Q default,screening,trading,reporting
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4 -Q default,reporting,screening_equities,trading_equities
+    healthcheck:
+      test: ["CMD", "celery", "-A", "app.tasks.celery_app", "inspect", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # Worker Crypto — Celery Worker
+  # ---------------------------------------------------------------------------
+  worker-crypto:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+    container_name: vcpilot-worker-crypto
+    restart: unless-stopped
+    <<: *app-env
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_completed_successfully
+    volumes:
+      - ./app:/app/app
+    networks:
+      - vcpilot-net
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2 -Q trading_crypto,screening_crypto
     healthcheck:
       test: ["CMD", "celery", "-A", "app.tasks.celery_app", "inspect", "ping"]
       interval: 30s
@@ -164,10 +192,11 @@ services:
       app:
         condition: service_completed_successfully
     ports:
-      - "${DASHBOARD_PORT:-8501}:8501"
+      - "0.0.0.0:${DASHBOARD_PORT:-8501}:8501"
     volumes:
       - ./dashboard:/app/dashboard
       - ./app:/app/app
+      - ./scratch:/app/scratch
     networks:
       - vcpilot-net
     command: >

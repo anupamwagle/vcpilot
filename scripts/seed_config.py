@@ -32,6 +32,9 @@ SYSTEM_CONFIGS = [
     dict(key="working_capital_aud", value=str(settings.working_capital_env), value_type="FLOAT",
          label="Working Capital (AUD)", group="general",
          description="Working capital used for sizing and risk calculations"),
+    dict(key="working_capital_currency", value="AUD", value_type="STRING",
+         label="Working Capital Currency", group="general",
+         description="Currency of the working capital (e.g. AUD, USD, USDT, BNB)"),
 
     # --- IBKR Configuration ---
     dict(key="ibkr_account", value=str(settings.ibkr_account_env), value_type="STRING",
@@ -54,6 +57,20 @@ SYSTEM_CONFIGS = [
     dict(key="whatsapp_admin_number", value=str(settings.whatsapp_admin_number_env), value_type="STRING",
          label="WhatsApp Admin Number", group="whatsapp",
          description="Your WhatsApp phone number in international format (e.g. 61400000000, no + or spaces)"),
+
+    # --- Notifications / Alert Channel ---
+    dict(key="notification_channel", value="telegram", value_type="STRING",
+         label="Notification Channel", group="whatsapp",
+         description="Active communication channel ('whatsapp' or 'telegram')"),
+    dict(key="telegram_enabled", value="true", value_type="BOOLEAN",
+         label="Telegram Alerts Enabled", group="whatsapp",
+         description="Enable or disable all Telegram notifications and remote command handling"),
+    dict(key="telegram_bot_token", value="", value_type="STRING",
+         label="Telegram Bot Token", group="whatsapp", is_secret=True,
+         description="The Telegram Bot Token from @BotFather"),
+    dict(key="telegram_chat_id", value="", value_type="STRING",
+         label="Telegram Chat ID", group="whatsapp",
+         description="The Telegram Chat ID to send alerts to"),
 
     # --- Data APIs ---
     dict(key="fmp_api_key", value=str(settings.fmp_api_key_env), value_type="STRING",
@@ -80,6 +97,54 @@ SYSTEM_CONFIGS = [
     dict(key="mock_market_regime", value="BULL", value_type="STRING",
          label="Mock Market Regime", group="system",
          description="Simulated market regime shown when Mock Time is enabled (BULL / CAUTION / BEAR). Never overwrites the evaluated last_market_regime."),
+
+    # --- Multi-market / Exchange config ---
+    dict(key="active_exchanges", value="ASX,CRYPTO_INDEPENDENTRESERVE", value_type="STRING",
+         label="Active Exchanges", group="trading",
+         description="Comma-separated list of exchange keys this org trades on. "
+                     "Allowed values from enabled ExchangeConfig rows, e.g. 'ASX', 'ASX,CRYPTO_INDEPENDENTRESERVE'. "
+                     "Super admin must enable an exchange globally before orgs can activate it."),
+
+    dict(key="ibkr_account_usd", value="", value_type="STRING",
+         label="IBKR USD Account Number", group="ibkr",
+         description="IBKR account number used for USD-denominated trades (US equities). "
+                     "May be the same account as the AUD account for multi-currency IBKR accounts. "
+                     "Leave blank to use the same account as ibkr_account."),
+
+    dict(key="fx_audusd_override", value="", value_type="STRING",
+         label="AUD/USD Rate Override", group="trading",
+         description="Manual AUD/USD exchange rate override for position sizing (e.g. '0.65'). "
+                     "Leave blank to use the live rate fetched from yfinance (AUDUSD=X). "
+                     "Useful for backtesting or when live FX feed is unavailable."),
+
+    # --- Crypto exchange credentials (per org) ---
+    dict(key="crypto_exchange_key", value="CRYPTO_INDEPENDENTRESERVE", value_type="STRING",
+         label="Crypto Exchange", group="crypto",
+         description="Active crypto exchange key for this org (e.g. 'CRYPTO_INDEPENDENTRESERVE'). "
+                     "Must be an enabled ExchangeConfig row. Set via super admin exchange management."),
+
+    dict(key="crypto_api_key", value="", value_type="STRING",
+         label="Crypto API Key", group="crypto", is_secret=True,
+         description="API key for the org's crypto exchange account. "
+                     "Obtain from the exchange's API management page. "
+                     "Requires read + trade permissions (no withdrawal permissions needed)."),
+
+    dict(key="crypto_api_secret", value="", value_type="STRING",
+         label="Crypto API Secret", group="crypto", is_secret=True,
+         description="API secret for the org's crypto exchange account."),
+
+    dict(key="crypto_testnet", value="false", value_type="BOOLEAN",
+         label="Crypto Testnet Mode", group="crypto",
+         description="Use the exchange's testnet/sandbox for crypto orders. "
+                     "True = no real funds at risk. Set to False only when ready to trade live."),
+
+    # Per-exchange regime tracking (written by evaluate_market_regime_task, read by dashboard)
+    dict(key="last_market_regime_ASX",    value="UNKNOWN", value_type="STRING",
+         label="ASX Market Regime",    group="system"),
+    dict(key="last_market_regime_NYSE",   value="UNKNOWN", value_type="STRING",
+         label="NYSE Market Regime",   group="system"),
+    dict(key="last_market_regime_NASDAQ", value="UNKNOWN", value_type="STRING",
+         label="NASDAQ Market Regime", group="system"),
 ]
 
 
@@ -89,10 +154,10 @@ SYSTEM_CONFIGS = [
 RULE_CONFIGS = [
 
     # =========================================================================
-    # TREND TEMPLATE (Minervini's 8 criteria — all mandatory by default)
+    # TREND TEMPLATE — applies to BOTH equities and crypto
     # =========================================================================
     dict(rule_id="trend_price_above_200ma",
-         category="TREND_TEMPLATE", sort_order=10,
+         category="TREND_TEMPLATE", sort_order=10, asset_types="BOTH",
          label="Price > 200-day MA",
          description="Stock price must be above the 200-day moving average.",
          minervini_ref="Trend Template Criterion 1",
@@ -147,19 +212,20 @@ RULE_CONFIGS = [
     dict(rule_id="trend_pct_below_52w_high",
          category="TREND_TEMPLATE", sort_order=17,
          label="Price within 25% of 52-week high",
-         description="Current price must be within 25% of the 52-week high (closer = better).",
+         description="Current price must be within 25% of the 52-week high (closer = better). For crypto, raise this to 65–75% via Admin → Rules to account for wider market swings.",
          minervini_ref="Trend Template Criterion 8",
          threshold=25.0, threshold_label="Max % below 52-week high",
-         threshold_min=10.0, threshold_max=40.0,
+         threshold_min=10.0, threshold_max=80.0,
          enabled_globally=True, is_mandatory=False),
 
     dict(rule_id="trend_rs_rating_min",
          category="TREND_TEMPLATE", sort_order=18,
          label="Relative Strength ≥ 70",
-         description="Stock RS rating must be ≥ 70th percentile vs ASX200.",
+         description="Stock RS rating must be ≥ 70th percentile vs ASX200. Equity only — not applicable to crypto.",
          minervini_ref="RS Rating requirement (equivalent to IBD RS ≥ 70)",
          threshold=70.0, threshold_label="Min RS percentile (0–100)",
          threshold_min=50.0, threshold_max=90.0,
+         asset_types="EQUITY",
          enabled_globally=True, is_mandatory=False),
 
     # =========================================================================
@@ -482,14 +548,157 @@ RULE_CONFIGS = [
          enabled_globally=True, is_mandatory=False),
 
     dict(rule_id="portfolio_max_heat_pct",
-         category="PORTFOLIO", sort_order=91,
+         category="PORTFOLIO", sort_order=91, asset_types="BOTH",
          label="Max portfolio heat: 15%",
          description="Total risk across all open positions must not exceed 15% of capital.",
          minervini_ref="Portfolio heat rule",
          threshold=15.0, threshold_label="Max portfolio heat %",
          threshold_min=5.0, threshold_max=30.0,
          enabled_globally=True, is_mandatory=False),
+
+    # =========================================================================
+    # CRYPTO-SPECIFIC RULES (asset_types="CRYPTO" — ignored for equities)
+    # =========================================================================
+
+    dict(rule_id="crypto_btc_regime",
+         category="CRYPTO", sort_order=100, asset_types="CRYPTO",
+         label="Crypto Regime: BTC above 50MA",
+         description="Bitcoin (BTC-USD) must be above its 50-day moving average. "
+                     "BTC is the primary market indicator for all crypto assets — "
+                     "trading altcoins when BTC is below its 50MA is fighting the trend. "
+                     "Used as the crypto equivalent of the equity market regime filter.",
+         minervini_ref="Crypto-specific: Never trade altcoins against BTC trend",
+         enabled_globally=True, is_mandatory=False, threshold=None),
+
+    dict(rule_id="crypto_market_cap_min",
+         category="CRYPTO", sort_order=101, asset_types="CRYPTO",
+         label="Minimum market cap: $100M USD",
+         description="Crypto asset must have a minimum market capitalisation of $100M USD. "
+                     "Low-cap coins can be manipulated to produce false VCP patterns and have "
+                     "insufficient liquidity for reliable entry/exit. Applies to all crypto assets "
+                     "except BTC and ETH which are always treated as qualifying.",
+         threshold=100_000_000.0, threshold_label="Min market cap (USD)",
+         threshold_min=10_000_000.0, threshold_max=1_000_000_000.0,
+         enabled_globally=True, is_mandatory=False),
+
+    dict(rule_id="crypto_volume_min_24h",
+         category="CRYPTO", sort_order=102, asset_types="CRYPTO",
+         label="Minimum 24h volume: $5M USD",
+         description="24-hour trading volume must exceed $5M USD to ensure there is enough "
+                     "liquidity to enter and exit positions without significant slippage. "
+                     "Unlike equities (session volume), crypto uses rolling 24h volume.",
+         threshold=5_000_000.0, threshold_label="Min 24h volume (USD)",
+         threshold_min=1_000_000.0, threshold_max=100_000_000.0,
+         enabled_globally=True, is_mandatory=False),
+
+    dict(rule_id="crypto_stop_width_pct",
+         category="CRYPTO", sort_order=103, asset_types="CRYPTO",
+         label="Crypto min stop distance: 10%",
+         description="Stops on crypto assets must be placed at least 10% below the pivot price. "
+                     "Crypto assets are 3-5× more volatile than equities — the default 5-8% "
+                     "equity stop is too tight and will cause premature stop-outs on normal "
+                     "intraday noise. Overrides the equity stop distance calculation for crypto. "
+                     "Position size is automatically reduced to maintain the 2% capital risk rule.",
+         threshold=10.0, threshold_label="Min stop distance below pivot (%)",
+         threshold_min=5.0, threshold_max=25.0,
+         enabled_globally=True, is_mandatory=False),
+
+    dict(rule_id="crypto_max_risk_pct",
+         category="CRYPTO", sort_order=104, asset_types="CRYPTO",
+         label="Crypto max risk per trade: 1%",
+         description="Maximum capital at risk per crypto trade is 1% (vs 2% for equities). "
+                     "The higher volatility and wider stops on crypto mean a 2% risk rule produces "
+                     "very small position sizes. This rule caps the risk explicitly and independently "
+                     "of the equity risk_max_pct_per_trade rule, allowing different limits per asset type. "
+                     "Overrides risk_max_pct_per_trade for CRYPTO assets.",
+         threshold=1.0, threshold_label="Max risk % per crypto trade",
+         threshold_min=0.25, threshold_max=3.0,
+         enabled_globally=True, is_mandatory=False),
+
+    dict(rule_id="crypto_vcp_contraction_pct",
+         category="CRYPTO", sort_order=105, asset_types="CRYPTO",
+         label="Crypto VCP: contraction size ≥ 15%",
+         description="Each VCP contraction in a crypto base must be at least 15% in depth "
+                     "(vs ~10% for equities). Crypto markets are inherently more volatile so "
+                     "shallow contractions are less significant. A 15%+ contraction followed by "
+                     "tightening is a more meaningful consolidation signal in crypto markets.",
+         threshold=15.0, threshold_label="Min contraction depth (%)",
+         threshold_min=8.0, threshold_max=40.0,
+         enabled_globally=True, is_mandatory=False),
+
+    # ── Enhanced Wall St-grade crypto rules ───────────────────────────────
+    dict(rule_id="crypto_rsi_momentum",
+         category="CRYPTO", sort_order=106, asset_types="CRYPTO",
+         label="RSI(14) ≥ 50 — momentum confirmation",
+         description="RSI(14) above 50 confirms price is in an upward momentum phase. "
+                     "Entries below RSI 50 fight the intermediate trend. This filter eliminates "
+                     "counter-trend trades and focuses capital on assets already showing buyers "
+                     "in control. Threshold adjustable: 50 = neutral, 55 = stronger requirement.",
+         threshold=50.0, threshold_label="Minimum RSI(14)",
+         threshold_min=40.0, threshold_max=70.0,
+         enabled_globally=True, is_mandatory=False),
+
+    dict(rule_id="crypto_macd_bullish",
+         category="CRYPTO", sort_order=107, asset_types="CRYPTO",
+         label="MACD bullish (12/26/9) — histogram positive",
+         description="MACD line (12-period EMA minus 26-period EMA) must be above the signal "
+                     "line (9-period EMA of MACD) with a positive histogram. This confirms "
+                     "short-term momentum is aligned with the intermediate uptrend. Particularly "
+                     "effective on crypto 24/7 markets where momentum shifts are faster than equities.",
+         threshold=0.0, threshold_label="Min MACD histogram (0 = above signal only)",
+         threshold_min=0.0, threshold_max=0.0,
+         enabled_globally=True, is_mandatory=False),
+
+    dict(rule_id="crypto_volume_surge",
+         category="CRYPTO", sort_order=108, asset_types="CRYPTO",
+         label="Volume surge ≥ 1.5× 20-day average",
+         description="Breakout volume must be at least 1.5× the 20-day average volume. "
+                     "This is the core Minervini volume confirmation principle — price breakouts "
+                     "without volume are low-conviction. For crypto, higher volume surges (2×+) "
+                     "indicate institutional or major retail accumulation.",
+         threshold=1.5, threshold_label="Volume surge multiplier (×20-day avg)",
+         threshold_min=1.0, threshold_max=5.0,
+         enabled_globally=True, is_mandatory=False),
+
+    dict(rule_id="crypto_min_rr_ratio",
+         category="CRYPTO", sort_order=109, asset_types="CRYPTO",
+         label="Min risk/reward ratio ≥ 2.5:1",
+         description="Each trade setup must offer at least 2.5× reward relative to risk "
+                     "(measured from entry to first target vs entry to stop). Professional traders "
+                     "typically require minimum 3:1 R/R. This rule prevents taking poor-quality "
+                     "setups where the reward does not justify the risk taken.",
+         threshold=2.5, threshold_label="Min R/R ratio",
+         threshold_min=1.5, threshold_max=5.0,
+         enabled_globally=True, is_mandatory=False),
+
+    dict(rule_id="crypto_btc_relative_strength",
+         category="CRYPTO", sort_order=110, asset_types="CRYPTO",
+         label="RS vs BTC (50d) ≥ 0% — must match or beat Bitcoin",
+         description="Non-BTC crypto assets must show at least equal 50-day relative strength "
+                     "vs Bitcoin. Assets underperforming BTC are in a relative downtrend — money "
+                     "is rotating out. Focus capital on assets showing leadership: if ETH, SOL, or "
+                     "any altcoin is lagging BTC, skip it. Threshold: 0% = must match BTC; "
+                     "5% = must outperform BTC by 5% over 50 days.",
+         threshold=0.0, threshold_label="Min 50d RS vs BTC (%)",
+         threshold_min=-10.0, threshold_max=20.0,
+         enabled_globally=True, is_mandatory=False),
 ]
+
+# Rules that apply to EQUITY only — used in migrate_saas.py to backfill asset_types
+EQUITY_ONLY_RULES = {
+    "fundamental_eps_growth_recent",
+    "fundamental_eps_growth_accel",
+    "fundamental_eps_growth_annual",
+    "fundamental_sales_growth",
+    "fundamental_roe",
+    "fundamental_profit_margin",
+    "fundamental_institutional_own",
+    "regime_pct_stocks_above_200ma",    # breadth meaningless for crypto
+    "regime_distribution_days",         # distribution days meaningless for 24/7 crypto
+    "entry_sector_leadership",          # crypto has different sector dynamics
+    "exit_earnings_avoid",              # no earnings events in crypto
+    "trend_rs_rating_min",              # RS rating calculated vs ASX200 — meaningless for crypto
+}
 
 
 # =============================================================================
@@ -539,7 +748,7 @@ def seed_all():
                 logger.info("Seeded default account (paper, $5000, ADMIN tier)")
 
         # --- Clean up old/removed keys ---
-        removed_keys = ["trading_universe", "base_currency", "account_capital_aud", "weekly_injection_aud"]
+        removed_keys = ["trading_universe", "base_currency", "account_capital_aud"]
         for rk in removed_keys:
             db.query(SystemConfig).filter(SystemConfig.key == rk).delete()
         db.flush()
@@ -565,8 +774,17 @@ def seed_all():
             if not existing:
                 fields = {k: v for k, v in rule_data.items()
                           if k in RuleConfig.__table__.columns.keys()}
+                # Apply EQUITY_ONLY backfill if asset_types not explicitly set
+                if "asset_types" not in fields:
+                    fields["asset_types"] = "EQUITY" if rule_data["rule_id"] in EQUITY_ONLY_RULES else "BOTH"
                 db.add(RuleConfig(**fields))
                 logger.debug(f"Seeded rule: {rule_data['rule_id']}")
+            else:
+                # Update asset_types on existing rules if still at default
+                if hasattr(existing, "asset_types") and existing.asset_types == "BOTH":
+                    correct = "EQUITY" if rule_data["rule_id"] in EQUITY_ONLY_RULES else "BOTH"
+                    if correct != "BOTH":
+                        existing.asset_types = correct
 
     logger.info(f"Seed complete: {len(SYSTEM_CONFIGS)} configs, {len(RULE_CONFIGS)} rules, {len(TIERS)} tiers")
 

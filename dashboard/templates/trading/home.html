@@ -3,54 +3,108 @@
 {% block page_title %}Trading Dashboard{% endblock %}
 
 {% block content %}
+
+<!-- ── Onboarding Guide ────────────────────────────────────────── -->
+{% if not onboarding_completed %}
+<div class="card p-6 mb-6 relative overflow-hidden border-l-4" style="border-left-color: var(--t-accent); background: linear-gradient(135deg, var(--surface) 0%, rgba(29, 78, 216, 0.05) 100%)">
+  <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+    <div>
+      <h3 class="text-lg font-bold mb-2" style="color: var(--text)">🚀 Welcome to VCPilot! Let's get you set up</h3>
+      <p class="text-sm mb-4" style="color: var(--text-muted); max-width: 700px;">
+        VCPilot is a multi-tenant algorithmic trading assistant. Since this is a new organization, there is a 3-step setup process to get everything running:
+      </p>
+    </div>
+    <form method="post" action="/action/dismiss-onboarding">
+      <button type="submit" class="text-xs" style="color: var(--text-subtle); background: none; border: none; cursor: pointer; text-decoration: underline;">✕ Dismiss Guide</button>
+    </form>
+  </div>
+  
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+    <div style="background: var(--surface-alt); padding: 1rem; border-radius: 0.5rem; border: 1px solid var(--border)">
+      <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem">
+        <span style="background: var(--t-accent); color: white; border-radius: 9999px; width: 1.25rem; height: 1.25rem; display: inline-flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: bold;">1</span>
+        <h4 class="text-sm font-semibold" style="color: var(--text)">Run Full Setup</h4>
+      </div>
+      <p class="text-xs" style="color: var(--text-subtle)">
+        Populate the stock universe, fetch 2 years of price history, evaluate regime, and run the first screener scan.
+      </p>
+    </div>
+    
+    <div style="background: var(--surface-alt); padding: 1rem; border-radius: 0.5rem; border: 1px solid var(--border)">
+      <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem">
+        <span style="background: var(--t-accent); color: white; border-radius: 9999px; width: 1.25rem; height: 1.25rem; display: inline-flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: bold;">2</span>
+        {% if notification_channel == 'telegram' %}
+        <h4 class="text-sm font-semibold" style="color: var(--text)">Connect Telegram</h4>
+        {% else %}
+        <h4 class="text-sm font-semibold" style="color: var(--text)">Connect WhatsApp</h4>
+        {% endif %}
+      </div>
+      {% if notification_channel == 'telegram' %}
+      <p class="text-xs" style="color: var(--text-subtle)">
+        Go to System Config, fill in your Telegram Bot Token and Chat ID under Alert &amp; Chat Channels to receive alerts.
+      </p>
+      <a href="/admin/config" class="text-xs font-semibold hover:underline block mt-2" style="color: var(--t-accent)">Go to System Config →</a>
+      {% else %}
+      <p class="text-xs" style="color: var(--text-subtle)">
+        Go to the WhatsApp page, scan the QR code to pair your device, and configure your phone number to receive alerts.
+      </p>
+      <a href="/admin/whatsapp" class="text-xs font-semibold hover:underline block mt-2" style="color: var(--t-accent)">Go to WhatsApp Setup →</a>
+      {% endif %}
+    </div>
+    
+    <div style="background: var(--surface-alt); padding: 1rem; border-radius: 0.5rem; border: 1px solid var(--border)">
+      <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem">
+        <span style="background: var(--t-accent); color: white; border-radius: 9999px; width: 1.25rem; height: 1.25rem; display: inline-flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: bold;">3</span>
+        <h4 class="text-sm font-semibold" style="color: var(--text)">Broker Credentials</h4>
+      </div>
+      <p class="text-xs" style="color: var(--text-subtle)">
+        Set up Interactive Brokers or Crypto exchange API credentials under System Configuration to enable live routing.
+      </p>
+      <a href="/admin/config" class="text-xs font-semibold hover:underline block mt-2" style="color: var(--t-accent)">Go to Configurations →</a>
+    </div>
+  </div>
+
+  <div style="display: flex; gap: 0.75rem; align-items: center;">
+    <form method="post" action="/action/full-setup">
+      <button type="submit" class="btn-primary" style="padding: 0.5rem 1rem; font-size: 0.875rem">🚀 Run First-Time Full Setup Now</button>
+    </form>
+    <span class="text-xs" style="color: var(--text-muted)">Takes 5-15 minutes. Progress can be monitored in real time on the Task Log page.</span>
+  </div>
+</div>
+{% endif %}
+
 <!-- ── Stat cards ─────────────────────────────────────────────── -->
 <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3 mb-6">
 
   <!-- Market Card -->
   <div class="stat-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md border-t-2" 
-       style="border-top-color: {% if regime == 'BULL' %}var(--bull){% elif regime == 'CAUTION' %}var(--caution){% elif regime == 'BEAR' %}var(--bear){% else %}var(--border){% endif %}; 
-              background-image: linear-gradient(to bottom right, var(--surface), {% if regime == 'BULL' %}rgba(16, 185, 129, 0.04){% elif regime == 'CAUTION' %}rgba(245, 158, 11, 0.04){% elif regime == 'BEAR' %}rgba(239, 68, 68, 0.04){% else %}var(--surface){% endif %});
-              box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03), inset 0 -3px 0 0 {% if regime == 'BULL' %}rgba(16, 185, 129, 0.08){% elif regime == 'CAUTION' %}rgba(245, 158, 11, 0.08){% elif regime == 'BEAR' %}rgba(239, 68, 68, 0.08){% else %}transparent{% endif %};
+       style="border-top-color: var(--t-accent); 
+              background-image: linear-gradient(to bottom right, var(--surface), rgba(29, 78, 216, 0.02));
               position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; min-height: 80px; padding: 0.85rem 1rem;">
     <div style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
-      <div>
-        <p class="field-label mb-0.5" style="font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;">Market</p>
-        {% if regime == 'BULL' %}
-        <p class="text-base font-bold flex items-center gap-1.5" style="color:var(--bull)">
-          <span class="flex h-2 w-2 relative">
-            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-          </span>
-          BULL
-        </p>
-        {% elif regime == 'CAUTION' %}
-        <p class="text-base font-bold flex items-center gap-1.5" style="color:var(--caution)">
-          <span class="flex h-2 w-2 relative">
-            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-            <span class="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
-          </span>
-          CAUTION
-        </p>
-        {% elif regime == 'BEAR' %}
-        <p class="text-base font-bold flex items-center gap-1.5" style="color:var(--bear)">
-          <span class="flex h-2 w-2 relative">
-            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-            <span class="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
-          </span>
-          BEAR
-        </p>
-        {% else %}
-        <p class="text-sm font-semibold" style="color:var(--text-muted)">Not set</p>
-        {% endif %}
+      <div style="width: 100%;">
+        <p class="field-label mb-1" style="font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;">Market Regime</p>
+        <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+          {% for r in regimes %}
+          <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.75rem;">
+            <span style="color: var(--text-muted); display: flex; align-items: center; gap: 0.25rem;">
+              {{ r.flag }} {{ r.label }}
+            </span>
+            <span style="font-weight: 700;
+                         {% if r.val == 'BULL' %}color: var(--bull);
+                         {% elif r.val == 'BEAR' %}color: var(--bear);
+                         {% else %}color: var(--warn);{% endif %}">
+              {{ r.val }}
+            </span>
+          </div>
+          {% endfor %}
+        </div>
       </div>
-      <span class="text-gray-400 dark:text-gray-600 opacity-60">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-      </span>
     </div>
     {% if regime_is_simulated %}
       <span style="font-size:0.58rem;font-weight:600;color:var(--text-subtle);display:block;margin-top:0.15rem">CLOCK SIMULATED</span>
     {% else %}
-      <span style="font-size:0.58rem;font-weight:600;color:var(--text-subtle);display:block;margin-top:0.15rem">LIVE ASX FEED</span>
+      <span style="font-size:0.58rem;font-weight:600;color:var(--text-subtle);display:block;margin-top:0.15rem">LIVE DATA FEEDS</span>
     {% endif %}
   </div>
 
@@ -62,13 +116,16 @@
     <div style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
       <div>
         <p class="field-label mb-0.5" style="font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;">Working Capital</p>
-        <p class="text-base font-bold" style="color:var(--text)">${{ "{:,.0f}".format(capital) }}</p>
+        <p class="text-base font-bold" style="color:var(--text)">
+          {{ "{:,.0f}".format(capital) if capital == capital|int else "{:,.4f}".format(capital) }} 
+          <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 500;">{{ working_capital_currency }}</span>
+        </p>
       </div>
       <span class="text-gray-400 dark:text-gray-600 opacity-60">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
       </span>
     </div>
-    <span style="font-size:0.58rem;font-weight:600;color:var(--text-subtle);display:block;margin-top:0.15rem">AUD · BALANCE</span>
+    <span style="font-size:0.58rem;font-weight:600;color:var(--text-subtle);display:block;margin-top:0.15rem">{{ working_capital_currency }} · BALANCE</span>
   </div>
 
   <!-- Positions Card -->
@@ -148,9 +205,16 @@
 </div>
 
 <!-- ── Quick actions ──────────────────────────────────────────── -->
-<div style="display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1.5rem">
-  <form method="post" action="/action/force-screen">
-    <button type="submit" class="btn-primary">
+<div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:1.5rem">
+  <form method="post" action="/action/force-screen" style="display:flex;align-items:center;gap:.35rem">
+    {% if has_asx or has_us or has_crypto %}
+    <select name="exchange" class="input py-1 text-xs" style="width: auto; height: 2.25rem; min-height: 2.25rem; padding-top: 0; padding-bottom: 0;">
+      {% if has_asx %}<option value="ASX">🇦🇺 ASX Screener</option>{% endif %}
+      {% if has_us %}<option value="US">🇺🇸 US Screener</option>{% endif %}
+      {% if has_crypto %}<option value="CRYPTO">₿ Crypto Screener</option>{% endif %}
+    </select>
+    {% endif %}
+    <button type="submit" class="btn-primary" style="height: 2.25rem;">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
       </svg>Run Screener
@@ -160,7 +224,7 @@
     <button type="submit" class="btn-ghost">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
-      </svg>WhatsApp Report
+      </svg>{% if notification_channel == 'telegram' %}Telegram Report{% else %}WhatsApp Report{% endif %}
     </button>
   </form>
   {% if trading_active %}
@@ -341,15 +405,29 @@
     </h2>
     <!-- Filters -->
     <div style="display:flex;align-items:center;gap:.5rem;margin-left:auto;flex-wrap:wrap">
+      <!-- Market/Exchange filter pills -->
+      {% if wl_exchange_filters and wl_exchange_filters|length > 1 %}
+        {% for ef in wl_exchange_filters %}
+        {% set is_active = (wl_active_exchange == ef.key) or (wl_active_exchange in ('', 'ALL') and ef.key == 'ALL') %}
+        <a href="javascript:void(0)" onclick="wlFilter('{% if wl_active_label %}label={{ wl_active_label }}&{% endif %}{% if wl_only_custom %}custom=true&{% endif %}exchange={{ ef.key }}')"
+           style="padding:.2rem .6rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
+           {% if is_active %}background:var(--t-accent);color:white;border-color:var(--t-accent)
+           {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
+          {% if ef.flag %}{{ ef.flag }} {% endif %}{{ ef.label }}
+        </a>
+        {% endfor %}
+        <span style="border-left:1px solid var(--border);height:1.25rem;margin:0 .25rem"></span>
+      {% endif %}
+
       <!-- Label chips/links — use JS to navigate without scrolling to top -->
-      <a href="javascript:void(0)" onclick="wlFilter('')"
+      <a href="javascript:void(0)" onclick="wlFilter('{% if wl_only_custom %}custom=true{% endif %}{% if wl_active_exchange and wl_active_exchange != "ALL" %}{% if wl_only_custom %}&{% endif %}exchange={{ wl_active_exchange }}{% endif %}')"
          style="padding:.2rem .6rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
          {% if wl_active_label is none %}background:var(--t-accent);color:white;border-color:var(--t-accent)
          {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
         All
       </a>
       {% for lbl in wl_labels %}
-      <a href="javascript:void(0)" onclick="wlFilter('label={{ lbl.id }}{% if wl_only_custom %}&custom=true{% endif %}')"
+      <a href="javascript:void(0)" onclick="wlFilter('label={{ lbl.id }}{% if wl_only_custom %}&custom=true{% endif %}{% if wl_active_exchange and wl_active_exchange != "ALL" %}&exchange={{ wl_active_exchange }}{% endif %}')"
          style="padding:.2rem .6rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
          {% if wl_active_label == lbl.id %}background:{{ lbl.color }};color:white;border-color:{{ lbl.color }}
          {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
@@ -360,7 +438,7 @@
       <span style="border-left:1px solid var(--border);height:1.25rem;margin:0 .25rem"></span>
 
       <!-- Custom stocks only toggle -->
-      <a href="javascript:void(0)" onclick="wlFilter('{% if wl_active_label %}label={{ wl_active_label }}&{% endif %}custom={% if wl_only_custom %}false{% else %}true{% endif %}')"
+      <a href="javascript:void(0)" onclick="wlFilter('{% if wl_active_label %}label={{ wl_active_label }}&{% endif %}custom={% if wl_only_custom %}false{% else %}true{% endif %}{% if wl_active_exchange and wl_active_exchange != "ALL" %}&exchange={{ wl_active_exchange }}{% endif %}')"
          class="btn-ghost" style="padding:.2rem .6rem;font-size:.7rem;height:auto;border-radius:999px;font-weight:600;
          {% if wl_only_custom %}background:var(--t-accent-bg);color:var(--t-accent);border-color:var(--t-accent-mid){% endif %}">
         Custom Stocks {% if wl_only_custom %}🟢{% else %}⚪{% endif %}

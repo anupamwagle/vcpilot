@@ -68,31 +68,107 @@
 </div>
 
 {# ── Quick triggers ────────────────────────────────────────────────── #}
-<div class="card p-3 mb-4" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
-  <span style="font-size:.75rem;font-weight:600;color:var(--text-muted);margin-right:.25rem">Screener Tasks:</span>
-  <form method="post" action="/action/full-setup"><button class="btn-primary text-xs py-1.5">🚀 Full Setup</button></form>
-  <form method="post" action="/action/refresh-data"><button class="btn-ghost text-xs py-1.5">🔄 Refresh Data</button></form>
-  <form method="post" action="/action/force-screen"><button class="btn-ghost text-xs py-1.5">🔍 Force Screen</button></form>
-  <form method="post" action="/action/evaluate-regime"><button class="btn-ghost text-xs py-1.5">🌡 Regime</button></form>
-  <form method="post" action="/action/ping-worker"><button class="btn-ghost text-xs py-1.5">⚡ Ping</button></form>
+<div class="card p-3 mb-4" style="display:flex;flex-wrap:wrap;gap:1rem;align-items:center">
+  <div style="display:flex;align-items:center;gap:.5rem">
+    <span style="font-size:.75rem;font-weight:600;color:var(--text-muted)">Global:</span>
+    <form method="post" action="/action/full-setup"><button class="btn-primary text-xs py-1">🚀 Full Setup (All)</button></form>
+    <form method="post" action="/action/ping-worker"><button class="btn-ghost text-xs py-1">⚡ Ping Worker</button></form>
+  </div>
+  
+  <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;border-left:1px solid var(--border);padding-left:1rem">
+    <span style="font-size:.75rem;font-weight:600;color:var(--text-muted)">Exchange Tasks:</span>
+    
+    <form method="post" action="/action/evaluate-regime" style="display:inline-flex;align-items:center;gap:.25rem">
+      {% if has_asx or has_us or has_crypto %}
+      <select name="exchange" class="input py-0.5 text-xs" style="width: auto; padding-top: 0.15rem; padding-bottom: 0.15rem;">
+        {% if has_asx %}<option value="ASX">🇦🇺 ASX</option>{% endif %}
+        {% if has_us %}<option value="US">🇺🇸 US</option>{% endif %}
+        {% if has_crypto %}<option value="CRYPTO">₿ Crypto</option>{% endif %}
+      </select>
+      {% endif %}
+      <button class="btn-ghost text-xs py-1">🌡 Evaluate Regime</button>
+    </form>
+
+    <form method="post" action="/action/refresh-data" style="display:inline-flex;align-items:center;gap:.25rem">
+      {% if has_asx or has_us or has_crypto %}
+      <select name="exchange" class="input py-0.5 text-xs" style="width: auto; padding-top: 0.15rem; padding-bottom: 0.15rem;">
+        {% if has_asx %}<option value="ASX">🇦🇺 ASX</option>{% endif %}
+        {% if has_us %}<option value="US">🇺🇸 US</option>{% endif %}
+        {% if has_crypto %}<option value="CRYPTO">₿ Crypto</option>{% endif %}
+      </select>
+      {% endif %}
+      <button class="btn-ghost text-xs py-1">🔄 Refresh Data</button>
+    </form>
+
+    <form method="post" action="/action/force-screen" style="display:inline-flex;align-items:center;gap:.25rem">
+      {% if has_asx or has_us or has_crypto %}
+      <select name="exchange" class="input py-0.5 text-xs" style="width: auto; padding-top: 0.15rem; padding-bottom: 0.15rem;">
+        {% if has_asx %}<option value="ASX">🇦🇺 ASX</option>{% endif %}
+        {% if has_us %}<option value="US">🇺🇸 US</option>{% endif %}
+        {% if has_crypto %}<option value="CRYPTO">₿ Crypto</option>{% endif %}
+      </select>
+      {% endif %}
+      <button class="btn-ghost text-xs py-1">🔍 Force Screen</button>
+    </form>
+  </div>
 </div>
 
-<div class="card p-3 mb-5" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
-  <span style="font-size:.75rem;font-weight:600;color:var(--text-muted);margin-right:.25rem">Intraday Trading Tasks:</span>
-  <form method="post" action="/action/force-breakout-check"><button class="btn-ghost text-xs py-1.5">🎯 Breakout Check</button></form>
-  <form method="post" action="/action/force-exit-check"><button class="btn-ghost text-xs py-1.5">🛑 Exit Check</button></form>
-  <form method="post" action="/action/force-position-sync"><button class="btn-ghost text-xs py-1.5">⚖️ Position Sync</button></form>
-  <form method="post" action="/action/force-stop-sync"><button class="btn-ghost text-xs py-1.5">⚙️ Stop Sync</button></form>
+<div class="card p-3 mb-5" style="display:flex;flex-wrap:wrap;gap:1rem;align-items:center">
+  <div style="display:flex;align-items:center;gap:.5rem">
+    <span style="font-size:.75rem;font-weight:600;color:var(--text-muted)">Global Syncs:</span>
+    <form method="post" action="/action/force-position-sync"><button class="btn-ghost text-xs py-1">⚖️ Position Sync</button></form>
+    <form method="post" action="/action/force-stop-sync"><button class="btn-ghost text-xs py-1">⚙️ Stop Sync</button></form>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;border-left:1px solid var(--border);padding-left:1rem">
+    <span style="font-size:.75rem;font-weight:600;color:var(--text-muted)">Intraday Scopes:</span>
+    
+    <form method="post" action="/action/force-breakout-check" style="display:inline-flex;align-items:center;gap:.25rem">
+      {% if has_asx or has_us or has_crypto %}
+      <select name="exchange" class="input py-0.5 text-xs" style="width: auto; padding-top: 0.15rem; padding-bottom: 0.15rem;">
+        {% if has_asx %}<option value="ASX">🇦🇺 ASX</option>{% endif %}
+        {% if has_us %}<option value="US">🇺🇸 US</option>{% endif %}
+        {% if has_crypto %}<option value="CRYPTO">₿ Crypto</option>{% endif %}
+      </select>
+      {% endif %}
+      <button class="btn-ghost text-xs py-1">🎯 Breakout Check</button>
+    </form>
+
+    <form method="post" action="/action/force-exit-check" style="display:inline-flex;align-items:center;gap:.25rem">
+      {% if has_asx or has_us or has_crypto %}
+      <select name="exchange" class="input py-0.5 text-xs" style="width: auto; padding-top: 0.15rem; padding-bottom: 0.15rem;">
+        {% if has_asx %}<option value="ASX">🇦🇺 ASX</option>{% endif %}
+        {% if has_us %}<option value="US">🇺🇸 US</option>{% endif %}
+        {% if has_crypto %}<option value="CRYPTO">₿ Crypto</option>{% endif %}
+      </select>
+      {% endif %}
+      <button class="btn-ghost text-xs py-1">🛑 Exit Check</button>
+    </form>
+  </div>
 </div>
 
 {# ── Live feed ─────────────────────────────────────────────────────── #}
 <div class="card overflow-hidden">
-  <div class="section-head">
+  <div class="section-head" style="flex-wrap:wrap;gap:.5rem">
     <div style="display:flex;align-items:center;gap:.625rem">
       <p class="section-title">Audit Event Stream</p>
       <span id="event-count" style="font-size:.7rem;font-weight:600;padding:.15rem .5rem;border-radius:.3rem;background:var(--surface-alt);color:var(--text-muted);border:1px solid var(--border)">0 new</span>
     </div>
-    <span style="font-size:.75rem;color:var(--text-subtle)">Newest first · click a row to expand</span>
+    <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+      {% if exchange_filters is defined and exchange_filters %}
+      {# Exchange filter pills for the live stream #}
+      <span style="font-size:.7rem;color:var(--text-subtle)">Filter:</span>
+      <button onclick="setStreamExchange('ALL')" id="exc-ALL"
+              style="font-size:.7rem;padding:.15rem .55rem;border-radius:9999px;border:1px solid var(--border);cursor:pointer;background:var(--t-accent);color:#fff;border-color:var(--t-accent)">All</button>
+      {% for ef in exchange_filters %}
+      {% if ef.key != 'ALL' %}
+      <button onclick="setStreamExchange('{{ ef.key }}')" id="exc-{{ ef.key }}"
+              style="font-size:.7rem;padding:.15rem .55rem;border-radius:9999px;border:1px solid var(--border);cursor:pointer;background:transparent;color:var(--text-muted)">{{ ef.flag }} {{ ef.label }}</button>
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+      <span style="font-size:.75rem;color:var(--text-subtle);margin-left:.25rem">Newest first · click row to expand</span>
+    </div>
   </div>
 
   <div id="log-feed" style="font-size:.75rem;max-height:65vh;overflow-y:auto">
@@ -246,6 +322,8 @@ async function poll() {
         const node = wrap.firstChild;
         const hdr  = node.querySelector('.log-header');
         if (hdr && node.querySelector('.log-detail')) hdr.addEventListener('click', () => toggleRow(hdr));
+        // Apply exchange filter to new rows
+        if (!tickerMatchesExchange(log.ticker || '—', activeExchange, log.message || '')) node.style.display = 'none';
         frag.appendChild(node);
         lastId = Math.max(lastId, log.id);
       }
@@ -278,6 +356,47 @@ function clearView() {
   cntBadge.style.color = 'var(--text-muted)';
   cntBadge.style.borderColor = 'var(--border)';
   feed.innerHTML = '<div id="empty-state" style="padding:3rem 1rem;text-align:center;color:var(--text-subtle);font-size:.8125rem">Cleared. New events will appear here.</div>';
+}
+
+// ── Exchange stream filter ───────────────────────────────────────────────
+let activeExchange = 'ALL';
+
+function tickerMatchesExchange(ticker, exc, message) {
+  if (exc === 'ALL') return true;
+  // Entries with no ticker: classify by message prefix written by tasks
+  if (!ticker || ticker === '—') {
+    const msg = (message || '').toUpperCase();
+    if (exc === 'CRYPTO') return msg.includes('[CRYPTO') || msg.includes('CRYPTO_');
+    if (exc === 'ASX')    return !msg.includes('[CRYPTO') && !msg.includes('[NYSE') && !msg.includes('[NASDAQ') && !msg.includes('CRYPTO_');
+    if (exc === 'US')     return msg.includes('[NYSE') || msg.includes('[NASDAQ');
+    return true;
+  }
+  if (exc === 'ASX')    return ticker.endsWith('.AX');
+  if (exc === 'CRYPTO') return ticker.includes('-');
+  if (exc === 'US')     return !ticker.endsWith('.AX') && !ticker.includes('-');
+  return true;
+}
+
+function applyStreamExchangeFilter() {
+  feed.querySelectorAll('.log-row').forEach(row => {
+    const tickerEl  = row.querySelector('.log-header span:nth-child(3)');
+    const msgEl     = row.querySelector('.log-header span:last-child');
+    const ticker    = tickerEl ? tickerEl.textContent.trim() : '';
+    const message   = msgEl   ? msgEl.textContent.trim()   : '';
+    row.style.display = tickerMatchesExchange(ticker, activeExchange, message) ? '' : 'none';
+  });
+}
+
+function setStreamExchange(exc) {
+  activeExchange = exc;
+  // Update pill styles
+  document.querySelectorAll('[id^="exc-"]').forEach(btn => {
+    const active = btn.id === 'exc-' + exc;
+    btn.style.background    = active ? 'var(--t-accent)' : 'transparent';
+    btn.style.color         = active ? '#fff' : 'var(--text-muted)';
+    btn.style.borderColor   = active ? 'var(--t-accent)' : 'var(--border)';
+  });
+  applyStreamExchangeFilter();
 }
 
 document.head.insertAdjacentHTML('beforeend','<style>@keyframes fadeIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}</style>');

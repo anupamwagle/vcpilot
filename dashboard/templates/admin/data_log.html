@@ -31,6 +31,9 @@
   </p>
 </div>
 
+<!-- Exchange Filter -->
+{% include "components/exchange_filter.html" %}
+
 <!-- Filters -->
 <div class="card mb-4 p-3">
   <form method="get" action="/admin/data-log" class="flex flex-wrap items-end gap-3">
@@ -49,6 +52,9 @@
         <!-- preserve other filters when switching window -->
         {% if ticker %}<input type="hidden" name="ticker" value="{{ ticker }}">{% endif %}
         {% if only_confirmed %}<input type="hidden" name="only_confirmed" value="true">{% endif %}
+        {% if active_exchange_filter and active_exchange_filter != 'ALL' %}
+        <input type="hidden" name="exchange" value="{{ active_exchange_filter }}">
+        {% endif %}
       </div>
     </div>
 
@@ -76,8 +82,9 @@
     <button type="submit" class="btn-primary py-1 px-3 text-xs mt-4">Apply</button>
     <a href="/admin/data-log" class="btn-ghost py-1 px-3 text-xs mt-4">Reset</a>
 
-    <!-- preserve window when changing other filters -->
+    <!-- preserve window and exchange when changing other filters -->
     <input type="hidden" name="window" value="{{ window }}">
+    <input type="hidden" name="exchange" value="{{ active_exchange_filter }}">
   </form>
 </div>
 
@@ -339,7 +346,7 @@ function buildRow(r) {
 async function pollNewRows() {
   try {
     indicator.textContent = '⟳ Refreshing…';
-    const res = await fetch(`/admin/data-log/poll?after_id=${maxId}`);
+    const res = await fetch(`/admin/data-log/poll?after_id=${maxId}&exchange={{ active_exchange_filter }}&ticker={{ ticker }}&only_confirmed={{ 'true' if only_confirmed else 'false' }}`);
     if (!res.ok) return;
     const data = await res.json();
     if (data.rows && data.rows.length > 0) {

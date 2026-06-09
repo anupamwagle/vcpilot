@@ -24,11 +24,19 @@ class Signal(Base):
     """
     One row per stock per screener run that passes all enabled rules.
     Captures the full context at signal generation time for audit purposes.
+    Works for ASX equities, US equities, and crypto assets.
     """
     __tablename__ = "signals"
 
     id              = Column(Integer, primary_key=True)
-    ticker          = Column(String(16), nullable=False, index=True)
+    ticker          = Column(String(32), nullable=False, index=True)
+                                            # yfinance canonical: "BHP.AX", "AAPL", "BTC-USD"
+    exchange_key    = Column(String(32), nullable=False, default="ASX", index=True)
+                                            # "ASX", "NYSE", "NASDAQ", "CRYPTO_INDEPENDENTRESERVE", …
+    asset_type      = Column(String(16), nullable=False, default="EQUITY")
+                                            # "EQUITY" | "CRYPTO"
+    currency        = Column(String(8),  nullable=False, default="AUD")
+                                            # Native price currency: "AUD", "USD"
     signal_date     = Column(Date, nullable=False, index=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
     status          = Column(Enum(SignalStatus), default=SignalStatus.PENDING, nullable=False)
@@ -58,10 +66,12 @@ class Signal(Base):
     # Mandatory rules and globally-disabled rules cannot be overridden.
     rule_overrides  = Column(JSON, default=dict)
 
-    # Risk calculations
-    suggested_size_shares = Column(Integer, nullable=True)   # Position size in shares
-    suggested_size_aud    = Column(Numeric(12, 2), nullable=True)
-    risk_per_trade_aud    = Column(Numeric(10, 2), nullable=True)
+    # Risk calculations (all AUD-equivalent for cross-market comparisons)
+    suggested_size_shares = Column(Integer, nullable=True)
+    suggested_size_aud    = Column(Numeric(14, 2), nullable=True)   # AUD equivalent
+    suggested_size_local  = Column(Numeric(14, 2), nullable=True)   # Native currency amount
+    risk_per_trade_aud    = Column(Numeric(12, 2), nullable=True)
+    fx_rate_aud           = Column(Numeric(10, 6), nullable=True)   # AUD/native rate at signal time
 
     # VCP context
     vcp_contractions = Column(Integer, nullable=True)  # Number of contractions detected
@@ -121,12 +131,22 @@ class Watchlist(Base):
     """
     Stocks that pass partial Minervini criteria — stage 2, trend template met —
     but not yet a full signal (e.g. VCP still forming, volume not confirmed).
-    Admin can add/remove manually via UI.
+    Admin can add/remove manually via UI for any supported exchange.
+
+    Multi-market: exchange_key and asset_type allow US equities and crypto alongside ASX.
+    On-demand data fetch is triggered when a non-ASX200 stock is added.
     """
     __tablename__ = "watchlist"
 
     id              = Column(Integer, primary_key=True)
-    ticker          = Column(String(16), nullable=False, index=True)
+    ticker          = Column(String(32), nullable=False, index=True)
+                                            # yfinance canonical: "BHP.AX", "AAPL", "BTC-USD"
+    exchange_key    = Column(String(32), nullable=False, default="ASX", index=True)
+                                            # Which exchange this stock trades on
+    asset_type      = Column(String(16), nullable=False, default="EQUITY")
+                                            # "EQUITY" | "CRYPTO"
+    currency        = Column(String(8),  nullable=False, default="AUD")
+                                            # Native price currency
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
     added_date      = Column(Date, default=datetime.utcnow)
 

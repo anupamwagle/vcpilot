@@ -10,6 +10,11 @@ Supported commands (case-insensitive):
   PAUSE               — Suspend new trade entries
   RESUME              — Resume new trade entries
   REPORT              — Generate daily P&L report
+  BUY <TICKER>        — Stage a live trade: shows pivot/stop/target/size/risk
+                        for today's PENDING signal and asks for confirmation
+  CONFIRM <TICKER>    — Execute a staged BUY as a bracket order (live or paper,
+                        routed through app.trading.order_executor — same audited
+                        path as the dashboard and MCP place_order)
   SKIP <TICKER>       — Cancel a pending signal for today
   UNSKIP <TICKER>     — Restore a skipped signal back to PENDING
   EXIT <TICKER>       — Emergency close an open position (next open)
@@ -29,18 +34,19 @@ from app.models.config import SystemConfig, RuleConfig
 from app.models.signal import Signal, SignalStatus
 from app.models.trade import Position, TradeStatus
 from app.models.audit import AuditLog, AuditAction
-from app.notifications.whatsapp import WhatsAppNotifier
+from app.notifications import get_notifier
+from app.notifications.base import BaseNotifier
 
 
 class AgentCommandHandler:
     """
-    Parses incoming WhatsApp messages and executes commands.
+    Parses incoming messages and executes commands.
     Each method returns a response string sent back to the user.
     """
 
-    def __init__(self, organization_id: int = None, notifier: WhatsAppNotifier = None):
+    def __init__(self, organization_id: int = None, notifier: BaseNotifier = None):
         self.organization_id = organization_id
-        self.notifier = notifier or WhatsAppNotifier(organization_id=organization_id)
+        self.notifier = notifier or get_notifier(organization_id=organization_id)
 
     def handle(self, message: str, sender_jid: str) -> str:
         """
@@ -66,6 +72,9 @@ class AgentCommandHandler:
             "PAUSE":     self.cmd_pause,
             "RESUME":    self.cmd_resume,
             "REPORT":    self.cmd_report,
+            "BUY":       self.cmd_buy,
+            "TRADE":     self.cmd_buy,
+            "CONFIRM":   self.cmd_confirm,
             "SKIP":      self.cmd_skip,
             "UNSKIP":    self.cmd_unskip,
             "EXIT":      self.cmd_exit,
@@ -122,10 +131,27 @@ class AgentCommandHandler:
         for p in positions:
             pnl_pct = ((p.current_price - p.entry_price) / p.entry_price * 100) \
                 if p.current_price and p.entry_price else 0
+            
+            # Format based on currency and asset type
+            currency = p.currency or "AUD"
+            symbol = "$"
+            if currency == "AUD":
+                symbol = "A$"
+            elif currency == "USD":
+                symbol = "US$"
+            elif currency == "USDT":
+                symbol = "USDT "
+
+            is_crypto = (p.asset_type == "CRYPTO" or "-" in p.ticker)
+            unit_label = "units" if is_crypto else "shares"
+            price_fmt = f"{p.entry_price:.4f}" if is_crypto or p.entry_price < 1.0 else f"{p.entry_price:.2f}"
+            curr_fmt = f"{(p.current_price or 0.0):.4f}" if is_crypto or (p.current_price or 0.0) < 1.0 else f"{(p.current_price or 0.0):.2f}"
+            stop_fmt = f"{(p.current_stop or 0.0):.4f}" if is_crypto or (p.current_stop or 0.0) < 1.0 else f"{(p.current_stop or 0.0):.2f}"
+
             lines.append(
-                f"• *{p.ticker}*: {p.qty} shares @ ${p.entry_price:.3f} "
-                f"| Now ${(p.current_price or 0.0):.3f} "
-                f"({pnl_pct:+.1f}%) | Stop ${(p.current_stop or 0.0):.3f}"
+                f"• *{p.ticker}*: {p.qty:.6g} {unit_label} @ {symbol}{price_fmt} "
+                f"| Now {symbol}{curr_fmt} "
+                f"({pnl_pct:+.1f}%) | Stop {symbol}{stop_fmt}"
             )
         return "\n".join(lines)
 
@@ -189,11 +215,98 @@ class AgentCommandHandler:
         except Exception as e:
             return f"Report generation failed: {e}"
 
+    def _resolve_ticker(self, db, user_input: str) -> str:
+        """
+        Resolves a user-input ticker (e.g. "BHP", "BTC", "BHP.AX", "BTC-AUD")
+        to its canonical form stored in the database by searching active positions,
+        watchlist, signals, and stocks. Falls back to user_input.
+        """
+        if not user_input:
+            return ""
+        raw = user_input.strip().upper()
+        
+        # 1. Exact match in positions
+        pos = db.query(Position).filter(
+            Position.organization_id == self.organization_id,
+            Position.status == TradeStatus.OPEN,
+            Position.ticker == raw
+        ).first()
+        if pos:
+            return pos.ticker
+
+        # 2. Exact match in today's signals
+        sig = db.query(Signal).filter(
+            Signal.organization_id == self.organization_id,
+            Signal.signal_date == get_current_date(),
+            Signal.ticker == raw
+        ).first()
+        if sig:
+            return sig.ticker
+
+        # 3. Exact match in watchlist
+        from app.models.signal import Watchlist
+        wl = db.query(Watchlist).filter(
+            Watchlist.organization_id == self.organization_id,
+            Watchlist.ticker == raw
+        ).first()
+        if wl:
+            return wl.ticker
+
+        # 4. Try suffixes: e.g. "BHP" -> "BHP.AX", "BTC" -> "BTC-AUD" or "BTC-USD"
+        candidates = [
+            raw,
+            f"{raw}.AX",
+            f"{raw}-AUD",
+            f"{raw}-USD",
+            f"{raw}-USDT",
+        ]
+        
+        # Check active positions first for any candidate
+        pos = db.query(Position).filter(
+            Position.organization_id == self.organization_id,
+            Position.status == TradeStatus.OPEN,
+            Position.ticker.in_(candidates)
+        ).first()
+        if pos:
+            return pos.ticker
+
+        # Check signals
+        sig = db.query(Signal).filter(
+            Signal.organization_id == self.organization_id,
+            Signal.signal_date == get_current_date(),
+            Signal.ticker.in_(candidates)
+        ).first()
+        if sig:
+            return sig.ticker
+
+        # Check watchlist
+        wl = db.query(Watchlist).filter(
+            Watchlist.organization_id == self.organization_id,
+            Watchlist.ticker.in_(candidates)
+        ).first()
+        if wl:
+            return wl.ticker
+
+        # Check stocks table
+        try:
+            from app.models.market import Stock
+            stk = db.query(Stock).filter(Stock.ticker.in_(candidates)).first()
+            if stk:
+                return stk.ticker
+        except Exception:
+            pass
+
+        # Default fallback: if it doesn't have a suffix and looks like an equity, append .AX
+        if "." not in raw and "-" not in raw:
+            return f"{raw}.AX"
+            
+        return raw
+
     def cmd_skip(self, args) -> str:
         if not args:
             return "Usage: SKIP <TICKER>"
-        ticker = args[0].replace(".AX", "") + ".AX"
         with get_db() as db:
+            ticker = self._resolve_ticker(db, args[0])
             signal = db.query(Signal).filter(
                 Signal.ticker == ticker,
                 Signal.signal_date == get_current_date(),
@@ -212,8 +325,8 @@ class AgentCommandHandler:
     def cmd_unskip(self, args) -> str:
         if not args:
             return "Usage: UNSKIP <TICKER>"
-        ticker = args[0].replace(".AX", "") + ".AX"
         with get_db() as db:
+            ticker = self._resolve_ticker(db, args[0])
             signal = db.query(Signal).filter(
                 Signal.ticker == ticker,
                 Signal.signal_date == get_current_date(),
@@ -232,9 +345,9 @@ class AgentCommandHandler:
     def cmd_exit(self, args) -> str:
         if not args:
             return "Usage: EXIT <TICKER>"
-        ticker = args[0].replace(".AX", "") + ".AX"
         # Flag position for exit on next market open
         with get_db() as db:
+            ticker = self._resolve_ticker(db, args[0])
             pos = db.query(Position).filter(
                 Position.ticker == ticker,
                 Position.status == TradeStatus.OPEN,
@@ -252,12 +365,12 @@ class AgentCommandHandler:
     def cmd_stop(self, args) -> str:
         if len(args) < 2:
             return "Usage: STOP <TICKER> <NEW_STOP_PRICE>"
-        ticker = args[0].replace(".AX", "") + ".AX"
         try:
             new_stop = float(args[1])
         except ValueError:
             return f"Invalid stop price: {args[1]}"
         with get_db() as db:
+            ticker = self._resolve_ticker(db, args[0])
             pos = db.query(Position).filter(
                 Position.ticker == ticker,
                 Position.status == TradeStatus.OPEN,
@@ -270,7 +383,96 @@ class AgentCommandHandler:
             db.add(pos)
         self._audit(AuditAction.STOP_UPDATED, ticker=ticker,
                     before_value=str(old_stop), after_value=str(new_stop))
-        return f"✅ Stop for *{ticker}* updated: ${old_stop:.3f} → ${new_stop:.3f}"
+        return f"✅ Stop for *{ticker}* updated: ${old_stop:.4f} → ${new_stop:.4f}"
+
+    def cmd_buy(self, args) -> str:
+        """
+        Stage a live trade for confirmation.
+
+        Looks up today's PENDING signal for the ticker and replies with the
+        Minervini-calculated entry/stop/target/size/risk so the user can review
+        before committing capital. Nothing is submitted to the broker here —
+        send `CONFIRM <TICKER>` to actually execute via the same audited
+        execute_signal_order() path the dashboard and MCP use.
+        """
+        if not args:
+            return "Usage: BUY <TICKER>  (then CONFIRM <TICKER> to execute)"
+        raw = args[0].upper()
+        with get_db() as db:
+            ticker = self._resolve_ticker(db, args[0])
+            signal = db.query(Signal).filter(
+                Signal.ticker == ticker,
+                Signal.signal_date == get_current_date(),
+                Signal.status == SignalStatus.PENDING,
+                Signal.organization_id == self.organization_id
+            ).first()
+            if not signal:
+                return f"No PENDING signal found for {raw} today. Send SIGNALS to see what's live."
+
+            mode = "📄 PAPER" if self._is_paper() else "💰 LIVE"
+            size = signal.suggested_size_shares or 0
+            risk = float(signal.risk_per_trade_aud) if signal.risk_per_trade_aud else 0.0
+            target = float(signal.target_price_1) if signal.target_price_1 else None
+            risk_pct = ((float(signal.pivot_price) - float(signal.stop_price))
+                        / float(signal.pivot_price) * 100) if signal.pivot_price and signal.stop_price else 0
+
+            return (
+                f"🟡 *Confirm trade — {mode}*\n"
+                f"Ticker: *{signal.ticker}*\n"
+                f"Pivot/entry ~: ${float(signal.pivot_price):.4f}\n"
+                f"Stop: ${float(signal.stop_price):.4f} ({risk_pct:.1f}% risk)\n"
+                + (f"Target: ${target:.4f}\n" if target else "")
+                + f"Suggested size: {size} units (≈${risk:.0f} at risk)\n"
+                f"RS Rating: {(signal.rs_rating or 0):.0f}/100\n\n"
+                f"⚠️ Live price & size are recalculated at execution — this may differ slightly.\n"
+                f"Reply *CONFIRM {raw}* to submit the order, or *SKIP {raw}* to cancel."
+            )
+
+    def cmd_confirm(self, args) -> str:
+        """
+        Execute the bracket order for a previously staged BUY.
+        Routes through app.trading.order_executor.execute_signal_order — the
+        same audited path used by the dashboard and the MCP place_order tool.
+        """
+        if not args:
+            return "Usage: CONFIRM <TICKER>  (after BUY <TICKER>)"
+        raw = args[0].upper()
+        with get_db() as db:
+            ticker = self._resolve_ticker(db, args[0])
+            signal = db.query(Signal).filter(
+                Signal.ticker == ticker,
+                Signal.signal_date == get_current_date(),
+                Signal.status == SignalStatus.PENDING,
+                Signal.organization_id == self.organization_id
+            ).first()
+            if not signal:
+                return f"No PENDING signal found for {raw}. It may have already been triggered, skipped, or expired."
+            signal_id = signal.id
+            ticker = signal.ticker
+
+        self._audit(AuditAction.MANUAL_OVERRIDE, ticker=ticker,
+                    detail={"action": "whatsapp_confirm_buy", "signal_id": signal_id})
+
+        from app.trading.order_executor import execute_signal_order
+        result = execute_signal_order(
+            signal_id=signal_id,
+            organization_id=self.organization_id,
+            actor=f"whatsapp:{self.organization_id}",
+            notes="Confirmed via WhatsApp",
+        )
+
+        if not result.get("ok"):
+            return f"⛔ Order NOT placed for *{ticker}*: {result.get('error') or result.get('warning')}"
+
+        mode = "📄 PAPER" if self._is_paper() else "💰 LIVE"
+        return (
+            f"🟢 *Order submitted — {mode}*\n"
+            f"*{result['ticker']}* BUY {result['qty']:.6g}\n"
+            f"Entry: ${result['entry_price']:.4f}\n"
+            f"Stop: ${result['stop_price']:.4f} ({result['risk_pct']:.1f}% risk)\n"
+            f"Target: ${result['target_price']:.4f}\n"
+            f"Broker: {result['broker']} | Ref: {result['order_ref']}"
+        )
 
     def cmd_rule(self, args) -> str:
         if len(args) < 2:
@@ -313,6 +515,20 @@ class AgentCommandHandler:
             cfg.value = value
             cfg.updated_by = "agent"
             db.add(cfg)
+
+            # Synchronize working capital configuration with active Account capital
+            if key in ("working_capital_aud", "weekly_injection_aud") and self.organization_id:
+                from app.models.account import Account
+                account = db.query(Account).filter(
+                    Account.is_active == True,
+                    Account.organization_id == self.organization_id
+                ).first()
+                if account:
+                    try:
+                        account.capital_aud = float(value)
+                        db.add(account)
+                    except ValueError:
+                        pass
         self._audit(AuditAction.CONFIG_CHANGED, entity_type="SystemConfig", entity_id=key,
                     before_value=old, after_value=value)
         return f"✅ Config *{key}* updated: {old} → {value}"
@@ -327,6 +543,8 @@ class AgentCommandHandler:
             "MARKET — Regime status\n"
             "PAUSE / RESUME — Toggle trading\n"
             "REPORT — Daily P&L report\n"
+            "BUY <TICKER> — Stage a live trade for review (then CONFIRM)\n"
+            "CONFIRM <TICKER> — Execute a staged BUY as a bracket order\n"
             "SKIP <TICKER> — Cancel today's signal\n"
             "UNSKIP <TICKER> — Restore skipped signal\n"
             "EXIT <TICKER> — Emergency exit position\n"

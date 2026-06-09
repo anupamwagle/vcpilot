@@ -3,9 +3,16 @@
 {% block page_title %}Audit Log{% endblock %}
 
 {% block content %}
+
+<!-- Exchange filter pills -->
+{% set base_url = "/admin/audit" %}
+{% set extra_params %}action={{ filter_action }}&ticker={{ filter_ticker }}&actor={{ filter_actor }}{% endset %}
+{% include "components/exchange_filter.html" %}
+
 <!-- Filters -->
 <form method="get" action="/admin/audit"
       style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:.75rem;padding:1rem;background:var(--surface);border:1px solid var(--border);border-radius:.75rem;margin-bottom:1.25rem">
+  <input type="hidden" name="exchange" value="{{ active_exchange_filter }}">
   <div style="flex:1;min-width:9rem">
     <label class="field-label">Action</label>
     <select name="action" class="input">
@@ -16,7 +23,7 @@
   </div>
   <div style="flex:0 0 8rem">
     <label class="field-label">Ticker</label>
-    <input type="text" name="ticker" value="{{ filter_ticker }}" placeholder="BHP" class="input" style="text-transform:uppercase"/>
+    <input type="text" name="ticker" value="{{ filter_ticker }}" placeholder="BHP / AAPL / BTC" class="input" style="text-transform:uppercase"/>
   </div>
   <div style="flex:0 0 12rem">
     <label class="field-label">Actor / User</label>

@@ -53,6 +53,9 @@
               <span style="font-size:.875rem;font-weight:600;color:{% if rule.enabled %}var(--text){% else %}var(--text-subtle){% endif %}">{{ rule.label }}</span>
               {% if rule.is_mandatory %}<span class="tag-neg" style="font-size:.65rem">🔒 Mandatory</span>{% endif %}
               {% if rule.minervini_ref %}<span class="tag" style="font-size:.65rem;font-style:italic">{{ rule.minervini_ref }}</span>{% endif %}
+              {% set at = rule.asset_types | default('BOTH') %}
+              {% if at == 'EQUITY' %}<span class="tag" style="font-size:.65rem;background:#dbeafe;color:#1d4ed8">Equity only</span>
+              {% elif at == 'CRYPTO' %}<span class="tag" style="font-size:.65rem;background:#fef9c3;color:#b45309">Crypto only</span>{% endif %}
             </div>
             {% if rule.description %}
             <p style="font-size:.75rem;color:var(--text-muted);margin-bottom:.625rem">{{ rule.description }}</p>

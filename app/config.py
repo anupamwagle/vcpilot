@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     whatsapp_admin_number_env: str = Field(default="", validation_alias="whatsapp_admin_number")
     whatsapp_admin_jid_env: str = Field(default="", validation_alias="whatsapp_admin_jid")
 
+    # Telegram / General alerts
+    notification_channel_env: str = Field(default="telegram", validation_alias="notification_channel")
+    telegram_enabled_env: bool = Field(default=True, validation_alias="telegram_enabled")
+    telegram_bot_token_env: str = Field(default="", validation_alias="telegram_bot_token")
+    telegram_chat_id_env: str = Field(default="", validation_alias="telegram_chat_id")
+
     # Dashboard
     dashboard_port: int = 8501
     dashboard_password: str = "changeme"
@@ -136,6 +142,28 @@ class Settings(BaseSettings):
     def whatsapp_admin_number(self) -> str:
         val = self._get_db_config("whatsapp_admin_number")
         return val if val is not None else self.whatsapp_admin_number_env
+
+    @property
+    def notification_channel(self) -> str:
+        val = self._get_db_config("notification_channel")
+        return val if val is not None else self.notification_channel_env
+
+    @property
+    def telegram_enabled(self) -> bool:
+        val = self._get_db_config("telegram_enabled")
+        if val is not None:
+            return val.lower() in ("true", "1", "yes")
+        return self.telegram_enabled_env
+
+    @property
+    def telegram_bot_token(self) -> str:
+        val = self._get_db_config("telegram_bot_token")
+        return val if val is not None else self.telegram_bot_token_env
+
+    @property
+    def telegram_chat_id(self) -> str:
+        val = self._get_db_config("telegram_chat_id")
+        return val if val is not None else self.telegram_chat_id_env
 
     @property
     def working_capital(self) -> float:

@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, or_
 from loguru import logger
 
 app = FastAPI(title="VCPilot", docs_url=None, redoc_url=None)
@@ -153,7 +153,7 @@ async def _startup():
                 # Register webhook
                 if hook:
                     await client.put(f"{api}/api/sessions/{sess}",
-                        json={"webhooks": [{"url": hook, "events": ["message","session.status"]}]},
+                        json={"webhooks": [{"url": hook, "events": ["message","message.any","session.status"]}]},
                         headers=hdrs)
                     logger.info(f"WAHA webhook registered: {hook}")
         except Exception as e:
@@ -227,7 +227,7 @@ def _global(request: Request, db: Session) -> dict:
     from app.config import settings
     from app.models.config import SystemConfig
     from app.models.trade import Position, TradeStatus
-    from app.models.signal import Signal
+    from app.models.signal import Signal, SignalStatus
 
     org_id = request.session.get("organization_id")
 
@@ -251,6 +251,7 @@ def _global(request: Request, db: Session) -> dict:
     wstatus      = _worker_status(raw_hb)
     trading_paused = cfg("trading_paused", "false").lower() == "true"
     whatsapp_enabled = cfg("whatsapp_enabled", "true").lower() == "true"
+    notification_channel = cfg("notification_channel", "whatsapp") or "whatsapp"
 
     # Resolve active market regime: use mock_market_regime when simulation clock is on
     mock_time_on = cfg("mock_time_enabled", "false").lower() == "true"
@@ -274,7 +275,7 @@ def _global(request: Request, db: Session) -> dict:
     if org_id:
         open_count = db.query(Position).filter(Position.status == TradeStatus.OPEN, Position.organization_id == org_id).count()
         signal_count = db.query(Signal).filter(
-            Signal.signal_date == get_current_date(),
+            Signal.status == SignalStatus.PENDING,
             Signal.organization_id == org_id
         ).count()
 
@@ -318,6 +319,7 @@ def _global(request: Request, db: Session) -> dict:
         "regime_set": bool(regime_raw and regime_raw not in ("UNKNOWN", "")),
         "trading_paused": trading_paused,
         "whatsapp_enabled": whatsapp_enabled,
+        "notification_channel": notification_channel,
         "is_paper": is_paper,
         "heartbeat": hb_display or "Never",
         "display_tz": display_tz,
@@ -336,11 +338,16 @@ def _global(request: Request, db: Session) -> dict:
         "mock_time_enabled": mock_time_on,
         "mock_current_time": cfg("mock_current_time", ""),
         "mock_market_regime": cfg("mock_market_regime", "BULL"),
+        "onboarding_completed": cfg("onboarding_completed", "false").lower() == "true",
     }
 
 
 def _auth(request: Request):
     return request.session.get("authenticated", False)
+
+
+def _is_superadmin(request: Request) -> bool:
+    return request.session.get("user_role") == "superadmin"
 
 
 def _has_permission(request: Request, db: Session, perm_name: str) -> bool:
@@ -365,14 +372,22 @@ def _has_permission(request: Request, db: Session, perm_name: str) -> bool:
 # Auth
 # ---------------------------------------------------------------------------
 @app.get("/login", response_class=HTMLResponse)
-async def login_get(request: Request):
+async def login_get(request: Request, next: str = Query("")):
     if _auth(request):
+        if next:
+            return RedirectResponse(next, 302)
         return RedirectResponse("/", 302)
-    return templates.TemplateResponse("login.html", {"request": request, "error": None})
+    return templates.TemplateResponse("login.html", {"request": request, "error": None, "next": next})
 
 
 @app.post("/login")
-async def login_post(request: Request, email: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+async def login_post(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...),
+    next: str = Form(""),
+    db: Session = Depends(get_db)
+):
     from app.config import settings
     from app.models.auth import User, verify_password
     from app.models.account import Organization
@@ -387,13 +402,15 @@ async def login_post(request: Request, email: str = Form(...), password: str = F
         request.session["organization_id"] = default_org.id if default_org else 1
         request.session["organization_name"] = default_org.name if default_org else "Default Org"
         request.session["email"] = settings.superadmin_email
+        if next:
+            return RedirectResponse(next, 302)
         return RedirectResponse("/", 302)
 
     # 2. Check Database Users
     user = db.query(User).filter(User.email == email_clean).first()
     if user and verify_password(password, user.password_hash):
         if not user.is_active:
-            return templates.TemplateResponse("login.html", {"request": request, "error": "User account is disabled"}, status_code=401)
+            return templates.TemplateResponse("login.html", {"request": request, "error": "User account is disabled", "next": next}, status_code=401)
         
         # Check if user has "Super Admin" role in DB
         is_super = any(r.name == "Super Admin" for r in user.roles)
@@ -404,9 +421,11 @@ async def login_post(request: Request, email: str = Form(...), password: str = F
         request.session["organization_id"] = user.organization_id
         request.session["organization_name"] = user.organization.name
         request.session["email"] = user.email
+        if next:
+            return RedirectResponse(next, 302)
         return RedirectResponse("/", 302)
 
-    return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid email or password"}, status_code=401)
+    return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid email or password", "next": next}, status_code=401)
 
 
 @app.get("/logout")
@@ -419,7 +438,12 @@ async def logout(request: Request):
 # OTP Login & Switch Org
 # ---------------------------------------------------------------------------
 @app.post("/login/request-otp")
-async def login_request_otp(request: Request, email: str = Form(...), db: Session = Depends(get_db)):
+async def login_request_otp(
+    request: Request,
+    email: str = Form(...),
+    next: str = Form(""),
+    db: Session = Depends(get_db)
+):
     import secrets
     from datetime import datetime, timedelta
     from app.models.auth import User
@@ -429,9 +453,9 @@ async def login_request_otp(request: Request, email: str = Form(...), db: Sessio
     email_clean = email.strip().lower()
     user = db.query(User).filter(User.email == email_clean).first()
     if not user:
-        return templates.TemplateResponse("login.html", {"request": request, "error": "Email address not found"}, status_code=404)
+        return templates.TemplateResponse("login.html", {"request": request, "error": "Email address not found", "next": next}, status_code=404)
     if not user.is_active:
-        return templates.TemplateResponse("login.html", {"request": request, "error": "User account is disabled"}, status_code=401)
+        return templates.TemplateResponse("login.html", {"request": request, "error": "User account is disabled", "next": next}, status_code=401)
 
     # Generate 6-digit OTP code
     otp = f"{secrets.randbelow(900000) + 100000}"
@@ -458,25 +482,39 @@ async def login_request_otp(request: Request, email: str = Form(...), db: Sessio
     
     # In development mode, append debug otp to url if email delivery is offline/disabled
     debug_param = f"&debug_otp={otp}" if (settings.smtp_host == "smtp.gmail.com" and not email_sent) or (not settings.smtp_username) else ""
-    return RedirectResponse(f"/login/verify-otp?email={user.email}{debug_param}", 302)
+    
+    import urllib.parse
+    next_param = f"&next={urllib.parse.quote(next)}" if next else ""
+    return RedirectResponse(f"/login/verify-otp?email={user.email}{debug_param}{next_param}", 302)
 
 
 @app.get("/login/verify-otp", response_class=HTMLResponse)
-async def login_verify_otp_get(request: Request, email: str = Query(...), debug_otp: str = Query(None)):
-    return templates.TemplateResponse("verify_otp.html", {"request": request, "email": email, "debug_otp": debug_otp, "error": None})
+async def login_verify_otp_get(
+    request: Request,
+    email: str = Query(...),
+    debug_otp: str = Query(None),
+    next: str = Query("")
+):
+    return templates.TemplateResponse("verify_otp.html", {"request": request, "email": email, "debug_otp": debug_otp, "error": None, "next": next})
 
 
 @app.post("/login/verify-otp")
-async def login_verify_otp_post(request: Request, email: str = Form(...), otp_code: str = Form(...), db: Session = Depends(get_db)):
+async def login_verify_otp_post(
+    request: Request,
+    email: str = Form(...),
+    otp_code: str = Form(...),
+    next: str = Form(""),
+    db: Session = Depends(get_db)
+):
     from datetime import datetime
     from app.models.auth import User
 
     user = db.query(User).filter(User.email == email.strip().lower()).first()
     if not user:
-        return templates.TemplateResponse("verify_otp.html", {"request": request, "email": email, "error": "User session expired. Please request a new OTP."}, status_code=400)
+        return templates.TemplateResponse("verify_otp.html", {"request": request, "email": email, "error": "User session expired. Please request a new OTP.", "next": next}, status_code=400)
     
     if not user.otp_code or user.otp_code != otp_code.strip() or not user.otp_expires_at or user.otp_expires_at < datetime.utcnow():
-        return templates.TemplateResponse("verify_otp.html", {"request": request, "email": email, "error": "Invalid or expired OTP code"}, status_code=400)
+        return templates.TemplateResponse("verify_otp.html", {"request": request, "email": email, "error": "Invalid or expired OTP code", "next": next}, status_code=400)
 
     # Clear OTP
     user.otp_code = None
@@ -493,6 +531,8 @@ async def login_verify_otp_post(request: Request, email: str = Form(...), otp_co
     request.session["organization_name"] = user.organization.name
     request.session["email"] = user.email
 
+    if next:
+        return RedirectResponse(next, 302)
     return RedirectResponse("/", 302)
 
 
@@ -513,12 +553,36 @@ async def superadmin_switch_org(request: Request, organization_id: int = Form(..
     return RedirectResponse(referer, 303)
 
 
+
+# ===========================================================================
+# EXCHANGE FILTER HELPERS
+# ===========================================================================
+
+def _get_exchange_filters(org_id: int, db) -> list:
+    from app.models.config import SystemConfig
+    cfg = db.query(SystemConfig).filter(SystemConfig.key=="active_exchanges",SystemConfig.organization_id==org_id).first()
+    excs = [(cfg.value if cfg else "ASX") or "ASX"]
+    excs = [e.strip().upper() for e in excs[0].split(",") if e.strip()]
+    has_us = any(e in excs for e in ("NYSE","NASDAQ"))
+    has_crypto = any(e.startswith("CRYPTO") for e in excs)
+    if not has_us and not has_crypto:
+        return [{"key":"ALL","label":"All","flag":"","asset_type":"ALL"}]
+    r = [{"key":"ALL","label":"All","flag":"","asset_type":"ALL"}]
+    if "ASX" in excs: r.append({"key":"ASX","label":"ASX","flag":"🇦🇺","asset_type":"EQUITY"})
+    if has_us: r.append({"key":"US","label":"US","flag":"🇺🇸","asset_type":"EQUITY"})
+    if has_crypto: r.append({"key":"CRYPTO","label":"Crypto","flag":"₿","asset_type":"CRYPTO"})
+    return r
+
 # ===========================================================================
 # CLIENT AREA — TRADING
 # ===========================================================================
 
 @app.get("/", response_class=HTMLResponse)
-async def home(request: Request, db: Session = Depends(get_db)):
+async def home(
+    request: Request,
+    exchange: str = Query("ALL"),
+    db: Session = Depends(get_db)
+):
     if not _auth(request):
         return RedirectResponse("/login", 302)
     org_id = request.session.get("organization_id")
@@ -673,6 +737,8 @@ async def home(request: Request, db: Session = Depends(get_db)):
             "in_asx200": s.in_asx200 if s else False,
             "is_custom": is_custom,
             "label": {"id": w.label.id, "name": w.label.name, "color": w.label.color} if w.label else None,
+            "exchange_key": getattr(w, "exchange_key", "ASX") or "ASX",
+            "asset_type": getattr(w, "asset_type", "EQUITY") or "EQUITY",
             "close": float(bar.close) if bar and bar.close else None,
             "volume": int(bar.volume) if bar and bar.volume else None,
             "ma_50": float(bar.ma_50) if bar and bar.ma_50 else None,
@@ -684,6 +750,14 @@ async def home(request: Request, db: Session = Depends(get_db)):
             "atr_14": float(bar.atr_14) if bar and bar.atr_14 else None,
             "bar_date": str(bar.date) if bar else "",
         })
+
+    # Filter by exchange
+    active_exchange = (exchange or "ALL").upper()
+    if active_exchange not in ("", "ALL"):
+        watchlist_rows = [row for row in watchlist_rows if
+            (active_exchange == "ASX" and row.get("exchange_key") == "ASX") or
+            (active_exchange == "US"  and row.get("exchange_key") in ("NYSE", "NASDAQ")) or
+            (active_exchange == "CRYPTO" and row.get("asset_type") == "CRYPTO")]
 
     ctx.update({
         "capital": capital,
@@ -698,12 +772,15 @@ async def home(request: Request, db: Session = Depends(get_db)):
         "wl_labels": wl_labels_data,
         "wl_active_label": active_label_id,
         "wl_only_custom": only_custom,
+        "wl_exchange_filters": _get_exchange_filters(org_id, db),
+        "wl_active_exchange": active_exchange,
     })
     return templates.TemplateResponse("trading/home.html", ctx)
 
 
 @app.get("/positions", response_class=HTMLResponse)
-async def positions(request: Request, db: Session = Depends(get_db)):
+async def positions(request: Request, db: Session = Depends(get_db),
+                    exchange: str = Query("ALL")):
     if not _auth(request):
         return RedirectResponse("/login", 302)
     # Super admins allowed in standard views under active organization context
@@ -717,7 +794,27 @@ async def positions(request: Request, db: Session = Depends(get_db)):
 
     stock_names = {s.ticker: (s.name or "") for s in db.query(Stock).all()}
 
-    positions = db.query(Position).filter(Position.status == TradeStatus.OPEN, Position.organization_id == org_id).all()
+    # Build flag emoji lookup from ExchangeConfig
+    flag_map: dict[str, str] = {}
+    try:
+        from app.models.exchange import ExchangeConfig as _EC
+        for ec in db.query(_EC).all():
+            flag_map[ec.exchange_key] = ec.flag_emoji or ""
+    except Exception:
+        pass
+
+    af = (exchange or "ALL").upper()
+    pos_q = db.query(Position).filter(Position.status == TradeStatus.OPEN, Position.organization_id == org_id)
+    try:
+        if af == "ASX":
+            pos_q = pos_q.filter(Position.exchange_key == "ASX")
+        elif af == "CRYPTO":
+            pos_q = pos_q.filter(Position.asset_type == "CRYPTO")
+        elif af == "US":
+            pos_q = pos_q.filter(Position.exchange_key.in_(["NYSE", "NASDAQ"]))
+    except Exception:
+        pass
+    positions = pos_q.all()
     pos_data = []
     total_risk = 0.0
     for p in positions:
@@ -765,8 +862,14 @@ async def positions(request: Request, db: Session = Depends(get_db)):
         except Exception:
             pass
 
+        ek = getattr(p, "exchange_key", "ASX") or "ASX"
+        at = getattr(p, "asset_type",   "EQUITY") or "EQUITY"
         pos_data.append({
             "id": p.id, "ticker": p.ticker,
+            "exchange_key":  ek,
+            "asset_type":    at,
+            "currency":      getattr(p, "currency", "AUD") or "AUD",
+            "flag_emoji":    flag_map.get(ek, ""),
             "company_name": stock_names.get(p.ticker, ""),
             "qty": p.qty,
             "entry": entry, "current": curr,
@@ -781,9 +884,24 @@ async def positions(request: Request, db: Session = Depends(get_db)):
             "exit_checks": exit_checks,
         })
 
-    trades = db.query(Trade).filter(Trade.organization_id == org_id).order_by(desc(Trade.exit_date)).limit(50).all()
+    # Closed trades — also filter by exchange if selected
+    trade_q = db.query(Trade).filter(Trade.organization_id == org_id).order_by(desc(Trade.exit_date))
+    try:
+        if af == "ASX":
+            trade_q = trade_q.filter(Trade.exchange_key == "ASX")
+        elif af == "CRYPTO":
+            trade_q = trade_q.filter(Trade.asset_type == "CRYPTO")
+        elif af == "US":
+            trade_q = trade_q.filter(Trade.exchange_key.in_(["NYSE", "NASDAQ"]))
+    except Exception:
+        pass
+    trades = trade_q.limit(50).all()
     trade_data = [{
         "ticker": t.ticker,
+        "exchange_key":  getattr(t, "exchange_key", "ASX") or "ASX",
+        "asset_type":    getattr(t, "asset_type", "EQUITY") or "EQUITY",
+        "currency":      getattr(t, "currency", "AUD") or "AUD",
+        "flag_emoji":    flag_map.get(getattr(t, "exchange_key", "ASX") or "ASX", ""),
         "company_name": stock_names.get(t.ticker, ""),
         "entry_date": str(t.entry_date), "exit_date": str(t.exit_date),
         "days": t.hold_days,
@@ -806,6 +924,7 @@ async def positions(request: Request, db: Session = Depends(get_db)):
     win_loss_ratio = round(avg_win / avg_loss, 2) if avg_loss else 0.0
     avg_hold_time = round(sum(t.hold_days for t in trades if t.hold_days is not None) / len(trades), 1) if trades else 0.0
 
+    ef = _get_exchange_filters(org_id, db)
     ctx.update({
         "positions": pos_data, "trades": trade_data,
         "win_rate": round(len(wins) / len(trades) * 100) if trades else 0,
@@ -815,6 +934,10 @@ async def positions(request: Request, db: Session = Depends(get_db)):
         "win_loss_ratio": win_loss_ratio,
         "avg_hold_time": avg_hold_time,
         "capital": capital,
+        "exchange_filters":       ef,
+        "active_exchange_filter": af,
+        "base_url":               "/positions",
+        "extra_params":           "",
     })
     return templates.TemplateResponse("trading/positions.html", ctx)
 
@@ -866,7 +989,7 @@ def _enrich_rule_results(ticker: str, rule_results_dict: dict, db_session, targe
         val_str = ""
         
         # Determine labels
-        clean_label = rid.replace("trend_", "").replace("fundamental_", "").replace("vcp_", "").replace("_", " ")
+        clean_label = rid.replace("trend_", "").replace("fundamental_", "").replace("vcp_", "").replace("crypto_", "").replace("_", " ")
         
         if bar:
             close = float(bar.close or 0)
@@ -898,9 +1021,12 @@ def _enrich_rule_results(ticker: str, rule_results_dict: dict, db_session, targe
             elif rid == "trend_rs_rating_min":
                 val_str = f"RS: {rs:.0f}"
             
-        # Fallback to saved value if database bar doesn't exist
-        if not val_str and isinstance(robj, dict) and robj.get("value") is not None:
-            val_str = str(robj["value"])
+        # Fallback to saved message/value if no bar-derived string (e.g. crypto rules)
+        if not val_str and isinstance(robj, dict):
+            if robj.get("message"):
+                val_str = str(robj["message"])
+            elif robj.get("value") is not None:
+                val_str = str(robj["value"])
             
         enriched.append({
             "rule_id": rid,
@@ -913,7 +1039,8 @@ def _enrich_rule_results(ticker: str, rule_results_dict: dict, db_session, targe
 
 
 @app.get("/signals", response_class=HTMLResponse)
-async def signals(request: Request, db: Session = Depends(get_db)):
+async def signals(request: Request, db: Session = Depends(get_db),
+                  exchange: str = Query("ALL")):
     if not _auth(request):
         return RedirectResponse("/login", 302)
     # Super admins allowed in standard views under active organization context
@@ -944,16 +1071,37 @@ async def signals(request: Request, db: Session = Depends(get_db)):
     from app.models.audit import AuditLog, AuditAction
     sig_tz = _get_display_tz(org_id, db)
 
+    # Build flag emoji lookup from ExchangeConfig
+    flag_map: dict[str, str] = {}
+    try:
+        from app.models.exchange import ExchangeConfig as _EC
+        for ec in db.query(_EC).all():
+            flag_map[ec.exchange_key] = ec.flag_emoji or ""
+    except Exception:
+        pass
+
     from sqlalchemy import or_
     from app.models.signal import SignalStatus
-    sigs = db.query(Signal).filter(
+    q = db.query(Signal).filter(
         or_(
             Signal.signal_date == get_current_date(),
             Signal.status == SignalStatus.PENDING,
             Signal.status == SignalStatus.TRIGGERED,
         ),
         Signal.organization_id == org_id
-    ).all()
+    )
+    # Apply exchange filter at DB level
+    af = (exchange or "ALL").upper()
+    try:
+        if af == "ASX":
+            q = q.filter(Signal.exchange_key == "ASX")
+        elif af == "CRYPTO":
+            q = q.filter(Signal.asset_type == "CRYPTO")
+        elif af == "US":
+            q = q.filter(Signal.exchange_key.in_(["NYSE", "NASDAQ"]))
+    except Exception:
+        pass
+    sigs = q.all()
     stock_names = get_cached_stock_names(db)
 
     sig_data = []
@@ -1005,6 +1153,8 @@ async def signals(request: Request, db: Session = Depends(get_db)):
                         "close": d.get("close"),
                         "pivot": d.get("pivot"),
                         "avg_vol": d.get("avg_vol"),
+                        "data_source": d.get("data_source"),
+                        "delay_mins": d.get("delay_mins"),
                         "rules": [
                             {
                                 "rule_id": rid,
@@ -1054,8 +1204,14 @@ async def signals(request: Request, db: Session = Depends(get_db)):
         is_promoted_vcp    = notes_str.startswith("[VCP Screener]")
         has_overrides = any(overrides.get(rid) == False for rid, passed in screener_pass_fail.items() if passed is False)
 
+        ek = getattr(s, "exchange_key", "ASX") or "ASX"
+        at = getattr(s, "asset_type",   "EQUITY") or "EQUITY"
         sig_data.append({
             "id": s.id, "ticker": s.ticker,
+            "exchange_key":  ek,
+            "asset_type":    at,
+            "currency":      getattr(s, "currency", "AUD") or "AUD",
+            "flag_emoji":    flag_map.get(ek, ""),
             "company_name": company_name,
             "close": float(s.close_price or 0),
             "pivot": float(s.pivot_price or 0),
@@ -1079,8 +1235,55 @@ async def signals(request: Request, db: Session = Depends(get_db)):
             "is_promoted_vcp": bool(is_promoted_vcp),
             "last_check": last_check,
         })
-    ctx.update({"signals": sig_data, "signal_date": str(get_current_date())})
+    ef = _get_exchange_filters(org_id, db)
+    ctx.update({
+        "signals": sig_data,
+        "signal_date": str(get_current_date()),
+        "exchange_filters":       ef,
+        "active_exchange_filter": af,
+        "base_url":               "/signals",
+        "extra_params":           "",
+    })
     return templates.TemplateResponse("trading/signals.html", ctx)
+
+
+@app.get("/signals/poll")
+async def signals_poll(request: Request, db: Session = Depends(get_db)):
+    """Return latest entry-check data for all PENDING signals — polled every 30s by the signals page."""
+    from fastapi.responses import JSONResponse
+    from app.models.signal import Signal, SignalStatus
+    from app.models.audit import AuditLog, AuditAction
+    if not _auth(request):
+        return JSONResponse({}, status_code=401)
+    org_id = request.session.get("organization_id")
+    display_tz = _get_display_tz(org_id, db)
+    pending = db.query(Signal).filter(
+        Signal.status == SignalStatus.PENDING,
+        Signal.organization_id == org_id,
+    ).all()
+    result = {}
+    for s in pending:
+        try:
+            entries = db.query(AuditLog).filter(
+                AuditLog.organization_id == org_id,
+                AuditLog.action == AuditAction.TASK_RUN,
+                AuditLog.ticker == s.ticker,
+            ).order_by(desc(AuditLog.created_at)).limit(20).all()
+            for entry in entries:
+                d = entry.detail or {}
+                if d.get("signal_id") == s.id:
+                    result[str(s.id)] = {
+                        "time":        _fmt_dt(str(entry.created_at), display_tz),
+                        "result":      d.get("result", ""),
+                        "close":       d.get("close"),
+                        "pivot":       d.get("pivot"),
+                        "data_source": d.get("data_source"),
+                        "delay_mins":  d.get("delay_mins"),
+                    }
+                    break
+        except Exception:
+            pass
+    return JSONResponse(result)
 
 
 @app.post("/signals/{signal_id}/skip")
@@ -1172,7 +1375,8 @@ async def signal_toggle_rule(
 @app.get("/watchlist", response_class=HTMLResponse)
 async def watchlist(
     request: Request,
-    label: int = Query(None),       # filter by label id; None = show all
+    label: int = Query(None),
+    exchange: str = Query("ALL"),
     db: Session = Depends(get_db)
 ):
     if not _auth(request):
@@ -1223,25 +1427,69 @@ async def watchlist(
                     pass
                 cache.set(cache_key, "attempted", expire_seconds=86400)  # 24 hours
 
-        # Check cache for PriceBar details
-        cache_key = f"latest_price_bar:{w.ticker}"
-        bar_data = cache.get(cache_key)
-        if bar_data is None:
-            bar = db.query(PriceBar).filter(PriceBar.ticker == w.ticker).order_by(desc(PriceBar.date)).first()
-            if bar:
-                bar_data = {
-                    "close": float(bar.close or 0),
-                    "ma_50": float(bar.ma_50 or 0),
-                    "ma_150": float(bar.ma_150 or 0),
-                    "ma_200": float(bar.ma_200 or 0),
-                    "high_52w": float(bar.high_52w or 0),
-                    "low_52w": float(bar.low_52w or 0),
-                    "rs_rating": float(bar.rs_rating or 0),
-                }
-                cache.set(cache_key, bar_data, expire_seconds=300)
-            else:
-                bar_data = {}
-                cache.set(cache_key, {}, expire_seconds=3600)
+        # ── Price data ───────────────────────────────────────────────────────
+        # For crypto: try live IR API first (cached 5 min), fall back to PriceBar.
+        # For equities: use PriceBar EOD close (refreshed daily at 5pm AEST).
+        # IMPORTANT: reset bar_data each iteration — without this, a crypto item's
+        # IR data bleeds into the next equity item in the loop.
+        bar_data = None
+        is_crypto_item = (getattr(w, "asset_type", "EQUITY") == "CRYPTO")
+        live_price_used = False
+
+        if is_crypto_item:
+            live_cache_key = f"live_price:{w.ticker}"
+            bar_data = cache.get(live_cache_key)
+            if bar_data is None:
+                try:
+                    from app.data.fetcher import get_intraday_price
+                    price_result = get_intraday_price(w.ticker, org_id, asset_type="CRYPTO")
+                    if price_result.get("ok") and price_result.get("price"):
+                        # Merge live price into bar_data; keep MA/RS from PriceBar
+                        bar = db.query(PriceBar).filter(PriceBar.ticker == w.ticker).order_by(desc(PriceBar.date)).first()
+                        bar_data = {
+                            "close":     float(price_result["price"]),
+                            "ma_50":     float(bar.ma_50  or 0) if bar else 0,
+                            "ma_150":    float(bar.ma_150 or 0) if bar else 0,
+                            "ma_200":    float(bar.ma_200 or 0) if bar else 0,
+                            "high_52w":  float(bar.high_52w or 0) if bar else 0,
+                            "low_52w":   float(bar.low_52w  or 0) if bar else 0,
+                            "rs_rating": float(bar.rs_rating or 0) if bar else 0,
+                            "bar_date":  str(bar.date) if bar and bar.date else None,
+                            "live_price": True,
+                            "data_source": price_result.get("data_source", "live"),
+                            "delay_mins":  price_result.get("delay_mins", 0),
+                        }
+                        cache.set(live_cache_key, bar_data, expire_seconds=300)  # 5-min TTL
+                    else:
+                        bar_data = None
+                except Exception:
+                    bar_data = None
+
+            if bar_data and bar_data.get("live_price"):
+                live_price_used = True
+
+        # Fall back to PriceBar (EOD) for equities or when live fetch fails
+        if not bar_data:
+            cache_key = f"latest_price_bar:{w.ticker}"
+            bar_data = cache.get(cache_key)
+            if bar_data is None:
+                bar = db.query(PriceBar).filter(PriceBar.ticker == w.ticker).order_by(desc(PriceBar.date)).first()
+                if bar:
+                    bar_data = {
+                        "close":     float(bar.close or 0),
+                        "ma_50":     float(bar.ma_50 or 0),
+                        "ma_150":    float(bar.ma_150 or 0),
+                        "ma_200":    float(bar.ma_200 or 0),
+                        "high_52w":  float(bar.high_52w or 0),
+                        "low_52w":   float(bar.low_52w  or 0),
+                        "rs_rating": float(bar.rs_rating or 0),
+                        "bar_date":  str(bar.date) if bar.date else None,
+                        "live_price": False,
+                    }
+                    cache.set(cache_key, bar_data, expire_seconds=300)
+                else:
+                    bar_data = {}
+                    cache.set(cache_key, {}, expire_seconds=3600)
 
         stats_data = bar_data if bar_data else None
 
@@ -1256,6 +1504,8 @@ async def watchlist(
         watchlist_data.append({
             "id": w.id,
             "ticker": w.ticker,
+            "exchange_key": getattr(w,"exchange_key","ASX") or "ASX",
+            "asset_type":   getattr(w,"asset_type","EQUITY") or "EQUITY",
             "company_name": company_name,
             "added": str(w.added_date),
             "by": w.added_by,
@@ -1267,7 +1517,23 @@ async def watchlist(
             "label": lbl,
         })
 
-    ctx["watchlist"] = watchlist_data
+    af = (exchange or "ALL").upper()
+    if af not in ("","ALL"):
+        watchlist_data = [w for w in watchlist_data if
+            (af=="ASX" and w.get("exchange_key","ASX")=="ASX") or
+            (af=="US"  and w.get("exchange_key","ASX") in ("NYSE","NASDAQ")) or
+            (af=="CRYPTO" and w.get("asset_type","EQUITY")=="CRYPTO")]
+    ef = _get_exchange_filters(org_id, db)
+    ee = []
+    try:
+        from app.models.exchange import ExchangeConfig as _EC
+        for e in db.query(_EC).filter(_EC.is_enabled==True).order_by(_EC.sort_order).all():
+            ee.append({"key":e.exchange_key,"name":e.display_name,"flag":e.flag_emoji or "","asset_type":e.asset_type})
+    except Exception:
+        db.rollback(); ee=[{"key":"ASX","name":"ASX","flag":"","asset_type":"EQUITY"}]
+    ctx.update({"enabled_exchanges":ee,"exchange_filters":ef,"active_exchange_filter":af,
+                "base_url":"/watchlist","extra_params":f"label={label}" if label is not None else "",
+                "watchlist":watchlist_data})
     return templates.TemplateResponse("trading/watchlist.html", ctx)
 
 
@@ -1329,10 +1595,21 @@ async def toggle_favourite(
         return RedirectResponse("/login", 302)
     org_id = request.session.get("organization_id")
     from app.models.signal import Watchlist, WatchlistStatus, WatchlistLabel
+    from app.models.market import Stock
 
     t = ticker.strip().upper()
-    if not t.endswith(".AX"):
-        t += ".AX"
+    
+    # Query Stock table to see if it's a known non-ASX or normalised ASX stock
+    stock = db.query(Stock).filter(Stock.ticker == t).first()
+    if not stock:
+        # If not found, and it doesn't end with .AX and isn't crypto (no "-"), default to ASX format
+        if not t.endswith(".AX") and not "-" in t:
+            t = f"{t}.AX"
+            stock = db.query(Stock).filter(Stock.ticker == t).first()
+
+    exchange_key = stock.exchange_key if stock else "ASX"
+    asset_type = stock.asset_type if stock else "EQUITY"
+    currency = stock.currency if stock else "AUD"
 
     # Find or create Favourites label
     fav_label = db.query(WatchlistLabel).filter(
@@ -1375,6 +1652,9 @@ async def toggle_favourite(
         # Not in watchlist -> Create new manual watchlist item with Favourites label
         w = Watchlist(
             ticker=t,
+            exchange_key=exchange_key,
+            asset_type=asset_type,
+            currency=currency,
             organization_id=org_id,
             status=WatchlistStatus.WATCHING,
             label_id=fav_label.id,
@@ -1497,18 +1777,43 @@ async def close_position(
 
 
 @app.post("/watchlist/add")
-async def watchlist_add(request: Request, ticker: str = Form(...), notes: str = Form(""), label_id: str = Form(""), db: Session = Depends(get_db)):
+async def watchlist_add(
+    request: Request,
+    ticker: str = Form(...),
+    notes: str = Form(""),
+    label_id: str = Form(""),
+    exchange_key: str = Form("ASX"),
+    db: Session = Depends(get_db),
+):
     if not _auth(request):
         return RedirectResponse("/login", 302)
-    # Super admins allowed in standard views under active organization context
     org_id = request.session.get("organization_id")
 
     t = ticker.strip().upper()
-    if not t.endswith(".AX"):
-        t += ".AX"
+    ek = exchange_key.strip() or "ASX"
+
+    # Normalise ticker for the exchange — do NOT blindly append .AX for non-ASX
+    if ek == "ASX":
+        if not t.endswith(".AX"):
+            t += ".AX"
+    # For all other exchanges (US, CRYPTO_*) pass the raw symbol through;
+    # screen_single_ticker / normalize_ticker handles the correct suffix.
+
+    # Determine asset_type so the task knows what rules to apply
+    is_crypto = ek == "CRYPTO" or ek.startswith("CRYPTO_")
+    asset_type = "CRYPTO" if is_crypto else "EQUITY"
+    currency   = "AUD" if ek == "ASX" else ("AUD" if ek == "CRYPTO_INDEPENDENTRESERVE" else "USD")
+
     lbl_id = int(label_id) if label_id.isdigit() else None
     from app.tasks.screening import screen_single_ticker
-    screen_single_ticker.delay(t, notes, organization_id=org_id, label_id=lbl_id)
+    screen_single_ticker.delay(
+        t, notes,
+        organization_id=org_id,
+        label_id=lbl_id,
+        exchange_key=ek,
+        asset_type=asset_type,
+        currency=currency,
+    )
     return RedirectResponse("/watchlist?msg=added", 302)
 
 
@@ -1528,8 +1833,14 @@ async def watchlist_promote(request: Request, item_id: int, db: Session = Depend
     # Immediately mark as signalled/processing to prevent double triggers
     w.status = WatchlistStatus.SIGNALLED
     db.commit()
-    
-    # Queue the slow parts in Celery
+
+    # Queue the slow parts in Celery.
+    # IMPORTANT: if queuing fails (Redis/worker outage, broker error) we MUST revert the
+    # status above — otherwise the item silently disappears from "Watching" (the /watchlist
+    # view filters status==WATCHING) with no Signal ever created and no feedback to the user.
+    # This is exactly what was happening with TRX: the optimistic flip to SIGNALLED was never
+    # rolled back when the background task could not run (worker offline — heartbeat stale),
+    # so the item vanished from the Watchlist and nothing ever appeared in Signals.
     try:
         from app.tasks.trading import promote_watchlist_item_task
         promote_watchlist_item_task.delay(
@@ -1540,8 +1851,24 @@ async def watchlist_promote(request: Request, item_id: int, db: Session = Depend
         )
     except Exception as e:
         from loguru import logger
-        logger.error(f"Failed to queue watchlist promotion: {e}")
-        
+        from app.models.signal import Watchlist as _Watchlist
+        from app.models.audit import AuditLog, AuditAction
+        logger.error(f"Failed to queue watchlist promotion for item {item_id} ({w.ticker}): {e}")
+        # Roll back the optimistic status flip so the item stays visible/actionable
+        w2 = db.query(_Watchlist).filter(_Watchlist.id == item_id, _Watchlist.organization_id == org_id).first()
+        if w2:
+            w2.status = WatchlistStatus.WATCHING
+            db.add(AuditLog(
+                action=AuditAction.TASK_ERROR,
+                ticker=w2.ticker,
+                actor=request.session.get("email", "dashboard"),
+                user_id=request.session.get("user_id"),
+                organization_id=org_id,
+                message=f"Manual promotion of {w2.ticker} failed to queue (worker/broker unavailable) — reverted to WATCHING. Error: {e}",
+            ))
+            db.commit()
+        return RedirectResponse("/watchlist?msg=promotion_failed", 302)
+
     return RedirectResponse("/signals?msg=promotion_queued", 302)
 
 
@@ -1598,14 +1925,14 @@ async def action_resume(request: Request, db: Session = Depends(get_db)):
 
 
 @app.post("/action/run-screener")
-async def action_run_screener(request: Request):
+async def action_run_screener(request: Request, exchange: str = Form("ASX")):
     """Queue the screener for the current org only — bypasses trading-day gate."""
     if not _auth(request):
         return RedirectResponse("/login", 302)
     org_id = request.session.get("organization_id")
     try:
         from app.tasks.screening import _run_screen_force
-        _run_screen_force.delay(organization_id=org_id)
+        _run_screen_force.delay(organization_id=org_id, exchange_key=exchange or "ASX")
     except Exception:
         pass
     return RedirectResponse("/signals?msg=screen", 302)
@@ -1622,12 +1949,12 @@ async def action_send_report(request: Request):
 
 
 @app.post("/action/evaluate-regime")
-async def action_evaluate_regime(request: Request):
+async def action_evaluate_regime(request: Request, exchange: str = Form("ASX")):
     if not _auth(request):
         return RedirectResponse("/login", 302)
     # Super admins allowed in standard views under active organization context
     from app.tasks.screening import evaluate_market_regime_task
-    evaluate_market_regime_task.delay()
+    evaluate_market_regime_task.delay(exchange_key=exchange or "ASX")
     return RedirectResponse("/admin/health?msg=regime", 302)
 
 
@@ -1642,13 +1969,39 @@ async def action_ping_worker(request: Request):
 
 
 @app.post("/action/refresh-data")
-async def action_refresh_data(request: Request):
+async def action_refresh_data(request: Request, exchange: str = Form(None)):
     if not _auth(request):
         return RedirectResponse("/login", 302)
-    # Super admins allowed in standard views under active organization context
-    from app.tasks.screening import refresh_price_data
-    refresh_price_data.delay()
+    exchange_key = exchange or None
+    is_crypto = exchange_key and (exchange_key == "CRYPTO" or exchange_key.startswith("CRYPTO_"))
+    from app.tasks.screening import refresh_price_data, refresh_crypto_universe
+    try:
+        if is_crypto:
+            # For crypto, chain: universe bootstrap → price refresh (bootstrap is fast if already seeded)
+            from celery import chain as _chain
+            effective_crypto_key = exchange_key if exchange_key != "CRYPTO" else "CRYPTO_INDEPENDENTRESERVE"
+            _chain(
+                refresh_crypto_universe.si(exchange_key=effective_crypto_key),
+                refresh_price_data.si(exchange_key=effective_crypto_key),
+            ).delay()
+        else:
+            refresh_price_data.delay(exchange_key=exchange_key)
+    except Exception:
+        refresh_price_data.delay(exchange_key=exchange_key)
     return RedirectResponse("/admin/health?msg=data", 302)
+
+
+@app.post("/action/seed-crypto")
+async def action_seed_crypto(request: Request, exchange: str = Form("CRYPTO_INDEPENDENTRESERVE")):
+    """Seed (or refresh) the crypto stock universe for an exchange."""
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.screening import refresh_crypto_universe
+    try:
+        refresh_crypto_universe.delay(exchange_key=exchange)
+    except Exception:
+        pass
+    return RedirectResponse("/admin/health?msg=crypto_seed", 302)
 
 
 @app.post("/action/full-setup")
@@ -1662,15 +2015,44 @@ async def action_full_setup(request: Request):
     return RedirectResponse("/admin/health?msg=setup", 302)
 
 
+@app.post("/action/dismiss-onboarding")
+async def action_dismiss_onboarding(request: Request, db: Session = Depends(get_db)):
+    """Dismiss onboarding guide by setting onboarding_completed to true."""
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    org_id = request.session.get("organization_id")
+    if org_id:
+        from app.models.config import SystemConfig
+        cfg = db.query(SystemConfig).filter(
+            SystemConfig.key == "onboarding_completed",
+            SystemConfig.organization_id == org_id
+        ).first()
+        if cfg:
+            cfg.value = "true"
+        else:
+            cfg = SystemConfig(
+                key="onboarding_completed",
+                value="true",
+                organization_id=org_id,
+                value_type="BOOLEAN",
+                label="Onboarding Completed",
+                description="Whether the organization has completed first-time setup",
+                group="general"
+            )
+            db.add(cfg)
+        db.commit()
+    return RedirectResponse("/", 302)
+
+
 @app.post("/action/force-screen")
-async def action_force_screen(request: Request):
+async def action_force_screen(request: Request, exchange: str = Form("ASX")):
     """Run screener for current org now, bypassing the trading-day gate."""
     if not _auth(request):
         return RedirectResponse("/login", 302)
     org_id = request.session.get("organization_id")
     try:
         from app.tasks.screening import _run_screen_force
-        _run_screen_force.delay(organization_id=org_id)
+        _run_screen_force.delay(organization_id=org_id, exchange_key=exchange or "ASX")
     except Exception:
         pass
     return RedirectResponse("/signals?msg=screen", 302)
@@ -1773,12 +2155,13 @@ async def admin_tasks(request: Request, db: Session = Depends(get_db)):
     } for l in logs]
 
     ctx.update({
-        "seed_logs":      seed_logs,
-        "last_log_id":    last_id,
-        "stock_count":    db.query(func.count(Stock.id)).scalar() or 0,
+        "seed_logs":       seed_logs,
+        "last_log_id":     last_id,
+        "stock_count":     db.query(func.count(Stock.id)).scalar() or 0,
         "price_bar_count": db.query(func.count(PriceBar.id)).scalar() or 0,
-        "signal_count":   db.query(func.count(Signal.id)).filter(Signal.signal_date == get_current_date(), Signal.organization_id == org_id).scalar() or 0,
+        "signal_count":    db.query(func.count(Signal.id)).filter(Signal.signal_date == get_current_date(), Signal.organization_id == org_id).scalar() or 0,
         "watchlist_count": db.query(func.count(Watchlist.id)).filter(Watchlist.status == WatchlistStatus.WATCHING, Watchlist.organization_id == org_id).scalar() or 0,
+        "exchange_filters": _get_exchange_filters(org_id, db),
     })
     return templates.TemplateResponse("admin/tasks.html", ctx)
 
@@ -1858,49 +2241,85 @@ async def admin_tasks_clear_log(request: Request, db: Session = Depends(get_db))
 
 @app.get("/admin/health", response_class=HTMLResponse)
 async def admin_health(request: Request, db: Session = Depends(get_db)):
-    if not _auth(request):
-        return RedirectResponse("/login", 302)
-    # Super admins allowed in standard views under active organization context
+    if not _auth(request): return RedirectResponse("/login", 302)
     org_id = request.session.get("organization_id")
-
-    from app.models.audit import AuditLog
+    from app.models.audit import AuditLog, AuditAction
     from app.models.account import Account
     from app.models.market import Stock, PriceBar
     from app.models.signal import Signal, Watchlist, WatchlistStatus
-    from sqlalchemy import func
-
-    ctx = _global(request, db)
-    account = db.query(Account).filter(Account.is_active == True, Account.organization_id == org_id).first()
-    try:
-        logs = db.query(AuditLog).filter(AuditLog.organization_id == org_id).order_by(desc(AuditLog.created_at)).limit(8).all()
-    except Exception:
-        logs = []
-
-    stock_count     = db.query(func.count(Stock.id)).scalar() or 0
-    price_bar_count = db.query(func.count(PriceBar.id)).scalar() or 0
-    today_bars      = db.query(func.count(PriceBar.id)).filter(PriceBar.date == get_current_date()).scalar() or 0
-    signal_count    = db.query(func.count(Signal.id)).filter(Signal.signal_date == get_current_date(), Signal.organization_id == org_id).scalar() or 0
-    watchlist_count = db.query(func.count(Watchlist.id)).filter(Watchlist.status == WatchlistStatus.WATCHING, Watchlist.organization_id == org_id).scalar() or 0
-    is_first_run    = stock_count == 0
-
-    ctx.update({
-        "capital": float(account.capital_aud) if account else 0,
-        "is_paper_account": account.is_paper if account else True,
-        "recent_logs": [{
-            "action": str(l.action).replace("AuditAction.", ""),
-            "ticker": l.ticker or "—",
-            "message": (l.message or "")[:60],
-            "actor": l.actor,
-            "time": _fmt_dt(str(l.created_at), ctx.get("display_tz", "UTC")),
-        } for l in logs],
-        # Diagnostics
-        "stock_count": stock_count,
-        "price_bar_count": price_bar_count,
-        "today_bars": today_bars,
-        "signal_count_today": signal_count,
-        "watchlist_count": watchlist_count,
-        "is_first_run": is_first_run,
-    })
+    from app.models.config import SystemConfig
+    from sqlalchemy import func, or_
+    ctx = _global(request, db); display_tz = ctx.get("display_tz","UTC")
+    account = db.query(Account).filter(Account.is_active==True,Account.organization_id==org_id).first()
+    try: logs=db.query(AuditLog).filter(AuditLog.organization_id==org_id).order_by(desc(AuditLog.created_at)).limit(10).all()
+    except Exception: logs=[]
+    ae_cfg=db.query(SystemConfig).filter(SystemConfig.key=="active_exchanges",SystemConfig.organization_id==org_id).first()
+    ae_str=(ae_cfg.value if ae_cfg else "ASX") or "ASX"
+    active_exchanges=[e.strip().upper() for e in ae_str.split(",") if e.strip()]
+    has_asx="ASX" in active_exchanges; has_us=any(e in active_exchanges for e in ("NYSE","NASDAQ","US")); has_crypto=any(e.startswith("CRYPTO") for e in active_exchanges)
+    exchange_regimes={}
+    for ek in (["ASX"] if has_asx else [])+(["NYSE"] if has_us else [])+([e for e in active_exchanges if e.startswith("CRYPTO")] if has_crypto else []):
+        rc=db.query(SystemConfig).filter(SystemConfig.key==f"last_market_regime_{ek}",SystemConfig.organization_id==org_id).first()
+        exchange_regimes[ek]=rc.value if rc else "Not evaluated"
+    stock_count=db.query(func.count(Stock.id)).filter(Stock.asset_type!="CRYPTO").scalar() or 0
+    crypto_count=db.query(func.count(Stock.id)).filter(Stock.asset_type=="CRYPTO").scalar() or 0
+    price_bar_count=db.query(func.count(PriceBar.id)).scalar() or 0
+    today_bars=db.query(func.count(PriceBar.id)).filter(PriceBar.date==get_current_date()).scalar() or 0
+    esig=db.query(func.count(Signal.id)).filter(Signal.signal_date==get_current_date(),Signal.organization_id==org_id,Signal.asset_type!="CRYPTO").scalar() or 0
+    csig=db.query(func.count(Signal.id)).filter(Signal.signal_date==get_current_date(),Signal.organization_id==org_id,Signal.asset_type=="CRYPTO").scalar() or 0
+    ewl=db.query(func.count(Watchlist.id)).filter(Watchlist.organization_id==org_id,Watchlist.status==WatchlistStatus.WATCHING,Watchlist.asset_type!="CRYPTO").scalar() or 0
+    cwl=db.query(func.count(Watchlist.id)).filter(Watchlist.organization_id==org_id,Watchlist.status==WatchlistStatus.WATCHING,Watchlist.asset_type=="CRYPTO").scalar() or 0
+    def _lr(kws, exch=None, actions=None):
+        """Look up the most recent audit log entry matching keywords + optional exchange prefix.
+        actions: list of AuditAction values to search; defaults to [TASK_RUN].
+        """
+        try:
+            if actions is None:
+                actions = [AuditAction.TASK_RUN]
+            q = db.query(AuditLog).filter(
+                AuditLog.action.in_(actions),
+                or_(*[AuditLog.message.ilike(f"%{kw}%") for kw in kws])
+            )
+            if exch:
+                q = q.filter(AuditLog.message.ilike(f"%{exch}%"))
+            log = q.order_by(desc(AuditLog.created_at)).first()
+            if log:
+                return {"time": _fmt_dt(str(log.created_at), display_tz), "raw": log.created_at, "msg": (log.message or "")[:100]}
+        except Exception:
+            pass
+        return None
+    task_runs={
+        # health_check writes HEALTH_CHECK action with "Heartbeat:" message
+        "heartbeat": _lr(["Heartbeat"], actions=[AuditAction.HEALTH_CHECK]),
+        # send_daily_report writes HEALTH_CHECK action
+        "report":    _lr(["Daily report", "daily report"], actions=[AuditAction.HEALTH_CHECK]),
+        # refresh_universe writes SYSTEM_STARTED — no exchange in message so no exch filter
+        "universe":  _lr(["Universe refreshed", "universe"], actions=[AuditAction.SYSTEM_STARTED, AuditAction.TASK_RUN]),
+        # refresh_price_data writes TASK_RUN with "[ASX] Price data" prefix (fixed in screening.py)
+        "price_asx":    _lr(["Price data", "price data"], "ASX"),
+        "price_us":     _lr(["Price data", "price data"], "NYSE") if has_us else None,
+        "price_crypto": _lr(["Price data", "price data"], "CRYPTO") if has_crypto else None,
+        # evaluate_market_regime_task writes MARKET_REGIME_CHANGE with "[ASX] Market regime:" prefix
+        "regime_asx":    _lr(["Market regime", "market regime"], "ASX",    actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]),
+        "regime_us":     _lr(["Market regime", "market regime"], "NYSE",   actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_us else None,
+        "regime_crypto": _lr(["Market regime", "market regime"], "CRYPTO", actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_crypto else None,
+        # screener writes SCREENER_RUN with "[ASX] Screen" prefix (fixed in screening.py)
+        "screen_asx":    _lr(["Screen", "screen"], "ASX",    actions=[AuditAction.SCREENER_RUN, AuditAction.TASK_RUN]),
+        "screen_us":     _lr(["Screen", "screen"], "NYSE",   actions=[AuditAction.SCREENER_RUN, AuditAction.TASK_RUN]) if has_us else None,
+        "screen_crypto": _lr(["Screen", "screen"], "CRYPTO", actions=[AuditAction.SCREENER_RUN, AuditAction.TASK_RUN]) if has_crypto else None,
+        # entry/exit checks write TASK_RUN with "[ASX] Entry check" / "[NYSE] Entry check" etc.
+        "entry_asx":    _lr(["Entry check", "entry trigger"], "ASX"),
+        "entry_us":     _lr(["Entry check"], "NYSE")   if has_us else None,
+        "entry_crypto": _lr(["Entry check"], "CRYPTO") if has_crypto else None,
+        "exit_asx":    _lr(["Exit check", "exit rule"], "ASX"),
+        "exit_crypto": _lr(["Exit check"], "CRYPTO") if has_crypto else None,
+    }
+    ctx.update({"capital":float(account.capital_aud) if account else 0,"is_paper_account":account.is_paper if account else True,
+        "recent_logs":[{"action":str(l.action).replace("AuditAction.",""),"ticker":l.ticker or "—","message":(l.message or "")[:80],"actor":l.actor,"time":_fmt_dt(str(l.created_at),display_tz)} for l in logs],
+        "has_asx":has_asx,"has_us":has_us,"has_crypto":has_crypto,"active_exchanges":active_exchanges,"exchange_regimes":exchange_regimes,
+        "stock_count":stock_count,"crypto_count":crypto_count,"price_bar_count":price_bar_count,"today_bars":today_bars,
+        "equity_signal_count":esig,"crypto_signal_count":csig,"equity_wl_count":ewl,"crypto_wl_count":cwl,
+        "signal_count_today":esig+csig,"watchlist_count":ewl+cwl,"is_first_run":stock_count==0 and crypto_count==0,"task_runs":task_runs})
     return templates.TemplateResponse("admin/health.html", ctx)
 
 
@@ -2080,8 +2499,90 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
 
     from app.models.config import SystemConfig
     ctx = _global(request, db)
+
+    # ── Group display metadata ────────────────────────────────────────────────
+    GROUP_META = {
+        "general":     {"icon": "⚙️",  "title": "General"},
+        "broker":      {"icon": "🏦",  "title": "Broker — IBKR"},
+        "trading":     {"icon": "📈",  "title": "Trading"},
+        "whatsapp":    {"icon": "💬",  "title": "Alert & Chat Channels"},
+        "data":        {"icon": "📡",  "title": "Data Sources"},
+        "risk":        {"icon": "🛡️",  "title": "Risk Management"},
+        "crypto":      {"icon": "₿",   "title": "Crypto Exchange"},
+        "system":      {"icon": "🔧",  "title": "System (Super Admin)"},
+        "reporting":   {"icon": "📊",  "title": "Reporting"},
+    }
+
+    # ── Per-key UI hints ──────────────────────────────────────────────────────
+    FIELD_HINTS = {
+        # General
+        "org_timezone":          {"control": "timezone_select", "options": [
+                                     ("Australia/Sydney","Australia/Sydney (AEST)"),
+                                     ("Australia/Melbourne","Australia/Melbourne"),
+                                     ("America/New_York","America/New_York (ET)"),
+                                     ("America/Chicago","America/Chicago (CT)"),
+                                     ("America/Los_Angeles","America/Los_Angeles (PT)"),
+                                     ("Europe/London","Europe/London (GMT/BST)"),
+                                     ("Asia/Tokyo","Asia/Tokyo (JST)"),
+                                     ("UTC","UTC"),
+                                 ]},
+        "active_exchanges":      {"control": "exchange_multiselect",
+                                  "hint_extra": "Select which exchanges to trade on. Crypto requires a configured API key below."},
+        "working_capital_currency": {"control": "readonly",
+                                     "hint_extra": "Set by Super Admin. Base currency used for position sizing."},
+        # Broker
+        "ibkr_account":          {"placeholder": "U1234567",       "hint_extra": "Your IBKR account number"},
+        "ibkr_username":         {"placeholder": "ibkr_username"},
+        "ibkr_password":         {"control": "password",
+                                  "hint_extra": "IBKR Gateway login password — stored encrypted"},
+        "ibkr_paper_mode":       {},   # boolean — auto-rendered by value_type
+        "ibkr_account_usd":      {"placeholder": "U9876543",       "hint_extra": "USD sub-account (leave blank to use same account)"},
+        "fx_audusd_override":    {"control": "number", "placeholder": "0.65", "step": "0.0001",
+                                  "hint_extra": "Manual AUD/USD rate override. Leave blank to fetch live."},
+        # Alerts & Chat
+        "notification_channel":  {"control": "select", "options": [
+                                     ("whatsapp", "WhatsApp"),
+                                     ("telegram", "Telegram"),
+                                 ],
+                                  "hint_extra": "Select the active alert and command communication channel"},
+        "telegram_enabled":      {},   # boolean
+        "telegram_bot_token":    {"control": "password", "hint_extra": "Telegram bot token from @BotFather"},
+        "telegram_chat_id":      {"placeholder": "123456789", "hint_extra": "Your Telegram user or group chat ID"},
+        "whatsapp_admin_number": {"placeholder": "61450325233",
+                                  "hint_extra": "Digits only, no + or spaces. E.g. 61450325233 for AU +61 450 325 233"},
+        "whatsapp_api_key":      {"control": "password", "hint_extra": "WAHA API key from your .env"},
+        "whatsapp_session_name": {"placeholder": "default",
+                                  "hint_extra": "WAHA session name. Use 'default' for shared WAHA Core instance."},
+        "whatsapp_enabled":      {},   # boolean
+        # Data
+        "fmp_api_key":           {"control": "password",
+                                  "hint_extra": "Financial Modeling Prep API key (free tier: 250 calls/day)",
+                                  "link_url": "https://financialmodelingprep.com/developer/docs/",
+                                  "link_text": "Get free key →"},
+        # Risk / trading
+        "weekly_injection_aud":  {"control": "number", "prefix": "A$", "placeholder": "1000",
+                                  "hint_extra": "Weekly capital added to the account for position sizing calculations"},
+        # Crypto
+        "crypto_exchange_key":   {"control": "crypto_exchange_select",
+                                  "hint_extra": "Active crypto exchange. Must also set API key/secret below."},
+        "crypto_api_key":        {"control": "password", "hint_extra": "Exchange API key"},
+        "crypto_api_secret":     {"control": "password", "hint_extra": "Exchange API secret"},
+        "crypto_testnet":        {},   # boolean
+    }
+
+    # ── Enabled exchanges (for multiselect chip UI) ───────────────────────────
+    enabled_exchanges = []
+    try:
+        from app.models.exchange import ExchangeConfig as _EC
+        for e in db.query(_EC).filter(_EC.is_enabled == True).order_by(_EC.sort_order).all():
+            enabled_exchanges.append({"key": e.exchange_key, "name": e.display_name,
+                                      "flag": e.flag_emoji or "", "asset_type": e.asset_type})
+    except Exception:
+        db.rollback()
+        enabled_exchanges = [{"key": "ASX", "name": "ASX", "flag": "🇦🇺", "asset_type": "EQUITY"}]
+
     configs = db.query(SystemConfig).filter(SystemConfig.organization_id == org_id).order_by(SystemConfig.group, SystemConfig.key).all()
-    by_group = {}
+    by_group: dict = {}
     HIDDEN_GROUPS = {"system"} if request.session.get("user_role") != "superadmin" else set()
     for c in configs:
         if c.group in HIDDEN_GROUPS:
@@ -2089,15 +2590,26 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
         grp = c.group or "general"
         if grp not in by_group:
             by_group[grp] = []
+        val = c.value or ""
         by_group[grp].append({
-            "id": c.id, "key": c.key,
-            "value": c.value if not c.is_secret else "",
-            "label": c.label or c.key,
+            "id":          c.id,
+            "key":         c.key,
+            "value":       val if not c.is_secret else "",
+            "label":       c.label or c.key,
             "description": c.description or "",
-            "is_secret": c.is_secret,
-            "value_type": c.value_type.value if hasattr(c.value_type, "value") else str(c.value_type),
+            "is_secret":   c.is_secret,
+            "value_type":  c.value_type.value if hasattr(c.value_type, "value") else str(c.value_type or "STRING"),
+            "has_value":   bool(val and val.strip()),
+            "hint":        FIELD_HINTS.get(c.key, {}),
         })
-    ctx.update({"configs_by_group": by_group, "saved": request.query_params.get("saved", "")})
+
+    ctx.update({
+        "configs_by_group":  by_group,
+        "group_meta":        GROUP_META,
+        "enabled_exchanges": enabled_exchanges,
+        "saved":             request.query_params.get("saved", ""),
+        "error":             request.query_params.get("error", ""),
+    })
     return templates.TemplateResponse("admin/config.html", ctx)
 
 
@@ -2127,7 +2639,10 @@ async def update_config(request: Request, config_id: int, value: str = Form(...)
         c.updated_by = request.session.get("email", "dashboard")
 
         # Synchronize working capital configuration with active Account capital
-        if c.key in ("working_capital_aud", "weekly_injection_aud") and c.organization_id:
+        # NOTE: only working_capital_aud drives account.capital_aud.
+        # weekly_injection_aud is stored as a config reference only — it must NOT
+        # overwrite capital_aud, which is the position-sizing basis.
+        if c.key == "working_capital_aud" and c.organization_id:
             from app.models.account import Account
             account = db.query(Account).filter(Account.is_active == True, Account.organization_id == c.organization_id).first()
             if account:
@@ -2155,7 +2670,7 @@ async def update_config(request: Request, config_id: int, value: str = Form(...)
                 if c:
                     c.value = value
                     c.updated_by = request.session.get("email", "dashboard")
-                    if c.key in ("working_capital_aud", "weekly_injection_aud") and c.organization_id:
+                    if c.key == "working_capital_aud" and c.organization_id:
                         from app.models.account import Account
                         account = db.query(Account).filter(Account.is_active == True, Account.organization_id == c.organization_id).first()
                         if account:
@@ -2178,25 +2693,78 @@ async def admin_audit(request: Request, db: Session = Depends(get_db)):
 
     from app.models.audit import AuditLog, AuditAction
     ctx = _global(request, db)
-    action_f = request.query_params.get("action", "ALL")
-    ticker_f = request.query_params.get("ticker", "").strip().upper()
-
-    actor_f = request.query_params.get("actor", "").strip()
+    action_f   = request.query_params.get("action", "ALL")
+    ticker_f   = request.query_params.get("ticker", "").strip().upper()
+    actor_f    = request.query_params.get("actor", "").strip()
+    exchange_f = request.query_params.get("exchange", "ALL").upper()
 
     q = db.query(AuditLog).filter(AuditLog.organization_id == org_id).order_by(desc(AuditLog.created_at))
     if action_f != "ALL":
         q = q.filter(AuditLog.action == action_f)
     if ticker_f:
-        t = ticker_f if ticker_f.endswith(".AX") else ticker_f + ".AX"
-        q = q.filter(AuditLog.ticker == t)
+        # Allow bare code (BHP/BTC/AAPL) or full ticker (BHP.AX / BTC-USD / AAPL)
+        t_asx    = ticker_f if ticker_f.endswith(".AX")   else ticker_f + ".AX"
+        t_crypto = ticker_f if ticker_f.endswith("-USD")  else ticker_f + "-USD"
+        q = q.filter(or_(AuditLog.ticker == ticker_f, AuditLog.ticker == t_asx, AuditLog.ticker == t_crypto))
     if actor_f:
         q = q.filter(AuditLog.actor.ilike(f"%{actor_f}%"))
+    # Exchange filter.
+    # Rows WITH a ticker: filter by suffix (.AX = ASX, -USD/-USDT = CRYPTO, bare = US).
+    # Rows WITHOUT a ticker (TASK_RUN, CONFIG_CHANGED, etc.): filter by the [EXCHANGE]
+    # prefix that the task log writer prepends to messages (e.g. "[ASX] Entry check …",
+    # "[CRYPTO] Entry check …"). Without this second clause every exchange filter would
+    # show ALL ticker-less events, which is the bug the user reported.
+    if exchange_f not in ("", "ALL"):
+        from sqlalchemy import and_ as _and
+        if exchange_f == "ASX":
+            q = q.filter(or_(
+                AuditLog.ticker.like("%.AX"),
+                _and(
+                    or_(AuditLog.ticker == None, AuditLog.ticker == ""),
+                    or_(
+                        AuditLog.message.like("[ASX]%"),
+                        _and(
+                            ~AuditLog.message.like("[CRYPTO%"),
+                            ~AuditLog.message.like("[NYSE%"),
+                            ~AuditLog.message.like("[NASDAQ%"),
+                        )
+                    )
+                )
+            ))
+        elif exchange_f == "CRYPTO":
+            q = q.filter(or_(
+                AuditLog.ticker.like("%-USD"),
+                AuditLog.ticker.like("%-USDT"),
+                AuditLog.ticker.like("%-AUD"),
+                _and(
+                    or_(AuditLog.ticker == None, AuditLog.ticker == ""),
+                    AuditLog.message.like("[CRYPTO]%")
+                )
+            ))
+        elif exchange_f == "US":
+            q = q.filter(or_(
+                _and(
+                    AuditLog.ticker != None,
+                    AuditLog.ticker != "",
+                    ~AuditLog.ticker.like("%.AX"),
+                    ~AuditLog.ticker.like("%-USD%"),
+                ),
+                _and(
+                    or_(AuditLog.ticker == None, AuditLog.ticker == ""),
+                    or_(
+                        AuditLog.message.like("[NYSE]%"),
+                        AuditLog.message.like("[NASDAQ]%"),
+                        AuditLog.message.like("[US]%"),
+                    )
+                )
+            ))
 
     try:
         logs = q.limit(200).all()
     except Exception:
         logs = []
     audit_tz = _get_display_tz(org_id, db)
+    ef = _get_exchange_filters(org_id, db)
     ctx.update({
         "logs": [{"time": _fmt_dt(str(l.created_at), audit_tz), "action": str(l.action).replace("AuditAction.", ""),
                   "actor": l.actor or "system", "ticker": l.ticker or "—",
@@ -2207,13 +2775,75 @@ async def admin_audit(request: Request, db: Session = Depends(get_db)):
         "filter_action": action_f,
         "filter_ticker": ticker_f,
         "filter_actor": actor_f,
+        "exchange_filters": ef,
+        "active_exchange_filter": exchange_f,
+        "base_url": "/admin/audit",
     })
     return templates.TemplateResponse("admin/audit.html", ctx)
 
 
 # ===========================================================================
-# WHATSAPP WEBHOOK + STATUS PAGE
+# COMMUNICATIONS HUB — WEBHOOKS + ADMIN CONSOLE
 # ===========================================================================
+
+@app.post("/webhook/telegram")
+async def webhook_telegram(request: Request, db: Session = Depends(get_db)):
+    """
+    Handle incoming messages from Telegram Bot API.
+    Security: incoming chat_id must match a telegram_chat_id in SystemConfig.
+    """
+    from fastapi.responses import JSONResponse
+    from app.agent.commands import AgentCommandHandler
+    from app.notifications.telegram import TelegramNotifier
+    from app.models.config import SystemConfig
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
+
+    msg = body.get("message")
+    if not msg:
+        return JSONResponse({"ok": True}) # Ignore edits/other updates
+
+    chat_id = str(msg.get("chat", {}).get("id", ""))
+    text    = msg.get("text", "").strip()
+    user_id = str(msg.get("from", {}).get("id", ""))
+
+    if not chat_id or not text:
+        return JSONResponse({"ok": True})
+
+    # Look up organization by telegram_chat_id
+    org_id = None
+    config = db.query(SystemConfig).filter(
+        SystemConfig.key == "telegram_chat_id",
+        SystemConfig.value == chat_id
+    ).first()
+    
+    if config:
+        org_id = config.organization_id
+    else:
+        # Fallback: check if the notification_channel is telegram and this matches a global one
+        # Or just log warning
+        logger.warning(f"Telegram message from unknown chat {chat_id} — ignored")
+        return JSONResponse({"ok": True})
+
+    # Check if Telegram is enabled
+    cfg_enabled = db.query(SystemConfig).filter(
+        SystemConfig.key == "telegram_enabled",
+        SystemConfig.organization_id == org_id
+    ).first()
+    if cfg_enabled and cfg_enabled.value.lower() not in ("true", "1", "yes"):
+        return JSONResponse({"ok": True})
+
+    handler  = AgentCommandHandler(organization_id=org_id)
+    response = handler.handle(text, f"telegram:{chat_id}")
+
+    notifier = TelegramNotifier(organization_id=org_id)
+    notifier.send(response, chat_id=chat_id)
+
+    return JSONResponse({"ok": True})
+
 
 @app.post("/webhook/whatsapp")
 async def webhook_whatsapp(request: Request, db: Session = Depends(get_db)):
@@ -2251,7 +2881,8 @@ async def webhook_whatsapp(request: Request, db: Session = Depends(get_db)):
         sender_number = sender_number.lstrip("+").replace(" ", "")
         
         from app.models.config import SystemConfig
-        configs = db.query(SystemConfig).filter(SystemConfig.key == "whatsapp_admin_number").all()
+        # Order by organization_id DESC to prioritize custom organizations (e.g. Org 10) over Default Org (Org 1)
+        configs = db.query(SystemConfig).filter(SystemConfig.key == "whatsapp_admin_number").order_by(SystemConfig.organization_id.desc()).all()
         for cfg in configs:
             if cfg.value:
                 val_clean = cfg.value.lstrip("+").replace(" ", "")
@@ -2294,11 +2925,24 @@ async def webhook_whatsapp(request: Request, db: Session = Depends(get_db)):
         logger.info(f"WAHA session status for {session_name} → {status}")
         return JSONResponse({"ok": True})
 
-    if event != "message":
+    if event not in ("message", "message.any"):
         return JSONResponse({"ok": True})
 
-    if is_from_me or not text:
+    if not text:
         return JSONResponse({"ok": True})
+
+    # If the message is from me, only allow it to proceed if it is a valid VCPilot command.
+    # This prevents infinite message loops when the bot replies to itself.
+    if is_from_me:
+        cmd_word = text.split()[0].upper() if text.split() else ""
+        valid_commands = {
+            "STATUS", "POSITIONS", "SIGNALS", "WATCHLIST", "MARKET", 
+            "PAUSE", "RESUME", "REPORT", "SKIP", "UNSKIP", "EXIT", 
+            "STOP", "RULE", "CONFIG", "HELP"
+        }
+        if cmd_word not in valid_commands:
+            return JSONResponse({"ok": True})
+        logger.debug(f"WAHA webhook: allowing self-message command '{cmd_word}'")
 
     # Security: only respond to the configured admin number for this organization
     admin_number = get_org_cfg("whatsapp_admin_number")
@@ -2318,40 +2962,65 @@ async def webhook_whatsapp(request: Request, db: Session = Depends(get_db)):
     notifier = WhatsAppNotifier(organization_id=org_id)
     notifier.send(response, chat_id=from_jid)
 
+    return JSONResponse({"ok": True})
+
     return JSONResponse({"ok": True, "replied": response[:80]})
 
 
-@app.get("/admin/whatsapp", response_class=HTMLResponse)
-async def admin_whatsapp(request: Request, db: Session = Depends(get_db)):
-    """WhatsApp integration status — shows session state, QR code, test button."""
+@app.get("/admin/whatsapp")
+async def admin_whatsapp_redirect():
+    return RedirectResponse("/admin/comms", 302)
+
+
+@app.get("/admin/comms", response_class=HTMLResponse)
+async def admin_comms(request: Request, db: Session = Depends(get_db)):
+    """Communications hub — status for Telegram and WhatsApp integration."""
     if not _auth(request):
         return RedirectResponse("/login", 302)
-    # Super admins allowed in standard views under active organization context
     org_id = request.session.get("organization_id")
 
     from app.notifications.whatsapp import WhatsAppNotifier
+    from app.notifications.telegram import TelegramNotifier
     from app.models.audit import AuditLog, AuditAction
     from app.config import settings
+    import httpx
 
     ctx = _global(request, db)
-
-    # WAHA calls are all wrapped — if WAHA container is down, page still loads
+    
+    # ── WhatsApp Context ──────────────────────────────────────────────────
     try:
-        notifier     = WhatsAppNotifier(organization_id=org_id)
-        session_info = notifier.get_session_status()
-        status       = session_info.get("status", "UNKNOWN")
-        qr_b64       = notifier.get_qr() if status in ("SCAN_QR_CODE", "STARTING") else None
-        wa_session   = notifier.session
-        admin_jid    = notifier.admin_jid or ""
-        admin_number = admin_jid.split("@")[0] if admin_jid else ""
+        wa_notifier  = WhatsAppNotifier(organization_id=org_id)
+        wa_session_info = wa_notifier.get_session_status()
+        wa_status    = wa_session_info.get("status", "UNKNOWN")
+        wa_qr_b64    = wa_notifier.get_qr() if wa_status in ("SCAN_QR_CODE", "STARTING") else None
+        wa_session_name = wa_notifier.session
+        wa_admin_jid = wa_notifier.admin_jid or ""
+        wa_admin_number = wa_admin_jid.split("@")[0] if wa_admin_jid else ""
     except Exception as _e:
-        logger.warning(f"WhatsApp page: WAHA unreachable — {_e}")
-        status = "UNKNOWN"
-        qr_b64 = None
-        wa_session = "—"
-        admin_jid = ""
-        admin_number = ""
+        wa_status = "UNKNOWN"
+        wa_qr_b64 = None
+        wa_session_name = "—"
+        wa_admin_jid = ""
+        wa_admin_number = ""
 
+    # ── Telegram Context ──────────────────────────────────────────────────
+    tg_status = "NOT_CONFIGURED"
+    tg_bot_info = {}
+    try:
+        tg_notifier = TelegramNotifier(organization_id=org_id)
+        if tg_notifier.token:
+            # Check bot token validity
+            resp = httpx.get(f"https://api.telegram.org/bot{tg_notifier.token}/getMe", timeout=5)
+            if resp.status_code == 200:
+                tg_status = "CONNECTED"
+                tg_bot_info = resp.json().get("result", {})
+            else:
+                tg_status = "INVALID_TOKEN"
+        tg_chat_id = tg_notifier.chat_id
+    except Exception as _e:
+        tg_status = "ERROR"
+
+    # ── Recent Commands ───────────────────────────────────────────────────
     try:
         recent_cmds = db.query(AuditLog).filter(
             AuditLog.action == AuditAction.AGENT_COMMAND,
@@ -2361,13 +3030,14 @@ async def admin_whatsapp(request: Request, db: Session = Depends(get_db)):
         recent_cmds = []
 
     ctx.update({
-        "wa_status":       status,
-        "wa_session":      wa_session,
-        "wa_url":          settings.waha_api_url,
-        "admin_jid":       admin_jid,
-        "admin_number":    admin_number,
-        "hook_url":        settings.waha_hook_url,
-        "qr_b64":          qr_b64,
+        "wa_status":       wa_status,
+        "wa_session":      wa_session_name,
+        "wa_admin_number": wa_admin_number,
+        "wa_qr_b64":       wa_qr_b64,
+        "tg_status":       tg_status,
+        "tg_bot_info":     tg_bot_info,
+        "tg_chat_id":      tg_chat_id,
+        "tg_webhook_url":  f"{str(request.base_url).rstrip('/')}/webhook/telegram",
         "recent_commands": [
             {"time":    _fmt_dt(str(l.created_at), ctx.get("display_tz", "UTC")),
              "message": (l.detail or {}).get("message", ""),
@@ -2376,41 +3046,89 @@ async def admin_whatsapp(request: Request, db: Session = Depends(get_db)):
         ],
         "msg": request.query_params.get("msg", ""),
     })
-    return templates.TemplateResponse("admin/whatsapp.html", ctx)
+    return templates.TemplateResponse("admin/comms.html", ctx)
 
 
 @app.post("/admin/whatsapp/start-session")
 async def whatsapp_start_session(request: Request):
-    """
-    Force-restart the WAHA session.
-    Stops any existing session and starts fresh → puts it into SCAN_QR_CODE state.
-    """
+    """Force-restart the WAHA session."""
     if not _auth(request):
         return RedirectResponse("/login", 302)
     org_id = request.session.get("organization_id")
-
     from app.notifications.whatsapp import WhatsAppNotifier
     new_status = WhatsAppNotifier(organization_id=org_id).restart_session()
-    # Redirect with a flash that tells the page what happened
     if new_status == "SCAN_QR_CODE":
-        return RedirectResponse("/admin/whatsapp?msg=scan_qr", 302)
+        return RedirectResponse("/admin/comms?msg=scan_qr", 302)
     elif new_status == "WORKING":
-        return RedirectResponse("/admin/whatsapp?msg=already_working", 302)
+        return RedirectResponse("/admin/comms?msg=already_working", 302)
     else:
-        return RedirectResponse(f"/admin/whatsapp?msg=started", 302)
+        return RedirectResponse(f"/admin/comms?msg=started", 302)
 
 
-@app.post("/admin/whatsapp/send-test")
-async def whatsapp_send_test(request: Request):
-    """Send a test message to the admin number to verify the integration."""
+@app.post("/admin/telegram/set-webhook")
+async def telegram_set_webhook(request: Request):
+    """Register the VCPilot webhook with Telegram."""
     if not _auth(request):
         return RedirectResponse("/login", 302)
-    # Super admins allowed in standard views under active organization context
+    org_id = request.session.get("organization_id")
+    
+    from app.notifications.telegram import TelegramNotifier
+    import httpx
+    
+    notifier = TelegramNotifier(organization_id=org_id)
+    if not notifier.token:
+        return RedirectResponse("/admin/comms?msg=tg_no_token", 302)
+        
+    hook_url = f"{str(request.base_url).rstrip('/')}/webhook/telegram"
+    # For safety, ensure it's HTTPS if not localhost
+    if "localhost" not in hook_url and "0.0.0.0" not in hook_url and not hook_url.startswith("https"):
+        logger.warning(f"Telegram webhook registration: URL is not HTTPS ({hook_url}). Telegram requires HTTPS.")
+        
+    try:
+        url = f"https://api.telegram.org/bot{notifier.token}/setWebhook"
+        resp = httpx.post(url, data={"url": hook_url}, timeout=10)
+        ok = resp.status_code == 200 and resp.json().get("ok")
+        return RedirectResponse(f"/admin/comms?msg={'tg_hook_ok' if ok else 'tg_hook_fail'}", 302)
+    except Exception as e:
+        logger.error(f"Telegram setWebhook failed: {e}")
+        return RedirectResponse("/admin/comms?msg=tg_hook_fail", 302)
+
+
+@app.post("/admin/comms/send-test")
+async def comms_send_test(request: Request):
+    """Send a test message to the active notifier integration."""
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
     org_id = request.session.get("organization_id")
 
-    from app.notifications.whatsapp import WhatsAppNotifier
-    ok = WhatsAppNotifier(organization_id=org_id).send("✅ VCPilot test message — WhatsApp integration is working!")
-    return RedirectResponse(f"/admin/whatsapp?msg={'test_ok' if ok else 'test_fail'}", 302)
+    from app.notifications import get_notifier
+    notifier = get_notifier(organization_id=org_id)
+    ok = notifier.send("✅ VCPilot test message — integration is working!")
+    return RedirectResponse(f"/admin/comms?msg={'test_ok' if ok else 'test_fail'}", 302)
+
+
+@app.post("/admin/comms/console-command")
+async def comms_console_command(
+    request: Request,
+    command: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """Execute a command from the web-based interactive chat console."""
+    from fastapi.responses import JSONResponse
+    if not _auth(request):
+        return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+    org_id = request.session.get("organization_id")
+    if not org_id:
+        return JSONResponse({"ok": False, "error": "No organization context"}, status_code=400)
+
+    from app.agent.commands import AgentCommandHandler
+    # Use a specific sender for console executions
+    sender_id = f"console_user_{request.session.get('user_id', 'unknown')}"
+
+    handler = AgentCommandHandler(organization_id=org_id)
+    response = handler.handle(command.strip(), sender_id)
+
+    return {"ok": True, "response": response}
 
 
 # ===========================================================================
@@ -2424,6 +3142,7 @@ async def admin_data_log(
     ticker: str = Query(None),
     window: str = Query("latest"),   # latest | 15 | 30 | 60 | today
     only_confirmed: bool = Query(False),
+    exchange: str = Query("ALL"),
 ):
     """
     Admin Data Log — shows per-signal intraday metric snapshots captured every
@@ -2462,6 +3181,17 @@ async def admin_data_log(
         q = q.filter(EntryCheckLog.ticker == ticker.upper().strip())
     if only_confirmed:
         q = q.filter(EntryCheckLog.breakout_confirmed == True)
+    # Exchange filter — use the stored exchange_key (canonical source), not ticker-string guessing
+    exchange_f = (exchange or "ALL").upper()
+    if exchange_f not in ("", "ALL"):
+        if exchange_f == "ASX":
+            q = q.filter(EntryCheckLog.exchange_key == "ASX")
+        elif exchange_f == "CRYPTO":
+            q = q.filter(EntryCheckLog.exchange_key.like("CRYPTO%"))
+        elif exchange_f == "US":
+            q = q.filter(EntryCheckLog.exchange_key.in_(["NYSE", "NASDAQ"]))
+        else:
+            q = q.filter(EntryCheckLog.exchange_key == exchange_f)
 
     logs = q.order_by(desc(EntryCheckLog.checked_at)).limit(200).all()
 
@@ -2501,11 +3231,13 @@ async def admin_data_log(
         ]
         checked_local = _fmt_dt(str(log.checked_at), ctx.get("display_tz", "UTC"))
         source_label  = "IBKR Real-Time" if log.data_source == "ibkr" else (
-                         "EOD Fallback"   if log.data_source == "eod_fallback" else
-                         "yfinance ~20 min delay"
+                         "IR Real-Time"         if log.data_source == "independentreserve" else
+                         "EOD Fallback"         if log.data_source == "eod_fallback" else
+                         "yfinance (~20 min delayed)"
                         )
-        source_color  = "pos" if log.data_source == "ibkr" else (
-                         "warn" if log.data_source == "eod_fallback" else "warn"
+        source_color  = "pos"  if log.data_source in ("ibkr", "independentreserve") else (
+                         "warn" if log.data_source == "eod_fallback" else
+                         "neg"  # yfinance for crypto = stale, flag red
                         )
         rows.append({
             "id":               log.id,
@@ -2535,14 +3267,19 @@ async def admin_data_log(
     # Distinct tickers for filter dropdown
     all_tickers = sorted(set(r["ticker"] for r in rows))
 
+    ef = _get_exchange_filters(org_id, db)
     ctx.update({
-        "rows":           rows,
-        "ticker":         ticker or "",
-        "window":         window,
-        "only_confirmed": only_confirmed,
-        "all_tickers":    all_tickers,
-        "total":          len(rows),
-        "msg":            request.query_params.get("msg", ""),
+        "rows":                   rows,
+        "ticker":                 ticker or "",
+        "window":                 window,
+        "only_confirmed":         only_confirmed,
+        "all_tickers":            all_tickers,
+        "total":                  len(rows),
+        "msg":                    request.query_params.get("msg", ""),
+        "exchange_filters":       ef,
+        "active_exchange_filter": exchange_f,
+        "base_url":               "/admin/data-log",
+        "extra_params":           f"window={window}" + (f"&ticker={ticker}" if ticker else "") + ("&only_confirmed=true" if only_confirmed else ""),
     })
     return templates.TemplateResponse("admin/data_log.html", ctx)
 
@@ -2701,6 +3438,10 @@ async def superadmin_organizations_create(
         ("whatsapp_admin_number", "", ConfigValueType.STRING, "WhatsApp Admin Number", "Number to send alerts and receive commands JID format"),
         ("whatsapp_api_key", settings.waha_api_key, ConfigValueType.STRING, "WhatsApp API Key", "API key for the WhatsApp (WAHA) service", True),
         ("whatsapp_session_name", "default", ConfigValueType.STRING, "WhatsApp Session Name", "WAHA session name (always 'default' for WAHA Core; use WAHA Plus for per-org sessions)"),
+        ("notification_channel", "telegram", ConfigValueType.STRING, "Notification Channel", "Active communication channel ('whatsapp' or 'telegram')"),
+        ("telegram_enabled", "true", ConfigValueType.BOOLEAN, "Telegram Alerts Enabled", "Enable or disable Telegram notifications"),
+        ("telegram_bot_token", "", ConfigValueType.STRING, "Telegram Bot Token", "The Telegram Bot Token from @BotFather", True),
+        ("telegram_chat_id", "", ConfigValueType.STRING, "Telegram Chat ID", "The Telegram Chat ID to send alerts to"),
         ("ibkr_account", "", ConfigValueType.STRING, "IBKR Account ID", "Interactive Brokers account number"),
         ("ibkr_username", "", ConfigValueType.STRING, "IBKR Username", "Interactive Brokers login username"),
         ("ibkr_password", "", ConfigValueType.STRING, "IBKR Password", "Interactive Brokers login password", True),
@@ -2714,7 +3455,7 @@ async def superadmin_organizations_create(
         db.add(SystemConfig(
             key=key, value=val, value_type=vtype, label=label,
             description=desc, is_secret=is_sec, organization_id=org.id,
-            group="broker" if "ibkr" in key else ("whatsapp" if "whatsapp" in key else "general")
+            group="broker" if "ibkr" in key else ("whatsapp" if ("whatsapp" in key or "telegram" in key or "notification" in key) else "general")
         ))
 
     # 5. Clone default templates to RuleConfig for the new organization
@@ -2780,6 +3521,7 @@ async def superadmin_org_detail(org_id: int, request: Request, db: Session = Dep
     from app.models.account import Organization, Account
     from app.models.auth import User
     from app.models.audit import AuditLog
+    from app.models.config import SystemConfig
 
     org = db.query(Organization).filter(Organization.id == org_id).first()
     if not org:
@@ -2793,12 +3535,33 @@ async def superadmin_org_detail(org_id: int, request: Request, db: Session = Dep
     except Exception:
         logs = []
 
+    # MCP credentials for this org
+    from app.models.mcp import MCPCredential, MCP_ALL_SCOPES, SCOPE_DESCRIPTIONS
+    mcp_credentials = db.query(MCPCredential).filter(
+        MCPCredential.organization_id == org_id,
+    ).order_by(MCPCredential.created_at.desc()).all()
+
+    from app.utils.cache import cache
+    for cred in mcp_credentials:
+        cred.plain_secret = cache.get(f"mcp_secret:{cred.client_id}")
+
+    # MCP base URL (global SystemConfig, no org_id)
+    mcp_base_url_cfg = db.query(SystemConfig).filter(
+        SystemConfig.key == "mcp_base_url",
+        SystemConfig.organization_id == None,
+    ).first()
+    mcp_base_url = (mcp_base_url_cfg.value if mcp_base_url_cfg else "https://vcpilot.astradigital.com.au").rstrip("/")
+
     ctx.update({
         "organization": org,
         "users": users,
         "accounts": accounts,
         "logs": logs,
         "msg": request.query_params.get("msg", ""),
+        "mcp_credentials": mcp_credentials,
+        "mcp_base_url": mcp_base_url,
+        "mcp_all_scopes": MCP_ALL_SCOPES,
+        "mcp_scope_descriptions": SCOPE_DESCRIPTIONS,
     })
     return templates.TemplateResponse("superadmin/org_detail.html", ctx)
 
@@ -2875,12 +3638,13 @@ async def superadmin_rules(request: Request, db: Session = Depends(get_db)):
         "ENTRY": "Entry Rules",              "EXIT_DEFENSIVE": "Defensive Exits",
         "EXIT_OFFENSIVE": "Offensive Exits", "POSITION_SIZING": "Position Sizing",
         "PORTFOLIO": "Portfolio Rules",      "EARNINGS": "Earnings Rules",
+        "CRYPTO": "Crypto Rules",
     }
     CATEGORY_ICONS = {
         "TREND_TEMPLATE": "📈", "FUNDAMENTAL": "📊", "VCP": "🔄",
         "MARKET_REGIME": "🌡️",  "ENTRY": "🎯",       "EXIT_DEFENSIVE": "🛑",
         "EXIT_OFFENSIVE": "💰", "POSITION_SIZING": "⚖️", "PORTFOLIO": "🗂️",
-        "EARNINGS": "📅",
+        "EARNINGS": "📅",       "CRYPTO": "₿",
     }
 
     rules_by_cat = {}
@@ -2897,6 +3661,7 @@ async def superadmin_rules(request: Request, db: Session = Depends(get_db)):
             "threshold_min": float(r.threshold_min) if r.threshold_min else 0,
             "threshold_max": float(r.threshold_max) if r.threshold_max else 999,
             "tier_overrides": r.tier_overrides or {},
+            "asset_types": r.asset_types or "BOTH",
         })
 
     ctx.update({
@@ -3287,18 +4052,20 @@ async def superadmin_user_delete(user_id: int, request: Request, db: Session = D
 async def superadmin_data(
     request: Request,
     db: Session = Depends(get_db),
-    tab: str = Query("universe"),       # universe | custom
+    tab: str = Query("universe"),       # universe | us | crypto | custom
     search: str = Query(""),
     sector: str = Query(""),
+    exchange: str = Query(""),          # optional exchange_key filter within a tab
     sort_by: str = Query("ticker"),     # ticker | rs_rating | last_price | market_cap | vol_ratio
     sort_dir: str = Query("asc"),
     page: int = Query(1),
 ):
     """
-    Super Admin Data page — two-tab view:
-      Tab 1 (universe): All ASX200/active stocks with their latest PriceBar metrics.
-      Tab 2 (custom):   Custom/non-universe stocks added per-org via watchlist.
-    Interactive: sortable columns, search, sector filter, pagination.
+    Super Admin Data page — exchange-aware tabs:
+      Tab 1 (universe): ASX200 stocks with latest PriceBar metrics.
+      Tab 2 (us):       US equities (NYSE/NASDAQ) tracked in DB.
+      Tab 3 (crypto):   Crypto assets tracked in DB.
+      Tab 4 (custom):   Per-org manually added stocks not in the main universe.
     """
     if not _auth(request):
         return RedirectResponse("/login", 302)
@@ -3308,14 +4075,76 @@ async def superadmin_data(
     from app.models.market import Stock, PriceBar
     from app.models.signal import Watchlist
     from app.models.account import Organization
-    from sqlalchemy import func, and_
+    from sqlalchemy import func, and_, text as _text
 
     ctx = _global(request, db)
     per_page = 50
 
+    def _build_equity_rows(stocks_page, bar_map):
+        rows = []
+        for s in stocks_page:
+            bar = bar_map.get(s.ticker)
+            rows.append({
+                "ticker":        s.ticker,
+                "display_code":  getattr(s, "asx_code", None) or s.ticker.replace(".AX", "").replace("-USD", ""),
+                "asx_code":      getattr(s, "asx_code", None) or "",
+                "exchange_key":  getattr(s, "exchange_key", "ASX") or "ASX",
+                "name":          s.name or "",
+                "sector":        s.sector or "",
+                "industry":      getattr(s, "industry", None) or "",
+                "in_asx200":     getattr(s, "in_asx200", False) or False,
+                "asset_type":    getattr(s, "asset_type", "EQUITY") or "EQUITY",
+                "currency":      getattr(s, "currency", "AUD") or "AUD",
+                "market_cap":    int(s.market_cap) if s.market_cap else None,
+                "last_price":    float(s.last_price) if s.last_price else None,
+                "last_updated":  str(s.last_updated)[:10] if s.last_updated else "",
+                "bar_date":      str(bar.date) if bar else "",
+                "close":         float(bar.close)          if bar and bar.close          else None,
+                "volume":        int(bar.volume)            if bar and bar.volume         else None,
+                "ma_50":         float(bar.ma_50)           if bar and bar.ma_50          else None,
+                "ma_150":        float(bar.ma_150)          if bar and bar.ma_150         else None,
+                "ma_200":        float(bar.ma_200)          if bar and bar.ma_200         else None,
+                "vol_ratio":     float(bar.vol_ratio)       if bar and bar.vol_ratio      else None,
+                "rs_rating":     float(bar.rs_rating)       if bar and bar.rs_rating      else None,
+                "pct_from_52w_high": float(bar.pct_from_52w_high) if bar and bar.pct_from_52w_high else None,
+                "atr_14":        float(bar.atr_14)          if bar and bar.atr_14         else None,
+                "has_bar":       bar is not None,
+            })
+        return rows
+
+    def _fetch_bar_map(db, tickers):
+        if not tickers:
+            return {}
+        latest_dates = db.query(
+            PriceBar.ticker,
+            func.max(PriceBar.date).label("max_date")
+        ).filter(PriceBar.ticker.in_(tickers)).group_by(PriceBar.ticker).subquery()
+        bars = db.query(PriceBar).join(
+            latest_dates,
+            and_(PriceBar.ticker == latest_dates.c.ticker,
+                 PriceBar.date  == latest_dates.c.max_date)
+        ).all()
+        return {b.ticker: b for b in bars}
+
+    sort_map = {
+        "ticker":     Stock.ticker,
+        "name":       Stock.name,
+        "sector":     Stock.sector,
+        "market_cap": Stock.market_cap,
+        "last_price": Stock.last_price,
+    }
+
     if tab == "universe":
-        # ── Tab 1: Centralized universe stocks with latest price bar ──────────
-        q = db.query(Stock).filter(Stock.is_active == True, Stock.blacklisted == False)
+        # ── Tab 1: ASX200 universe ─────────────────────────���───────────────────
+        q = db.query(Stock).filter(
+            Stock.is_active == True,
+            Stock.blacklisted == False,
+        )
+        # Try to filter by exchange_key column (added in migration 002)
+        try:
+            q = q.filter(Stock.exchange_key == "ASX")
+        except Exception:
+            pass
         if search:
             q = q.filter(
                 (Stock.ticker.ilike(f"%{search.upper()}%")) |
@@ -3325,122 +4154,133 @@ async def superadmin_data(
             q = q.filter(Stock.sector == sector)
 
         total_stocks = q.count()
-
-        # Sort
-        sort_map = {
-            "ticker":     Stock.ticker,
-            "name":       Stock.name,
-            "sector":     Stock.sector,
-            "market_cap": Stock.market_cap,
-            "last_price": Stock.last_price,
-        }
         sort_col = sort_map.get(sort_by, Stock.ticker)
         if sort_dir == "desc":
             q = q.order_by(sort_col.desc().nullslast())
         else:
             q = q.order_by(sort_col.asc().nullslast())
 
-        offset = (page - 1) * per_page
-        stocks = q.offset(offset).limit(per_page).all()
+        stocks = q.offset((page - 1) * per_page).limit(per_page).all()
+        bar_map = _fetch_bar_map(db, [s.ticker for s in stocks])
+        rows = _build_equity_rows(stocks, bar_map)
 
-        # Fetch latest price bars for these stocks
-        tickers = [s.ticker for s in stocks]
-        if tickers:
-            # Subquery: max date per ticker
-            latest_dates = db.query(
-                PriceBar.ticker,
-                func.max(PriceBar.date).label("max_date")
-            ).filter(PriceBar.ticker.in_(tickers)).group_by(PriceBar.ticker).subquery()
-
-            bars = db.query(PriceBar).join(
-                latest_dates,
-                and_(
-                    PriceBar.ticker == latest_dates.c.ticker,
-                    PriceBar.date == latest_dates.c.max_date,
-                )
-            ).all()
-            bar_map = {b.ticker: b for b in bars}
-        else:
-            bar_map = {}
-
-        # Serialize
-        rows = []
-        for s in stocks:
-            bar = bar_map.get(s.ticker)
-            rows.append({
-                "ticker":         s.ticker,
-                "asx_code":       s.asx_code,
-                "name":           s.name or "",
-                "sector":         s.sector or "",
-                "industry":       s.industry or "",
-                "in_asx200":      s.in_asx200,
-                "market_cap":     int(s.market_cap) if s.market_cap else None,
-                "last_price":     float(s.last_price) if s.last_price else None,
-                "last_updated":   str(s.last_updated)[:10] if s.last_updated else "",
-                # Price bar fields
-                "bar_date":       str(bar.date) if bar else "",
-                "close":          float(bar.close)         if bar and bar.close         else None,
-                "volume":         int(bar.volume)          if bar and bar.volume        else None,
-                "ma_50":          float(bar.ma_50)         if bar and bar.ma_50         else None,
-                "ma_150":         float(bar.ma_150)        if bar and bar.ma_150        else None,
-                "ma_200":         float(bar.ma_200)        if bar and bar.ma_200        else None,
-                "vol_ratio":      float(bar.vol_ratio)     if bar and bar.vol_ratio     else None,
-                "rs_rating":      float(bar.rs_rating)     if bar and bar.rs_rating     else None,
-                "pct_from_52w_high": float(bar.pct_from_52w_high) if bar and bar.pct_from_52w_high else None,
-                "atr_14":         float(bar.atr_14)        if bar and bar.atr_14        else None,
-                "has_bar":        bar is not None,
-            })
-
-        # Sort by price bar fields (not available as SQL columns — sort in Python)
         if sort_by in ("rs_rating", "vol_ratio"):
-            reverse = sort_dir == "desc"
-            rows.sort(key=lambda r: (r[sort_by] is None, r.get(sort_by) or 0), reverse=reverse)
+            rows.sort(key=lambda r: (r[sort_by] is None, r.get(sort_by) or 0), reverse=(sort_dir == "desc"))
 
-        # Distinct sectors for filter
         sectors = sorted(set(
             s.sector for s in db.query(Stock.sector).filter(
                 Stock.is_active == True, Stock.sector != None
-            ).distinct().all()
-            if s.sector
+            ).distinct().all() if s.sector
         ))
 
-        # Summary stats
-        total_with_bars = sum(1 for r in rows if r["has_bar"])
-        avg_rs = round(sum(r["rs_rating"] for r in rows if r["rs_rating"]) /
-                       max(1, sum(1 for r in rows if r["rs_rating"])), 1)
+        ctx.update({
+            "tab": "universe", "rows": rows, "custom_rows": [], "crypto_rows": [],
+            "search": search, "sector": sector, "sectors": sectors,
+            "sort_by": sort_by, "sort_dir": sort_dir, "page": page, "per_page": per_page,
+            "total": total_stocks, "total_pages": max(1, (total_stocks + per_page - 1) // per_page),
+            "total_with_bars": sum(1 for r in rows if r["has_bar"]),
+            "avg_rs": round(sum(r["rs_rating"] for r in rows if r["rs_rating"]) /
+                            max(1, sum(1 for r in rows if r["rs_rating"])), 1),
+        })
+
+    elif tab == "us":
+        # ── Tab 2: US equities (NYSE/NASDAQ) ──────────────────────────────────
+        q = db.query(Stock).filter(Stock.is_active == True, Stock.blacklisted == False)
+        try:
+            from sqlalchemy import or_
+            q = q.filter(or_(Stock.exchange_key == "NYSE", Stock.exchange_key == "NASDAQ"))
+        except Exception:
+            q = q.filter(Stock.ticker.notlike("%.AX")).filter(Stock.ticker.notlike("%-USD"))
+
+        if search:
+            q = q.filter(
+                (Stock.ticker.ilike(f"%{search.upper()}%")) |
+                (Stock.name.ilike(f"%{search}%"))
+            )
+        if sector:
+            q = q.filter(Stock.sector == sector)
+
+        total_stocks = q.count()
+        sort_col = sort_map.get(sort_by, Stock.ticker)
+        if sort_dir == "desc":
+            q = q.order_by(sort_col.desc().nullslast())
+        else:
+            q = q.order_by(sort_col.asc().nullslast())
+
+        stocks = q.offset((page - 1) * per_page).limit(per_page).all()
+        bar_map = _fetch_bar_map(db, [s.ticker for s in stocks])
+        rows = _build_equity_rows(stocks, bar_map)
+
+        if sort_by in ("rs_rating", "vol_ratio"):
+            rows.sort(key=lambda r: (r[sort_by] is None, r.get(sort_by) or 0), reverse=(sort_dir == "desc"))
+
+        sectors = sorted(set(
+            s.sector for s in db.query(Stock.sector).filter(
+                Stock.is_active == True, Stock.sector != None
+            ).distinct().all() if s.sector
+        ))
 
         ctx.update({
-            "tab":            "universe",
-            "rows":           rows,
-            "search":         search,
-            "sector":         sector,
-            "sectors":        sectors,
-            "sort_by":        sort_by,
-            "sort_dir":       sort_dir,
-            "page":           page,
-            "per_page":       per_page,
-            "total":          total_stocks,
-            "total_pages":    max(1, (total_stocks + per_page - 1) // per_page),
-            "total_with_bars": total_with_bars,
-            "avg_rs":         avg_rs,
-            "custom_rows":    [],
+            "tab": "us", "rows": rows, "custom_rows": [], "crypto_rows": [],
+            "search": search, "sector": sector, "sectors": sectors,
+            "sort_by": sort_by, "sort_dir": sort_dir, "page": page, "per_page": per_page,
+            "total": total_stocks, "total_pages": max(1, (total_stocks + per_page - 1) // per_page),
+            "total_with_bars": sum(1 for r in rows if r["has_bar"]),
+            "avg_rs": round(sum(r["rs_rating"] for r in rows if r["rs_rating"]) /
+                            max(1, sum(1 for r in rows if r["rs_rating"])), 1),
+        })
+
+    elif tab == "crypto":
+        # ── Tab 3: Crypto assets from DB ──────────────────────────────────────
+        q = db.query(Stock).filter(Stock.is_active == True)
+        try:
+            q = q.filter(Stock.asset_type == "CRYPTO")
+        except Exception:
+            q = q.filter(Stock.ticker.like("%-USD").or_(Stock.ticker.like("%-AUD")))
+
+        if search:
+            q = q.filter(
+                (Stock.ticker.ilike(f"%{search.upper()}%")) |
+                (Stock.name.ilike(f"%{search}%"))
+            )
+
+        total_stocks = q.count()
+        if sort_dir == "desc":
+            q = q.order_by(sort_map.get(sort_by, Stock.ticker).desc().nullslast())
+        else:
+            q = q.order_by(sort_map.get(sort_by, Stock.ticker).asc().nullslast())
+
+        stocks = q.offset((page - 1) * per_page).limit(per_page).all()
+        bar_map = _fetch_bar_map(db, [s.ticker for s in stocks])
+        crypto_rows = _build_equity_rows(stocks, bar_map)
+
+        if sort_by in ("rs_rating", "vol_ratio"):
+            crypto_rows.sort(key=lambda r: (r[sort_by] is None, r.get(sort_by) or 0), reverse=(sort_dir == "desc"))
+
+        ctx.update({
+            "tab": "crypto", "rows": [], "custom_rows": [], "crypto_rows": crypto_rows,
+            "search": search, "sector": "", "sectors": [],
+            "sort_by": sort_by, "sort_dir": sort_dir, "page": page, "per_page": per_page,
+            "total": total_stocks, "total_pages": max(1, (total_stocks + per_page - 1) // per_page),
+            "total_with_bars": sum(1 for r in crypto_rows if r["has_bar"]),
+            "avg_rs": 0,
         })
 
     else:
-        # ── Tab 2: Custom stocks per org (in watchlist but not in ASX200 universe) ──
-        # Find tickers in watchlist that are NOT in the stocks table as ASX200
-        from sqlalchemy import text as _text
-
+        # ── Tab 4: Custom stocks per org (not in main universe) ──────────────
         custom_rows_raw = db.execute(_text("""
             SELECT
                 w.ticker,
                 w.organization_id,
+                w.exchange_key AS w_exchange_key,
                 o.name AS org_name,
                 COUNT(*) OVER (PARTITION BY w.ticker) AS org_count,
                 s.name AS stock_name,
                 s.sector,
                 s.in_asx200,
                 s.is_active,
+                s.exchange_key AS s_exchange_key,
+                s.asset_type,
                 pb.close,
                 pb.date AS bar_date,
                 pb.rs_rating,
@@ -3448,7 +4288,7 @@ async def superadmin_data(
                 pb.ma_50,
                 pb.ma_200,
                 pb.pct_from_52w_high,
-                w.added_at
+                w.created_at AS added_at
             FROM watchlist w
             JOIN organizations o ON o.id = w.organization_id
             LEFT JOIN stocks s ON s.ticker = w.ticker
@@ -3465,57 +4305,62 @@ async def superadmin_data(
 
         custom_rows = [
             {
-                "ticker":     r.ticker,
-                "org_id":     r.organization_id,
-                "org_name":   r.org_name,
-                "org_count":  r.org_count,
-                "name":       r.stock_name or "",
-                "sector":     r.sector or "",
-                "in_asx200":  r.in_asx200 or False,
-                "is_active":  r.is_active if r.is_active is not None else True,
-                "close":      float(r.close) if r.close else None,
-                "bar_date":   str(r.bar_date) if r.bar_date else "",
-                "rs_rating":  float(r.rs_rating) if r.rs_rating else None,
-                "vol_ratio":  float(r.vol_ratio) if r.vol_ratio else None,
-                "ma_50":      float(r.ma_50) if r.ma_50 else None,
-                "ma_200":     float(r.ma_200) if r.ma_200 else None,
+                "ticker":       r.ticker,
+                "org_id":       r.organization_id,
+                "org_name":     r.org_name,
+                "org_count":    r.org_count,
+                "name":         r.stock_name or "",
+                "sector":       r.sector or "",
+                "in_asx200":    r.in_asx200 or False,
+                "is_active":    r.is_active if r.is_active is not None else True,
+                "exchange_key": r.w_exchange_key or r.s_exchange_key or "ASX",
+                "asset_type":   r.asset_type or "EQUITY",
+                "close":        float(r.close) if r.close else None,
+                "bar_date":     str(r.bar_date) if r.bar_date else "",
+                "rs_rating":    float(r.rs_rating) if r.rs_rating else None,
+                "vol_ratio":    float(r.vol_ratio) if r.vol_ratio else None,
+                "ma_50":        float(r.ma_50) if r.ma_50 else None,
+                "ma_200":       float(r.ma_200) if r.ma_200 else None,
                 "pct_from_52w_high": float(r.pct_from_52w_high) if r.pct_from_52w_high else None,
-                "added_at":   str(r.added_at)[:10] if r.added_at else "",
+                "added_at":     str(r.added_at)[:10] if r.added_at else "",
             }
             for r in custom_rows_raw
         ]
 
-        # Apply search filter
         if search:
             su = search.upper()
             custom_rows = [r for r in custom_rows if su in r["ticker"] or search.lower() in r["name"].lower()]
 
         ctx.update({
-            "tab":        "custom",
-            "rows":       [],
-            "custom_rows": custom_rows,
-            "search":     search,
-            "sector":     "",
-            "sectors":    [],
-            "sort_by":    sort_by,
-            "sort_dir":   sort_dir,
-            "page":       1,
-            "per_page":   per_page,
-            "total":      len(custom_rows),
-            "total_pages": 1,
+            "tab": "custom", "rows": [], "custom_rows": custom_rows, "crypto_rows": [],
+            "search": search, "sector": "", "sectors": [],
+            "sort_by": sort_by, "sort_dir": sort_dir, "page": 1, "per_page": per_page,
+            "total": len(custom_rows), "total_pages": 1,
             "total_with_bars": sum(1 for r in custom_rows if r["close"]),
             "avg_rs": 0,
         })
 
-    # Global data stats for summary cards
-    total_stocks_db    = db.query(Stock).filter(Stock.is_active == True).count()
-    total_bars_db      = db.query(PriceBar).count()
-    latest_bar_date_r  = db.query(func.max(PriceBar.date)).scalar()
+    # Global summary stats
+    total_stocks_db   = db.query(Stock).filter(Stock.is_active == True).count()
+    total_bars_db     = db.query(PriceBar).count()
+    latest_bar_date_r = db.query(func.max(PriceBar.date)).scalar()
+
+    # Per-exchange counts for tab badges
+    try:
+        asx_count    = db.query(Stock).filter(Stock.is_active == True, Stock.exchange_key == "ASX").count()
+        us_count     = db.query(Stock).filter(Stock.is_active == True, Stock.exchange_key.in_(["NYSE", "NASDAQ"])).count()
+        crypto_count = db.query(Stock).filter(Stock.is_active == True, Stock.asset_type == "CRYPTO").count()
+    except Exception:
+        asx_count = total_stocks_db; us_count = 0; crypto_count = 0
+
     ctx.update({
-        "total_stocks_db":   total_stocks_db,
-        "total_bars_db":     total_bars_db,
-        "latest_bar_date":   str(latest_bar_date_r) if latest_bar_date_r else "—",
-        "msg":               request.query_params.get("msg", ""),
+        "total_stocks_db":  total_stocks_db,
+        "total_bars_db":    total_bars_db,
+        "latest_bar_date":  str(latest_bar_date_r) if latest_bar_date_r else "—",
+        "asx_count":        asx_count,
+        "us_count":         us_count,
+        "crypto_count":     crypto_count,
+        "msg":              request.query_params.get("msg", ""),
     })
     return templates.TemplateResponse("superadmin/data.html", ctx)
 
@@ -3544,3 +4389,507 @@ async def reset_password_post(request: Request, token: str = Form(...), password
     user.reset_token_expires = None
     db.commit()
     return templates.TemplateResponse("reset_password.html", {"request": request, "token": token, "error": None, "success": True})
+
+
+# ===========================================================================
+# SUPER ADMIN EXCHANGE MANAGEMENT
+# ===========================================================================
+
+@app.get("/superadmin/exchanges", response_class=HTMLResponse)
+async def superadmin_exchanges(request: Request, db: Session = Depends(get_db)):
+    if not _auth(request): return RedirectResponse("/login", 302)
+    if not _is_superadmin(request): return RedirectResponse("/?error=access_denied", 302)
+    exchanges=[]; migration_needed=False
+    try:
+        from app.models.exchange import ExchangeConfig
+        exchanges=db.query(ExchangeConfig).order_by(ExchangeConfig.sort_order).all()
+    except Exception: db.rollback(); migration_needed=True
+    ctx={**_global(request,db),"exchanges":exchanges,"migration_needed":migration_needed,"msg":request.query_params.get("msg","")}
+    return templates.TemplateResponse("superadmin/exchanges.html", ctx)
+
+
+@app.post("/superadmin/exchanges/{exchange_key}/toggle")
+async def superadmin_exchange_toggle(request: Request, exchange_key: str, db: Session = Depends(get_db)):
+    if not _auth(request) or not _is_superadmin(request): return RedirectResponse("/login", 302)
+    try:
+        from app.models.exchange import ExchangeConfig
+        exc=db.query(ExchangeConfig).filter(ExchangeConfig.exchange_key==exchange_key).first()
+        if exc:
+            exc.is_enabled=not exc.is_enabled; db.commit()
+            from app.models.audit import AuditLog,AuditAction
+            db.add(AuditLog(action=AuditAction.CONFIG_CHANGED,actor=request.session.get("email","superadmin"),message=f"Exchange {exchange_key} enabled={exc.is_enabled}")); db.commit()
+            return RedirectResponse(f"/superadmin/exchanges?msg={'enabled' if exc.is_enabled else 'disabled'}", 302)
+    except Exception: db.rollback()
+    return RedirectResponse("/superadmin/exchanges?msg=error", 302)
+
+
+@app.post("/superadmin/exchanges/{exchange_key}/update")
+async def superadmin_exchange_update(request: Request, exchange_key: str, display_name: str=Form(""), is_enabled: str=Form("false"), ccxt_provider: str=Form(""), ccxt_sandbox: str=Form("false"), db: Session=Depends(get_db)):
+    if not _auth(request) or not _is_superadmin(request): return RedirectResponse("/login", 302)
+    try:
+        from app.models.exchange import ExchangeConfig
+        exc=db.query(ExchangeConfig).filter(ExchangeConfig.exchange_key==exchange_key).first()
+        if exc:
+            if display_name: exc.display_name=display_name
+            exc.is_enabled=is_enabled.lower() in ("true","on","1","yes"); exc.ccxt_sandbox=ccxt_sandbox.lower() in ("true","on","1","yes")
+            if ccxt_provider: exc.ccxt_provider=ccxt_provider.lower()
+            db.commit()
+    except Exception: db.rollback()
+    return RedirectResponse("/superadmin/exchanges?msg=saved", 302)
+
+
+# ===========================================================================
+# MCP — OAuth 2.0 Token Endpoint
+# ===========================================================================
+
+from fastapi.responses import JSONResponse as _JSONResponse
+
+
+@app.get("/authorize", response_class=HTMLResponse)
+async def oauth_authorize(
+    request: Request,
+    response_type: str = Query(...),
+    client_id: str = Query(...),
+    redirect_uri: str = Query(...),
+    state: str = Query(""),
+    code_challenge: str = Query(""),
+    code_challenge_method: str = Query(""),
+    db: Session = Depends(get_db)
+):
+    if not _auth(request):
+        import urllib.parse
+        encoded_url = urllib.parse.quote(str(request.url))
+        return RedirectResponse(f"/login?next={encoded_url}", 302)
+
+    if response_type != "code":
+        return RedirectResponse(f"{redirect_uri}?error=unsupported_response_type&state={state}", 302)
+
+    from app.models.mcp import MCPCredential, SCOPE_DESCRIPTIONS
+    cred = db.query(MCPCredential).filter(MCPCredential.client_id == client_id).first()
+    if not cred or not cred.is_valid:
+        return HTMLResponse("Invalid or inactive client_id", status_code=400)
+
+    return templates.TemplateResponse("authorize.html", {
+        "request": request,
+        "client_id": client_id,
+        "client_name": cred.name,
+        "org_name": cred.organization.name if cred.organization else "VCPilot Org",
+        "redirect_uri": redirect_uri,
+        "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": code_challenge_method,
+        "scopes": cred.scopes or [],
+        "scope_descriptions": SCOPE_DESCRIPTIONS,
+    })
+
+
+@app.post("/authorize/approve")
+async def oauth_authorize_approve(
+    request: Request,
+    client_id: str = Form(...),
+    redirect_uri: str = Form(...),
+    state: str = Form(""),
+    code_challenge: str = Form(""),
+    code_challenge_method: str = Form(""),
+    db: Session = Depends(get_db)
+):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+
+    from app.models.mcp import MCPCredential
+    cred = db.query(MCPCredential).filter(MCPCredential.client_id == client_id).first()
+    if not cred or not cred.is_valid:
+        return HTMLResponse("Invalid or inactive client_id", status_code=400)
+
+    import secrets
+    auth_code = f"vcp_code_{secrets.token_urlsafe(32)}"
+
+    from app.utils.cache import cache
+    code_data = {
+        "client_id": client_id,
+        "organization_id": cred.organization_id,
+        "code_challenge": code_challenge,
+        "code_challenge_method": code_challenge_method,
+        "credential_id": cred.id,
+    }
+    cache.set(f"oauth_code:{auth_code}", code_data, expire_seconds=300)
+
+    import urllib.parse
+    redirect_url = f"{redirect_uri}?code={auth_code}"
+    if state:
+        redirect_url += f"&state={urllib.parse.quote(state)}"
+    return RedirectResponse(redirect_url, 302)
+
+
+@app.post("/mcp/oauth/token")
+@app.post("/token")
+@app.post("/oauth/token")
+async def mcp_oauth_token(request: Request, db: Session = Depends(get_db)):
+    """
+    OAuth 2.0 Token Endpoint.
+    Supports:
+      • grant_type=client_credentials (API/CLI clients using client_id + client_secret)
+      • grant_type=authorization_code (OAuth flow clients like Claude.ai using PKCE)
+    """
+    from app.models.mcp import MCPCredential, verify_secret
+    from app.mcp.auth import create_access_token
+
+    client_id     = None
+    client_secret = None
+    grant_type    = None
+    code          = None
+    code_verifier = None
+    req_redirect_uri = None
+
+    content_type = request.headers.get("content-type", "")
+    if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+        form = await request.form()
+        client_id     = form.get("client_id")
+        client_secret = form.get("client_secret")
+        grant_type    = form.get("grant_type")
+        code          = form.get("code")
+        code_verifier = form.get("code_verifier")
+        req_redirect_uri = form.get("redirect_uri")
+    else:
+        try:
+            body = await request.json()
+            client_id     = body.get("client_id")
+            client_secret = body.get("client_secret")
+            grant_type    = body.get("grant_type")
+            code          = body.get("code")
+            code_verifier = body.get("code_verifier")
+            req_redirect_uri = body.get("redirect_uri")
+        except Exception:
+            pass
+
+    # Fall back to HTTP Basic Auth for client_credentials
+    if not client_id or not client_secret:
+        import base64
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Basic "):
+            try:
+                decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+                client_id, client_secret = decoded.split(":", 1)
+                if not grant_type:
+                    grant_type = "client_credentials"
+            except Exception:
+                pass
+
+    if not grant_type:
+        grant_type = "authorization_code" if code else "client_credentials"
+
+    logger.info(
+        f"mcp_oauth_token request: content_type={content_type}, grant_type={grant_type}, "
+        f"client_id={client_id}, code={code}, code_verifier={code_verifier}, redirect_uri={req_redirect_uri}"
+    )
+
+    if grant_type not in ("client_credentials", "authorization_code"):
+        logger.warning(f"mcp_oauth_token error: unsupported grant type '{grant_type}'")
+        return _JSONResponse(
+            {"error": "unsupported_grant_type", "error_description": "Only client_credentials and authorization_code are supported"},
+            status_code=400,
+        )
+
+    if grant_type == "authorization_code":
+        if not code:
+            logger.warning("mcp_oauth_token error: code is required for authorization_code grant")
+            return _JSONResponse(
+                {"error": "invalid_request", "error_description": "code is required for authorization_code grant"},
+                status_code=400,
+            )
+
+        from app.utils.cache import cache
+        code_data = cache.get(f"oauth_code:{code}")
+        if not code_data:
+            logger.warning(f"mcp_oauth_token error: authorization code '{code}' not found or expired in cache")
+            return _JSONResponse(
+                {"error": "invalid_grant", "error_description": "Authorization code is invalid or expired"},
+                status_code=400,
+            )
+
+        cache.delete(f"oauth_code:{code}")
+
+        if client_id and client_id != code_data["client_id"]:
+            logger.warning(f"mcp_oauth_token error: client_id mismatch. Request={client_id}, Code={code_data['client_id']}")
+            return _JSONResponse(
+                {"error": "invalid_client", "error_description": "Client ID mismatch"},
+                status_code=400,
+            )
+
+        client_id = code_data["client_id"]
+        challenge = code_data.get("code_challenge")
+        method = code_data.get("code_challenge_method", "S256")
+
+        if challenge:
+            if not code_verifier:
+                logger.warning("mcp_oauth_token error: missing code_verifier (PKCE challenge was set)")
+                return _JSONResponse(
+                    {"error": "invalid_request", "error_description": "code_verifier is required (PKCE)"},
+                    status_code=400,
+                )
+
+            import hashlib
+            import base64
+
+            def base64url_encode(input_bytes: bytes) -> str:
+                return base64.urlsafe_b64encode(input_bytes).decode('utf-8').rstrip('=')
+
+            if method == "S256":
+                sha256_hash = hashlib.sha256(code_verifier.encode('utf-8')).digest()
+                calculated = base64url_encode(sha256_hash)
+            else:
+                calculated = code_verifier
+
+            if calculated != challenge:
+                logger.warning(f"mcp_oauth_token error: PKCE verification failed. Calculated={calculated}, Challenge={challenge}")
+                return _JSONResponse(
+                    {"error": "invalid_grant", "error_description": "PKCE verification failed"},
+                    status_code=400,
+                )
+
+        cred = db.query(MCPCredential).filter(
+            MCPCredential.id == code_data["credential_id"],
+            MCPCredential.is_active == True,
+        ).first()
+
+        if not cred:
+            logger.warning(f"mcp_oauth_token error: active credential id {code_data.get('credential_id')} not found")
+            return _JSONResponse(
+                {"error": "invalid_grant", "error_description": "Associated credential is no longer active"},
+                status_code=400,
+            )
+
+    else:  # client_credentials
+        if not client_id or not client_secret:
+            logger.warning("mcp_oauth_token error: client_id and client_secret are required for client_credentials grant")
+            return _JSONResponse(
+                {"error": "invalid_request", "error_description": "client_id and client_secret are required"},
+                status_code=400,
+            )
+
+        cred = db.query(MCPCredential).filter(
+            MCPCredential.client_id == client_id,
+            MCPCredential.is_active == True,
+        ).first()
+
+        if not cred or not verify_secret(client_secret, cred.client_secret_hash):
+            logger.warning(f"mcp_oauth_token error: invalid client credentials for client_id {client_id}")
+            return _JSONResponse(
+                {"error": "invalid_client", "error_description": "Invalid client_id or client_secret"},
+                status_code=401,
+            )
+
+    if cred.is_expired:
+        return _JSONResponse(
+            {"error": "invalid_client", "error_description": "Credential has expired. Contact your super admin to regenerate."},
+            status_code=401,
+        )
+
+    token = create_access_token(
+        org_id=cred.organization_id,
+        scopes=cred.scopes,
+        credential_id=cred.id,
+        client_id=cred.client_id,
+    )
+    cred.last_used_at = datetime.utcnow()
+    db.commit()
+
+    return _JSONResponse({
+        "access_token": token,
+        "token_type":   "Bearer",
+        "expires_in":   3600,
+        "scope":        " ".join(cred.scopes),
+    })
+
+
+# ===========================================================================
+# MCP — Super Admin Credential Management
+# ===========================================================================
+
+@app.post("/superadmin/mcp/base-url")
+async def superadmin_mcp_base_url_save(
+    request: Request,
+    mcp_base_url: str = Form(...),
+    redirect_org_id: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    """Update the global mcp_base_url SystemConfig (no org_id)."""
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+
+    from app.models.config import SystemConfig
+    row = db.query(SystemConfig).filter(
+        SystemConfig.key == "mcp_base_url",
+        SystemConfig.organization_id == None,
+    ).first()
+    url = mcp_base_url.strip().rstrip("/")
+    if row:
+        row.value = url
+        row.updated_by = request.session.get("email", "superadmin")
+    else:
+        db.add(SystemConfig(
+            key="mcp_base_url", value=url, value_type="STRING",
+            label="MCP Base URL", group="mcp", organization_id=None,
+            updated_by=request.session.get("email", "superadmin"),
+        ))
+    from app.models.audit import AuditLog, AuditAction
+    db.add(AuditLog(
+        action=AuditAction.CONFIG_CHANGED,
+        actor=request.session.get("email", "superadmin"),
+        organization_id=None,
+        message=f"MCP base URL updated to: {url}",
+    ))
+    db.commit()
+
+    if redirect_org_id:
+        return RedirectResponse(f"/superadmin/organizations/{redirect_org_id}?msg=mcp_url_saved", 302)
+    return RedirectResponse("/superadmin/organizations?msg=mcp_url_saved", 302)
+
+
+@app.post("/superadmin/organizations/{org_id}/mcp/generate")
+async def superadmin_mcp_generate(
+    org_id: int,
+    request: Request,
+    name: str = Form("Default"),
+    notes: str = Form(""),
+    scopes: list = Form(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Generate a new MCP client_id + client_secret pair for an organisation.
+    The plain secret is returned once in the redirect URL (shown once in UI).
+    """
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+
+    from app.models.account import Organization
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    if not org:
+        return RedirectResponse("/superadmin/organizations", 302)
+
+    from app.models.mcp import (
+        MCPCredential, MCP_ALL_SCOPES,
+        MCP_CREDENTIAL_VALIDITY_DAYS,
+        generate_client_id, generate_client_secret, hash_secret,
+    )
+    from datetime import timedelta
+
+    selected_scopes = scopes if scopes else MCP_ALL_SCOPES
+
+    plain_secret = generate_client_secret()
+    client_id    = generate_client_id()
+
+    cred = MCPCredential(
+        organization_id       = org_id,
+        name                  = name or "Default",
+        client_id             = client_id,
+        client_secret_hash    = hash_secret(plain_secret),
+        client_secret_preview = plain_secret[-8:],
+        scopes                = selected_scopes,
+        expires_at            = datetime.utcnow() + timedelta(days=MCP_CREDENTIAL_VALIDITY_DAYS),
+        is_active             = True,
+        created_by            = request.session.get("email", "superadmin"),
+        notes                 = notes or None,
+    )
+    db.add(cred)
+
+    from app.utils.cache import cache
+    cache.set(f"mcp_secret:{client_id}", plain_secret, expire_seconds=600)
+
+    from app.models.audit import AuditLog, AuditAction
+    db.add(AuditLog(
+        action=AuditAction.CONFIG_CHANGED,
+        actor=request.session.get("email", "superadmin"),
+        organization_id=org_id,
+        message=f"MCP credential '{name}' generated (client_id={client_id})",
+    ))
+    db.commit()
+
+    import urllib.parse
+    return RedirectResponse(
+        f"/superadmin/organizations/{org_id}?msg=mcp_generated"
+        f"&mcp_client_id={urllib.parse.quote(client_id)}"
+        f"&mcp_secret={urllib.parse.quote(plain_secret)}"
+        f"&mcp_name={urllib.parse.quote(name)}",
+        302,
+    )
+
+
+@app.post("/superadmin/organizations/{org_id}/mcp/{cred_id}/revoke")
+async def superadmin_mcp_revoke(
+    org_id: int,
+    cred_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Immediately revoke an MCP credential."""
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+
+    from app.models.mcp import MCPCredential
+    cred = db.query(MCPCredential).filter(
+        MCPCredential.id == cred_id,
+        MCPCredential.organization_id == org_id,
+    ).first()
+    if cred:
+        cred.is_active  = False
+        cred.revoked_at = datetime.utcnow()
+        cred.revoked_by = request.session.get("email", "superadmin")
+        from app.models.audit import AuditLog, AuditAction
+        db.add(AuditLog(
+            action=AuditAction.CONFIG_CHANGED,
+            actor=request.session.get("email", "superadmin"),
+            organization_id=org_id,
+            message=f"MCP credential '{cred.name}' (id={cred_id}) revoked",
+        ))
+        db.commit()
+
+    return RedirectResponse(f"/superadmin/organizations/{org_id}?msg=mcp_revoked", 302)
+
+
+@app.post("/superadmin/organizations/{org_id}/mcp/{cred_id}/renew")
+async def superadmin_mcp_renew(
+    org_id: int,
+    cred_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Extend an existing credential by another 12 months from today."""
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+
+    from app.models.mcp import MCPCredential, MCP_CREDENTIAL_VALIDITY_DAYS
+    from datetime import timedelta
+
+    cred = db.query(MCPCredential).filter(
+        MCPCredential.id == cred_id,
+        MCPCredential.organization_id == org_id,
+    ).first()
+    if cred:
+        cred.expires_at = datetime.utcnow() + timedelta(days=MCP_CREDENTIAL_VALIDITY_DAYS)
+        cred.is_active  = True
+        cred.revoked_at = None
+        cred.revoked_by = None
+        from app.models.audit import AuditLog, AuditAction
+        db.add(AuditLog(
+            action=AuditAction.CONFIG_CHANGED,
+            actor=request.session.get("email", "superadmin"),
+            organization_id=org_id,
+            message=f"MCP credential '{cred.name}' (id={cred_id}) renewed for 12 months",
+        ))
+        db.commit()
+
+    return RedirectResponse(f"/superadmin/organizations/{org_id}?msg=mcp_renewed", 302)
+
+
+# ===========================================================================
+# MCP — Mount MCP server ASGI app
+# ===========================================================================
+
+try:
+    from app.mcp.server import create_mcp_app as _create_mcp_app
+    _mcp_asgi = _create_mcp_app()
+    app.mount("/mcp", _mcp_asgi)
+    logger.info("VCPilot MCP server mounted at /mcp")
+except Exception as _mcp_err:
+    logger.exception(f"MCP server not mounted (install mcp[server] package): {_mcp_err}")

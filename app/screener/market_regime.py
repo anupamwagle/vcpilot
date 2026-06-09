@@ -31,27 +31,43 @@ class MarketRegime(str, enum.Enum):
 
 
 def evaluate_market_regime(
-    index_df: pd.DataFrame,          # ASX200 (^AXJO) daily OHLCV
-    universe_df: pd.DataFrame,       # All stocks in universe with their close vs 200MA
+    index_df: pd.DataFrame,          # Exchange index daily OHLCV (^AXJO / ^GSPC / ^IXIC / BTC-USD)
+    universe_df: pd.DataFrame,       # Stocks in same-exchange universe with close + ma_200
     engine: RuleEngine,
+    exchange_key: str = "ASX",       # Which exchange this evaluation is for
 ) -> tuple[MarketRegime, dict[str, RuleResult]]:
     """
-    Evaluate overall market health and determine trading regime.
+    Evaluate market health and determine trading regime for a specific exchange.
+    Called once per exchange per evaluation cycle.
 
     Args:
-        index_df:     DataFrame for ASX200 index (^AXJO), ascending date
-        universe_df:  DataFrame with columns [ticker, close, ma_200] — latest bar for each stock
+        index_df:     DataFrame for the exchange's benchmark index, ascending date
+        universe_df:  DataFrame with columns [ticker, close, ma_200] — same-exchange stocks
         engine:       RuleEngine instance
+        exchange_key: "ASX", "NYSE", "NASDAQ", or "CRYPTO_*"
 
     Returns:
         (MarketRegime, dict of rule_id → RuleResult)
+
+    Crypto-specific behaviour:
+        Crypto has no breadth or distribution day concept. Only the index-above-200MA
+        rule is evaluated (using BTC-USD as the regime proxy).
     """
     rule_results: dict[str, RuleResult] = {}
     criteria_passed = 0
     total_enabled = 0
 
+    is_crypto = exchange_key.startswith("CRYPTO") if exchange_key else False
+    index_label = {
+        "ASX": "ASX200", "NYSE": "S&P500", "NASDAQ": "NASDAQ",
+        "CRYPTO_BINANCE":            "BTC (USD)",
+        "CRYPTO_KRAKEN":             "BTC (USD)",
+        "CRYPTO_COINBASE":           "BTC (USD)",
+        "CRYPTO_INDEPENDENTRESERVE": "BTC (AUD)",
+    }.get(exchange_key or "ASX", exchange_key or "Index")
+
     # -------------------------------------------------------------------------
-    # 1. ASX200 Index price above 200MA
+    # 1. Index price above 200MA
     # -------------------------------------------------------------------------
     rule_id = "regime_index_above_200ma"
     if engine.is_enabled(rule_id):
@@ -63,13 +79,13 @@ def evaluate_market_regime(
         if passed:
             criteria_passed += 1
         rule_results[rule_id] = RuleResult(rule_id, passed, round(close, 2), round(ma200, 2),
-            f"ASX200 {close:.0f} {'>' if passed else '<='} 200MA {ma200:.0f}")
+            f"{index_label} {close:.2f} {'>' if passed else '<='} 200MA {ma200:.2f}")
 
     # -------------------------------------------------------------------------
-    # 2. % of universe stocks above their 200MA
+    # 2. % of universe stocks above their 200MA (equity only — not crypto)
     # -------------------------------------------------------------------------
     rule_id = "regime_pct_stocks_above_200ma"
-    if engine.is_enabled(rule_id):
+    if engine.is_enabled(rule_id) and not is_crypto:
         total_enabled += 1
         threshold = float(engine.threshold(rule_id) or 60.0)
         valid = universe_df.dropna(subset=["close", "ma_200"])
@@ -85,10 +101,10 @@ def evaluate_market_regime(
             f"{pct:.1f}% of stocks above 200MA (min {threshold}%)")
 
     # -------------------------------------------------------------------------
-    # 3. Distribution days check (volume-weighted down days on the index)
+    # 3. Distribution days check (equity only — crypto doesn't close down predictably)
     # -------------------------------------------------------------------------
     rule_id = "regime_distribution_days"
-    if engine.is_enabled(rule_id):
+    if engine.is_enabled(rule_id) and not is_crypto:
         total_enabled += 1
         max_dist_days = int(engine.threshold(rule_id) or 4)
         lookback = 25
@@ -123,7 +139,7 @@ def evaluate_market_regime(
     else:
         regime = MarketRegime.BEAR
 
-    logger.info(f"Market regime: {regime} ({criteria_passed}/{total_enabled} criteria passed)")
+    logger.info(f"[{exchange_key}] Market regime: {regime} ({criteria_passed}/{total_enabled} criteria passed)")
     return regime, rule_results
 
 
@@ -133,9 +149,11 @@ def is_trading_allowed(regime: MarketRegime) -> bool:
 
 
 def get_size_multiplier(regime: MarketRegime) -> float:
-    """Scale position size based on regime. CAUTION = half size."""
-    return {
-        MarketRegime.BULL: 1.0,
-        MarketRegime.CAUTION: 0.5,
-        MarketRegime.BEAR: 0.0,
-    }.get(regime, 0.0)
+    """Scale position size based on market regime (Minervini).
+    BULL=100%, CAUTION=50%, BEAR=0%
+    """
+    if regime == MarketRegime.BULL:
+        return 1.0
+    if regime == MarketRegime.CAUTION:
+        return 0.5
+    return 0.0

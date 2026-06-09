@@ -25,7 +25,7 @@ class ConfigValueType(str, enum.Enum):
 
 class RuleCategory(str, enum.Enum):
     TREND_TEMPLATE  = "TREND_TEMPLATE"    # 8 Minervini trend conditions
-    FUNDAMENTAL     = "FUNDAMENTAL"       # EPS, sales, ROE, margins
+    FUNDAMENTAL     = "FUNDAMENTAL"       # EPS, sales, ROE, margins (equity only)
     VCP             = "VCP"               # Volatility Contraction Pattern
     MARKET_REGIME   = "MARKET_REGIME"     # Market direction / health filter
     ENTRY           = "ENTRY"             # Entry conditions
@@ -34,6 +34,7 @@ class RuleCategory(str, enum.Enum):
     POSITION_SIZING = "POSITION_SIZING"   # Risk %, pyramid rules
     PORTFOLIO       = "PORTFOLIO"         # Max positions, heat limits
     EARNINGS        = "EARNINGS"          # Earnings avoidance rules
+    CRYPTO          = "CRYPTO"            # Crypto-specific rules (market cap, dominance, etc.)
 
 
 class SystemConfig(Base):
@@ -114,13 +115,19 @@ class RuleConfig(Base):
     enabled_globally= Column(Boolean, default=True, nullable=False)
 
     # Default threshold (numeric rules). Non-numeric rules leave this null.
-    threshold       = Column(Numeric(10, 4), nullable=True)
+    threshold       = Column(Numeric(20, 4), nullable=True)
     threshold_label = Column(String(128), nullable=True)   # e.g. "Min RS percentile"
-    threshold_min   = Column(Numeric(10, 4), nullable=True)
-    threshold_max   = Column(Numeric(10, 4), nullable=True)
+    threshold_min   = Column(Numeric(20, 4), nullable=True)
+    threshold_max   = Column(Numeric(20, 4), nullable=True)
 
     # Tier-level overrides (JSON object, see docstring above)
     tier_overrides  = Column(JSON, default=dict)
+
+    # Asset type applicability — which markets this rule applies to
+    # "BOTH"   = equities + crypto (default — backward compatible)
+    # "EQUITY" = ASX, NYSE, NASDAQ only (not evaluated for crypto assets)
+    # "CRYPTO" = crypto exchanges only (not evaluated for equities)
+    asset_types     = Column(String(16), nullable=False, default="BOTH")
 
     # Metadata
     is_mandatory    = Column(Boolean, default=False)      # Cannot be disabled (e.g. stop loss)

@@ -4,8 +4,8 @@
 
 # --- Core ---
 python-dotenv==1.0.1
-pydantic==2.7.1
-pydantic-settings==2.3.0
+pydantic>=2.10.1,<3.0.0     # mcp 1.2.0 requires >=2.10.1; FastAPI 0.111 compatible
+pydantic-settings>=2.6.1    # mcp requires >=2.6.1
 loguru==0.7.2
 
 # --- Database ---
@@ -52,3 +52,12 @@ python-dateutil==2.9.0
 pytz==2024.1
 tzdata>=2024.1
 arrow==1.3.0
+ccxt
+
+# --- MCP Server ---
+mcp[server]>=1.2.0    # Model Context Protocol server (FastMCP + SSE transport)
+PyJWT>=2.8.0          # JWT tokens for MCP OAuth
+
+# --- Testing (critical-path regression suite — see tests/) ---
+pytest==8.2.2
+pytest-mock==3.14.0

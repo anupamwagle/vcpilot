@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+{% block title %}Exchange Management — VCPilot{% endblock %}
+
+{% block content %}
+<div style="max-width:900px;margin:0 auto;padding:1.5rem 1rem">
+
+  <!-- Header -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:.75rem">
+    <div>
+      <h1 class="text-xl font-bold" style="color:var(--text)">Exchange Management</h1>
+      <p class="text-sm mt-1" style="color:var(--text-muted)">
+        Enable or disable trading venues globally. Org admins can activate enabled exchanges in their settings.
+      </p>
+    </div>
+  </div>
+
+  <!-- Migration banner -->
+  {% if migration_needed %}
+  <div class="alert-warn mb-4">
+    <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+    <div>
+      <strong>Exchange table not yet created.</strong>
+      The multi-market migration hasn't run yet. Restart the <code>app</code> service to run it:
+      <code class="ml-2 text-xs font-mono" style="background:var(--surface-alt);padding:.1rem .4rem;border-radius:.25rem">docker compose up -d app</code>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Status message -->
+  {% if msg == 'saved' %}
+  <div class="card p-3 mb-4" style="background:var(--pos-bg);border-color:var(--pos);color:var(--pos)">
+    ✅ Exchange configuration saved.
+  </div>
+  {% elif msg == 'enabled' %}
+  <div class="card p-3 mb-4" style="background:var(--pos-bg);border-color:var(--pos);color:var(--pos)">
+    ✅ Exchange enabled — orgs can now activate it in their settings.
+  </div>
+  {% elif msg == 'disabled' %}
+  <div class="card p-3 mb-4" style="background:var(--warn-bg);border-color:var(--warn);color:var(--warn)">
+    ⚠️ Exchange disabled — orgs using it will no longer be able to screen or trade.
+  </div>
+  {% endif %}
+
+  <!-- Exchange table -->
+  <div class="card">
+    <div class="table-responsive">
+      <table style="width:100%;border-collapse:collapse">
+        <thead>
+          <tr style="border-bottom:2px solid var(--border)">
+            <th class="px-4 py-3 text-left text-xs font-semibold" style="color:var(--text-muted)">Exchange</th>
+            <th class="px-4 py-3 text-left text-xs font-semibold" style="color:var(--text-muted)">Type</th>
+            <th class="px-4 py-3 text-left text-xs font-semibold" style="color:var(--text-muted)">Broker</th>
+            <th class="px-4 py-3 text-left text-xs font-semibold" style="color:var(--text-muted)">Currency</th>
+            <th class="px-4 py-3 text-left text-xs font-semibold" style="color:var(--text-muted)">Session (UTC)</th>
+            <th class="px-4 py-3 text-left text-xs font-semibold" style="color:var(--text-muted)">Status</th>
+            <th class="px-4 py-3 text-left text-xs font-semibold" style="color:var(--text-muted)">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for exc in exchanges %}
+          <tr style="border-bottom:1px solid var(--border)">
+            <!-- Exchange name & key -->
+            <td class="px-4 py-3">
+              <div style="display:flex;align-items:center;gap:.5rem">
+                <span style="font-size:1.2rem">{{ exc.flag_emoji or '🌐' }}</span>
+                <div>
+                  <div class="font-semibold text-sm" style="color:var(--text)">{{ exc.display_name }}</div>
+                  <div class="text-xs mono" style="color:var(--text-subtle)">{{ exc.exchange_key }}</div>
+                </div>
+              </div>
+            </td>
+            <!-- Asset type -->
+            <td class="px-4 py-3">
+              <span class="text-xs px-2 py-0.5 rounded font-medium"
+                    style="background:{% if exc.asset_type == 'CRYPTO' %}var(--warn-bg){% else %}var(--surface-alt){% endif %};
+                           color:{% if exc.asset_type == 'CRYPTO' %}var(--warn){% else %}var(--text-muted){% endif %}">
+                {{ exc.asset_type }}
+              </span>
+            </td>
+            <!-- Broker -->
+            <td class="px-4 py-3 text-sm" style="color:var(--text-muted)">
+              {% if exc.broker_type == 'IBKR' %}
+                <span class="mono text-xs">IBKR</span>
+                {% if exc.ibkr_exchange %}
+                <span class="text-xs" style="color:var(--text-subtle)">→ {{ exc.ibkr_exchange }}/{{ exc.ibkr_currency }}</span>
+                {% endif %}
+              {% else %}
+                <span class="mono text-xs">ccxt</span>
+                {% if exc.ccxt_provider %}
+                <span class="text-xs" style="color:var(--text-subtle)">→ {{ exc.ccxt_provider }}</span>
+                {% endif %}
+                {% if exc.ccxt_sandbox %}
+                <span class="text-xs px-1 rounded" style="background:var(--warn-bg);color:var(--warn)">testnet</span>
+                {% endif %}
+              {% endif %}
+            </td>
+            <!-- Currency -->
+            <td class="px-4 py-3 text-sm mono" style="color:var(--text-muted)">
+              {{ exc.trading_currency }}
+            </td>
+            <!-- Session -->
+            <td class="px-4 py-3 text-xs" style="color:var(--text-muted)">
+              {% if exc.market_open_utc and exc.market_close_utc %}
+              {{ exc.market_open_utc }}–{{ exc.market_close_utc }}
+              {% elif exc.asset_type == 'CRYPTO' %}
+              24/7
+              {% else %}
+              —
+              {% endif %}
+              <div style="color:var(--text-subtle)">{{ exc.timezone }}</div>
+            </td>
+            <!-- Status badge -->
+            <td class="px-4 py-3">
+              <span class="text-xs px-2 py-0.5 rounded font-semibold"
+                    style="background:{% if exc.is_enabled %}var(--pos-bg){% else %}var(--neg-bg){% endif %};
+                           color:{% if exc.is_enabled %}var(--pos){% else %}var(--neg){% endif %}">
+                {{ '✓ Enabled' if exc.is_enabled else '✗ Disabled' }}
+              </span>
+            </td>
+            <!-- Actions -->
+            <td class="px-4 py-3">
+              <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+                <!-- Toggle enable/disable -->
+                <form method="post" action="/superadmin/exchanges/{{ exc.exchange_key }}/toggle" style="display:inline">
+                  <button type="submit" class="text-xs px-2 py-1 rounded border cursor-pointer"
+                          style="background:var(--surface-alt);border-color:var(--border);color:var(--text-muted)"
+                          onclick="return confirm('{{ 'Disable' if exc.is_enabled else 'Enable' }} {{ exc.display_name }}?')">
+                    {{ 'Disable' if exc.is_enabled else 'Enable' }}
+                  </button>
+                </form>
+
+                <!-- Edit modal trigger (for crypto only — configure ccxt_provider) -->
+                {% if exc.asset_type == 'CRYPTO' %}
+                <button type="button" class="text-xs px-2 py-1 rounded border cursor-pointer"
+                        style="background:var(--surface-alt);border-color:var(--border);color:var(--t-accent)"
+                        onclick="document.getElementById('edit-{{ exc.exchange_key }}').style.display='block'">
+                  Configure
+                </button>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+
+          <!-- Inline crypto configuration form (hidden by default) -->
+          {% if exc.asset_type == 'CRYPTO' %}
+          <tr id="edit-{{ exc.exchange_key }}" style="display:none;background:var(--surface-alt)">
+            <td colspan="7" class="px-4 py-4">
+              <form method="post" action="/superadmin/exchanges/{{ exc.exchange_key }}/update" class="space-y-3">
+                <h4 class="text-sm font-semibold" style="color:var(--text)">Configure {{ exc.display_name }}</h4>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem">
+                  <div>
+                    <label class="block text-xs font-medium mb-1" style="color:var(--text-muted)">Display Name</label>
+                    <input type="text" name="display_name" value="{{ exc.display_name }}" class="input text-sm"/>
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium mb-1" style="color:var(--text-muted)">ccxt Provider</label>
+                    <input type="text" name="ccxt_provider" value="{{ exc.ccxt_provider or '' }}"
+                           placeholder="binance / coinbase / kraken" class="input text-sm mono"/>
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium mb-1" style="color:var(--text-muted)">Enabled</label>
+                    <select name="is_enabled" class="input text-sm">
+                      <option value="true" {% if exc.is_enabled %}selected{% endif %}>Yes — orgs can activate</option>
+                      <option value="false" {% if not exc.is_enabled %}selected{% endif %}>No — disabled globally</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium mb-1" style="color:var(--text-muted)">Sandbox/Testnet Default</label>
+                    <select name="ccxt_sandbox" class="input text-sm">
+                      <option value="true" {% if exc.ccxt_sandbox %}selected{% endif %}>Yes — testnet by default</option>
+                      <option value="false" {% if not exc.ccxt_sandbox %}selected{% endif %}>No — live trading</option>
+                    </select>
+                  </div>
+                </div>
+                <div style="display:flex;gap:.75rem;align-items:center">
+                  <button type="submit" class="btn-primary text-sm">Save</button>
+                  <button type="button" class="text-sm" style="color:var(--text-muted);background:none;border:none;cursor:pointer"
+                          onclick="document.getElementById('edit-{{ exc.exchange_key }}').style.display='none'">Cancel</button>
+                </div>
+              </form>
+            </td>
+          </tr>
+          {% endif %}
+
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Info panel -->
+  <div class="card p-4 mt-4" style="background:var(--surface-alt)">
+    <h4 class="text-sm font-semibold mb-2" style="color:var(--text)">How Exchange Management Works</h4>
+    <div class="text-sm" style="color:var(--text-muted);line-height:1.7">
+      <p><strong>Step 1 — Super Admin (here):</strong> Enable exchanges that VCPilot supports. Equity exchanges (ASX, NYSE, NASDAQ) route via IBKR. Crypto exchanges route via the ccxt library.</p>
+      <p class="mt-2"><strong>Step 2 — Org Admin (/admin/config):</strong> Set <code style="background:var(--surface);padding:.1rem .3rem;border-radius:.2rem">active_exchanges</code> to comma-separated exchange keys (e.g. <code style="background:var(--surface);padding:.1rem .3rem;border-radius:.2rem">ASX,NYSE</code>). Only enabled exchanges can be activated.</p>
+      <p class="mt-2"><strong>Step 3 — Trader (/watchlist):</strong> Add stocks/crypto via the exchange selector. VCPilot fetches price history on-demand and screens the instrument against Minervini rules.</p>
+      <p class="mt-2"><strong>Crypto only:</strong> Org admins must also configure <code style="background:var(--surface);padding:.1rem .3rem;border-radius:.2rem">crypto_api_key</code> and <code style="background:var(--surface);padding:.1rem .3rem;border-radius:.2rem">crypto_api_secret</code> in /admin/config for live crypto trading. Fundamentals screening is skipped for crypto assets.</p>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

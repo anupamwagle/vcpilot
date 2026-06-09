@@ -2,7 +2,7 @@
 
 > **Minervini-grade algorithmic trading on ASX stocks — fully automated, locally deployable.**
 
-VCPilot implements Mark Minervini's SEPA (Specific Entry Point Analysis) methodology as a production-grade automated trading system. It screens the ASX universe daily, detects Volatility Contraction Patterns (VCP), manages risk with precision, and executes trades via Interactive Brokers — all controlled remotely via WhatsApp.
+VCPilot implements Mark Minervini's SEPA (Specific Entry Point Analysis) methodology as a production-grade automated trading system. It screens the ASX universe daily, detects Volatility Contraction Patterns (VCP), manages risk with precision, and executes trades via Interactive Brokers (equities) or Independent Reserve (crypto via ccxt) — all controlled remotely via WhatsApp.
 
 ---
 
@@ -17,7 +17,8 @@ VCPilot implements Mark Minervini's SEPA (Specific Entry Point Analysis) methodo
 │  └──────────┘  └──────────┘  └────────────────────┘ │
 │  ┌──────────────────────────────────────────────┐   │
 │  │  Worker & Beat (Celery)                      │   │
-│  │  ├── worker (screening/trading/reporting)    │   │
+│  │  ├── worker-equities (equities screen/trade) │   │
+│  │  ├── worker-crypto (crypto trade 24/7)       │   │
 │  │  └── beat (scheduler — AEST aligned)         │   │
 │  └──────────────────────────────────────────────┘   │
 │  ┌──────────────────────┐   ┌──────────────────────┐  │
@@ -59,7 +60,7 @@ http://localhost:8501
 - **Traditional Password Sign-In:** Available on the **Password** tab on `/login`.
   - **Super Admin Credentials:** Set via `.env` (`SUPERADMIN_EMAIL` and `SUPERADMIN_PASSWORD`). Allows you to manage tenants, rules, and global users.
   - **Organization Admins & Users:** Seeded or created passwordlessly by the Super Admin.
-- **Passwordless Creation & Password Setup Reset:** No passwords are input during tenant or user creation. Users are created with a secure random hash. Trigger the **Reset Password** flow from the Super Admin panel to send a setup link. If SMTP is offline, a copyable manual link will be generated in the UI.
+- **Passwordless Creation & Password Setup Reset:** No passwords are input during tenant or user creation. Users are created with a secure random hash. When creating a user, the admin can toggle the option to automatically send an onboarding welcome email. If SMTP is offline or the email is skipped, a copyable manual link is generated in the UI. Trigger the **Reset Password** flow from the Super Admin panel to send a setup link.
 - **Organization Switcher:** Super Admins can switch context to any tenant organization using the top-right header selector to view scoped dashboards and configure settings.
 
 ### 4. Start trading services (paper mode — ALWAYS start here)
@@ -127,14 +128,32 @@ All rules are configurable per organization via the Rules Config page, allowing 
 
 ## Schedule (AEST)
 
+### ASX / Equities (Australia)
 | Time | Task |
 |---|---|
-| 5:00pm Mon–Fri | Refresh price data |
-| 5:15pm Mon–Fri | Evaluate market regime |
-| 5:30pm Mon–Fri | Run Minervini screener |
-| 6:00pm Mon–Fri | Daily WhatsApp report |
-| Every 5 min (market hours) | Entry trigger + exit rule checks + Data Log snapshot |
-| Sunday 8pm | Refresh ASX200 universe |
+| Sunday 8:00pm | Refresh ASX200 universe (constituents from Wikipedia) |
+| Mon–Fri 5:00pm | Refresh EOD price data (yfinance) |
+| Mon–Fri 5:15pm | Evaluate market regime (BULL/CAUTION/BEAR) |
+| Mon–Fri 5:30pm | Run daily screener (generate signals) |
+| Mon–Fri 6:00pm | Daily WhatsApp report (P&L summary) |
+| Every 5 min (10am–4:12pm Mon–Fri) | Intraday entry breakout checks & defensive exit rules |
+| Every 15 min (market hours Mon–Fri) | Sync stop orders (IBKR) |
+
+### NYSE / NASDAQ (US Equities)
+| Time | Task |
+|---|---|
+| Tue–Sat 7:00am | Refresh EOD price data (yfinance) |
+| Tue–Sat 7:30am | Run daily screener (generate signals) |
+| Mon–Fri 11:00pm – Tue–Sat 6:00am | Intraday entry breakout checks & defensive exit rules (NYSE session) |
+
+### Crypto (Independent Reserve & Others — 24/7)
+| Time | Task |
+|---|---|
+| Every 5 min (24/7) | Intraday entry breakout checks & defensive exit rules |
+| Every 5 min (24/7) | Sync stop orders (trailing stop tracking & stop-out detection) |
+| Every 5 min (24/7) | Refresh current price & unrealised position P&L |
+| 12:30am, 6:30am, 12:30pm, 6:30pm | Refresh price data (6-hour interval) |
+| 12:45am, 6:45am, 12:45pm, 6:45pm | Run screener (4× daily VCP screening) |
 
 ---
 
@@ -167,10 +186,25 @@ vcpilot/
 ├── docker/           # Dockerfiles
 ├── migrations/       # DB schema + TimescaleDB setup
 ├── scripts/          # init_db.py, seed_config.py
+├── tests/            # pytest regression suite — critical trading paths
 ├── .env.example
 ├── docker-compose.yml
+├── pytest.ini
 └── requirements.txt
 ```
+
+---
+
+## Testing
+
+VCPilot ships with a pytest regression suite (`tests/`) covering the critical watchlist → signal → position → trade lifecycle — the paths where a silent bug means real capital goes unmanaged (e.g. a stop-loss that never fires, or a manual action that appears to do nothing). Tests run the real production code against an isolated in-memory database, so they're safe to run anytime with no risk to live data.
+
+```bash
+pip install -r requirements.txt   # installs pytest + pytest-mock
+pytest                            # runs the full suite from the project root
+```
+
+Covered scenarios include: watchlist → signal promotion (including the rollback behaviour when the task queue is unavailable), automated and manual position-closing (stop-loss exits, MCP tool calls), and crypto vs equity position classification. See `STATUS.md` for the bug-fix history these tests guard against, and `CLAUDE.md` § Testing for how to extend the suite.
 
 ---
 

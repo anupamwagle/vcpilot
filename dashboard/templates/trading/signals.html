@@ -21,6 +21,14 @@
 </div>
 {% endif %}
 
+<!-- ── Exchange filter bar ───────────────────────────────────────────── -->
+{% set base_url = "/signals" %}
+{% set extra_params = "" %}
+{% include "components/exchange_filter.html" %}
+<div style="display:flex;justify-content:flex-end;padding:.25rem 0 .25rem;margin-bottom:-.5rem">
+  <span id="signals-refresh-timer" style="font-size:.65rem;color:var(--text-subtle);font-family:'SF Mono',monospace">Live prices refresh every 30s</span>
+</div>
+
 {% if not signals %}
 <div class="card p-12 text-center">
   <div style="font-size:2.5rem;margin-bottom:.75rem">🔍</div>
@@ -55,7 +63,14 @@
               {% if s.ticker in favourited_tickers %}★{% else %}☆{% endif %}
             </button>
           </form>
-          {{ s.ticker }}
+          {{ s.ticker.replace('.AX','').replace('-USD','').replace('-USDT','').replace('-AUD','') }}
+          {% if s.exchange_key and s.exchange_key != 'ASX' %}
+          <span style="font-size:.6rem;font-weight:600;padding:.1rem .3rem;border-radius:.2rem;background:var(--surface-alt);color:var(--text-muted);border:1px solid var(--border)">
+            {{ s.flag_emoji or '' }} {{ s.exchange_key.replace('CRYPTO_','') }}
+          </span>
+          {% elif s.asset_type == 'CRYPTO' %}
+          <span style="font-size:.6rem;font-weight:600;padding:.1rem .3rem;border-radius:.2rem;background:var(--warn-bg);color:var(--warn)">₿</span>
+          {% endif %}
         </span>
         {% if s.company_name %}<span style="font-size:.7rem;color:var(--text-subtle);font-weight:normal;line-height:1.2">{{ s.company_name }}</span>{% endif %}
       </div>
@@ -94,7 +109,7 @@
   {# ── Key metrics ──────────────────────────────────────────────────── #}
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));border-bottom:1px solid var(--border)">
     {% for label, val, color in [
-      ('Close',    '$'~"%.3f"|format(s.close),  'var(--text)'),
+      ('Close*',   '$'~"%.3f"|format(s.close),  'var(--text)'),
       ('Pivot',    '$'~"%.3f"|format(s.pivot),  'var(--pos)'),
       ('Stop',     '$'~"%.3f"|format(s.stop),   'var(--neg)'),
       ('Target 1', '$'~"%.3f"|format(s.target), 'var(--warn)'),
@@ -107,6 +122,9 @@
       <p style="font-family:'SF Mono',monospace;font-size:.875rem;font-weight:700;color:{{ color }}">{{ val }}</p>
     </div>
     {% endfor %}
+  </div>
+  <div style="padding:.2rem 1rem;border-bottom:1px solid var(--border)">
+    <span style="font-size:.65rem;color:var(--text-subtle)">* Close = price when this signal was generated (static). For the live, 5-minute-refreshed price, see "Live $…" in the entry-check panel below.</span>
   </div>
 
   {# ── Screener rule badges ─────────────────────────────────────────── #}
@@ -137,17 +155,20 @@
   {% else %}
     {% set ns = namespace(failed=[]) %}
   {% endif %}
-  <div style="padding:.625rem 1rem;border-bottom:1px solid var(--border);background:{% if triggered %}var(--pos-bg){% elif not_triggered %}rgba(220,38,38,.04){% else %}var(--surface-alt){% endif %}">
+  <div id="chk-row-{{ s.id }}" style="padding:.625rem 1rem;border-bottom:1px solid var(--border);background:{% if triggered %}var(--pos-bg){% elif not_triggered %}rgba(220,38,38,.04){% else %}var(--surface-alt){% endif %}">
     <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
-      <span style="font-size:.7rem;font-weight:700;color:{% if triggered %}var(--pos){% elif not_triggered %}var(--neg){% else %}var(--text-muted){% endif %}">
+      <span id="chk-label-{{ s.id }}" style="font-size:.7rem;font-weight:700;color:{% if triggered %}var(--pos){% elif not_triggered %}var(--neg){% else %}var(--text-muted){% endif %}">
         {% if triggered %}✅ Entry triggered{% elif not_triggered %}❌ Breakout check{% else %}⏱ Last breakout check{% endif %}
       </span>
-      <span style="font-size:.7rem;color:var(--text-subtle);font-family:'SF Mono',monospace">{{ chk.time }}</span>
+      <span id="chk-time-{{ s.id }}" style="font-size:.7rem;color:var(--text-subtle);font-family:'SF Mono',monospace">{{ chk.time }}</span>
       {% if chk.close %}
-      <span style="font-size:.7rem;color:var(--text-subtle)">
-        price ${{ "%.3f"|format(chk.close) }}
-        {% if chk.pivot %} · pivot ${{ "%.3f"|format(chk.pivot) }}{% endif %}
+      <span id="chk-price-{{ s.id }}" style="font-size:.7rem;font-weight:700;padding:.1rem .4rem;border-radius:.25rem;background:var(--t-accent);color:#fff"
+            title="Live price fetched during the most recent 5-minute entry check{% if chk.data_source %} · source: {{ chk.data_source }}{% endif %}{% if chk.delay_mins %} · ~{{ chk.delay_mins }} min delayed{% elif chk.data_source == 'independentreserve' %} · real-time (IR){% endif %}">
+        {% if chk.data_source == 'independentreserve' %}🟢{% else %}🔴{% endif %} Live ${{ "%.3f"|format(chk.close) }} as of {{ chk.time }}{% if chk.delay_mins %} (~{{ chk.delay_mins }}m delayed){% elif chk.data_source == 'independentreserve' %} ⚡ Real-time{% endif %}
       </span>
+      {% if chk.pivot %}
+      <span style="font-size:.7rem;color:var(--text-subtle)">· pivot ${{ "%.3f"|format(chk.pivot) }}</span>
+      {% endif %}
       {% endif %}
       {# ── Inline "not met" summary ── #}
       {% if not triggered and ns.failed %}
@@ -285,17 +306,89 @@ function togglePanel(id) {
   if (!el) return;
   const isHidden = el.style.display === 'none' || el.style.display === '';
   el.style.display = isHidden ? 'block' : 'none';
-  // Update button text for passing-rules expander
   if (id.startsWith('ovr-pass-')) {
     const btn = el.previousElementSibling;
     if (btn) {
-      const count = el.querySelectorAll('[style*="display:inline-flex"]').length ||
-                    el.children.length;
       btn.textContent = isHidden
         ? `▼ Hide passing rules — click to collapse`
         : `▶ Show passing rules (${el.querySelectorAll('div').length}) — click to expand and override individually`;
     }
   }
 }
+
+// ── Live entry-check polling (30s) ──────────────────────────────────────────
+// Updates only the price badge + check label/time in-place — no page flash.
+(function() {
+  const INTERVAL = 30000;
+  let countdown = INTERVAL / 1000;
+  const timerEl = document.getElementById('signals-refresh-timer');
+
+  function fmtCountdown(s) { return s + 's'; }
+
+  function tick() {
+    countdown--;
+    if (timerEl) timerEl.textContent = 'Refreshing in ' + fmtCountdown(countdown);
+    if (countdown <= 0) {
+      countdown = INTERVAL / 1000;
+      pollChecks();
+    }
+  }
+
+  async function pollChecks() {
+    try {
+      const r = await fetch('/signals/poll');
+      if (!r.ok) return;
+      const data = await r.json(); // {signal_id: {time, close, pivot, result, data_source, delay_mins}}
+      for (const [sid, chk] of Object.entries(data)) {
+        const priceEl = document.getElementById('chk-price-' + sid);
+        const timeEl  = document.getElementById('chk-time-' + sid);
+        const labelEl = document.getElementById('chk-label-' + sid);
+        const rowEl   = document.getElementById('chk-row-' + sid);
+        if (!chk) continue;
+
+        if (timeEl && chk.time)  timeEl.textContent = chk.time;
+        if (labelEl && chk.result) {
+          const res = chk.result;
+          labelEl.textContent = res === 'triggered' ? '✅ Entry triggered'
+                              : res === 'not_triggered' ? '❌ Breakout check'
+                              : '⏱ Last breakout check';
+          labelEl.style.color = res === 'triggered' ? 'var(--pos)'
+                              : res === 'not_triggered' ? 'var(--neg)'
+                              : 'var(--text-muted)';
+        }
+        if (rowEl && chk.result) {
+          rowEl.style.background = chk.result === 'triggered' ? 'var(--pos-bg)'
+                                 : chk.result === 'not_triggered' ? 'rgba(220,38,38,.04)'
+                                 : 'var(--surface-alt)';
+        }
+        if (chk.close != null) {
+          const isIR      = chk.data_source === 'independentreserve';
+          const icon      = isIR ? '🟢' : '🔴';
+          const delayStr  = chk.delay_mins != null && chk.delay_mins > 0 ? ` (~${chk.delay_mins}m delayed)` : (isIR ? ' ⚡ Real-time' : '');
+          const srcStr    = chk.data_source ? ` · source: ${chk.data_source}` : '';
+          const delayTitle = chk.delay_mins != null && chk.delay_mins > 0 ? ` · ~${chk.delay_mins} min delayed` : (isIR ? ' · real-time (IR)' : '');
+          if (priceEl) {
+            priceEl.textContent = `${icon} Live $${parseFloat(chk.close).toFixed(3)} as of ${chk.time}${delayStr}`;
+            priceEl.title = `Live price from most recent entry check${srcStr}${delayTitle}`;
+            // Flash green briefly when price updates
+            priceEl.style.background = 'var(--pos)';
+            setTimeout(() => { priceEl.style.background = 'var(--t-accent)'; }, 600);
+          } else {
+            // Price element didn't exist yet (first check after page load) — reload to render it
+            location.reload();
+          }
+        }
+      }
+      if (timerEl) timerEl.textContent = 'Updated just now';
+      setTimeout(() => {
+        countdown = INTERVAL / 1000;
+        if (timerEl) timerEl.textContent = 'Refreshing in ' + fmtCountdown(countdown);
+      }, 2000);
+    } catch(e) { /* silent */ }
+  }
+
+  setInterval(tick, 1000);
+  if (timerEl) timerEl.textContent = 'Refreshing in ' + fmtCountdown(countdown);
+})();
 </script>
 {% endblock %}

@@ -129,11 +129,16 @@
 </div>
 {% endif %}
 
+<!-- ── Exchange filter bar ───────────────────────────────────────────── -->
+{% set base_url = "/positions" %}
+{% set extra_params = "" %}
+{% include "components/exchange_filter.html" %}
+
 <!-- Open Positions -->
 <div class="card overflow-hidden mb-6">
   <div class="section-head">
     <p class="section-title">Open Positions ({{ positions|length }})</p>
-    <p class="text-xs" style="color:var(--text-subtle)">Close = mark as closed, record trade, notify WhatsApp</p>
+    <p class="text-xs" style="color:var(--text-subtle)">Close = mark as closed, record trade, notify {% if notification_channel == 'telegram' %}Telegram{% else %}WhatsApp{% endif %}</p>
   </div>
   {% if positions %}
   <div class="table-responsive">
@@ -158,12 +163,22 @@
                   {% if p.ticker in favourited_tickers %}★{% else %}☆{% endif %}
                 </button>
               </form>
-              {{ p.ticker }}
+              {{ p.ticker.replace('.AX','').replace('-USD','').replace('-USDT','').replace('-AUD','') }}
+              {% if p.exchange_key and p.exchange_key != 'ASX' %}
+              <span style="font-size:.6rem;font-weight:600;padding:.1rem .3rem;border-radius:.2rem;background:var(--surface-alt);color:var(--text-muted);border:1px solid var(--border)">
+                {{ p.flag_emoji or '' }} {{ p.exchange_key.replace('CRYPTO_','') }}
+              </span>
+              {% elif p.asset_type == 'CRYPTO' %}
+              <span style="font-size:.6rem;padding:.1rem .3rem;border-radius:.2rem;background:var(--warn-bg);color:var(--warn)">₿</span>
+              {% endif %}
             </span>
             {% if p.company_name %}<br><span style="font-size:.68rem;color:var(--text-subtle)">{{ p.company_name }}</span>{% endif %}
           </td>
           <td class="text-right">{{ p.qty }}</td>
-          <td class="text-right mono">${{ "%.3f"|format(p.entry) }}</td>
+          <td class="text-right mono">
+            {% if p.currency and p.currency != 'AUD' %}<span style="font-size:.65rem;color:var(--text-subtle)">{{ p.currency }} </span>{% endif %}
+            ${{ "%.3f"|format(p.entry) }}
+          </td>
           <td class="text-right mono font-semibold" style="color:var(--text-muted)" title="Total capital invested: {{ p.qty }} × ${{ '%.3f'|format(p.entry) }}">
             ${{ "{:,.0f}".format(p.invested_aud) }}
           </td>
