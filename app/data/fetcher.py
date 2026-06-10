@@ -235,25 +235,33 @@ def currency_to_aud(amount: float, from_currency: str) -> float:
 
 # Base symbols (no suffix). normalize_ticker() appends "-USD" or "-AUD" per exchange.
 TOP_CRYPTO_SYMBOLS: list[str] = [
-    # Large-cap
+    # Mega-cap
     "BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "AVAX", "DOGE", "TRX", "LINK",
     "DOT", "MATIC", "SHIB", "LTC", "BCH", "UNI", "ATOM", "XLM", "NEAR", "ETC",
     "TON", "PEPE", "IMX", "APT", "SUI", "RENDER", "OP", "ARB", "FET", "STX",
-    # Mid-cap
+    # Large-cap
     "FIL", "HBAR", "VET", "ALGO", "AAVE", "ICP", "MKR", "QNT", "SAND", "MANA",
     "FLOW", "AXS", "THETA", "GRT", "CHZ", "ZEC", "XMR", "COMP", "YFI", "BAT",
     "INJ", "LDO", "WIF", "FLOKI", "BONK", "JUP", "TIA", "GALA", "PYTH", "JASMY",
     "FTM", "AR", "SEI", "BEAM", "W", "ENA", "CORE", "EGLD", "WLD", "DYDX",
-    # Emerging / DeFi / Infrastructure
+    # Mid-cap DeFi / Infrastructure
     "ENJ", "ZRX", "CRV", "SNX", "SUSHI", "OMG", "BAL", "REN", "1INCH", "RUNE",
     "STRK", "AGIX", "ORDI", "BTT", "MINA", "RON", "LRC", "GNO", "WOO", "RAY",
-    "IOTA", "ENS", "GMT", "ONE", "QTUM", "DGB", "KAVA", "ZIL", "ANKR", "WAVES"
+    "IOTA", "ENS", "GMT", "ONE", "QTUM", "DGB", "KAVA", "ZIL", "ANKR", "WAVES",
+    # Extended top-200
+    "PENDLE", "JTO", "PYUSD", "PIXEL", "PORTAL", "ALT", "DYM", "MANTA", "ZK", "SAGA",
+    "ETHFI", "REZ", "BB", "OMNI", "LISTA", "ZRO", "BANANA", "DOGS", "HMSTR", "CATI",
+    "EIGEN", "SCR", "KAIA", "CELO", "ROSE", "CFX", "LPT", "API3", "OCEAN", "BAND",
+    "STORJ", "NMR", "RLC", "OXT", "CTSI", "LOOM", "ORN", "DOCK", "DATA", "AST",
+    "BAKE", "BURGER", "DEGO", "MASK", "POLS", "ALPHA", "HARD", "WING", "BEL", "CTK",
+    "CHESS", "DODO", "FOR", "MDX", "FRONT", "LINA", "UNFI", "TLM", "QUICK", "FARM",
+    "GHST", "SUPER", "COMBO", "VITE", "FIRO", "STMX", "ONG", "COCOS", "XVS", "AUTO",
 ]
 
 
 def get_top_crypto_tickers(exchange_key: str = "CRYPTO_INDEPENDENTRESERVE") -> list[str]:
     """
-    Return the top 100 crypto tickers in yfinance format for the given exchange.
+    Return the top 200 crypto tickers in yfinance format for the given exchange.
     e.g. CRYPTO_INDEPENDENTRESERVE → ["BTC-AUD", "ETH-AUD", ...]
          CRYPTO_BINANCE → ["BTC-USD", "ETH-USD", ...]
     """

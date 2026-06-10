@@ -390,12 +390,15 @@ def _has_permission(request: Request, db: Session, perm_name: str) -> bool:
 # Auth
 # ---------------------------------------------------------------------------
 @app.get("/login", response_class=HTMLResponse)
-async def login_get(request: Request, next: str = Query("")):
-    if _auth(request):
+async def login_get(request: Request, next: str = Query(""), switch: str = Query("")):
+    # Allow showing the login page even when authenticated so users can switch accounts.
+    # Only auto-redirect if they aren't explicitly trying to switch.
+    if _auth(request) and not switch:
         if next:
             return RedirectResponse(next, 302)
         return RedirectResponse("/", 302)
-    return templates.TemplateResponse("login.html", {"request": request, "error": None, "next": next})
+    current_email = request.session.get("email", "") if _auth(request) else ""
+    return templates.TemplateResponse("login.html", {"request": request, "error": None, "next": next, "current_email": current_email})
 
 
 @app.post("/login")
@@ -3994,6 +3997,7 @@ async def superadmin_users_create(
     email: str = Form(...),
     organization_id: int = Form(...),
     role_id: int = Form(...),
+    send_welcome: str = Form(None),
     db: Session = Depends(get_db)
 ):
     if not _auth(request):
@@ -4037,32 +4041,32 @@ async def superadmin_users_create(
         user.roles.append(role)
     db.commit()
 
-    # Welcome email sending flow for User
-    from app.utils.email import send_email
     import urllib.parse
-    
-    host = request.headers.get("host", "localhost:8501")
-    scheme = "https" if request.url.scheme == "https" else "http"
-    reset_link = f"{scheme}://{host}/reset-password?token={token}"
-
-    subject = "Welcome to VCPilot! Set up your account"
-    html_content = (
-        '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px">'
-        '<h2 style="color:#1d4ed8">Welcome to VCPilot!</h2>'
-        f'<p>Hi {user.name},</p>'
-        '<p>An account has been created for you on VCPilot. Click the button below to set up your password and log in:</p>'
-        f'<div style="text-align:center;margin:30px 0"><a href="{reset_link}" '
-        'style="background:#1d4ed8;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px">Set Up Password & Log In</a></div>'
-        f'<p style="font-size:12px;color:#6b7280">Or copy: {reset_link}</p>'
-        '<p style="color:#6b7280;font-size:14px">This link expires in 24 hours.</p></div>'
-    )
-    
-    email_sent = send_email(user.email, subject, html_content)
     encoded_email = urllib.parse.quote(user.email)
-    if email_sent:
-        return RedirectResponse(f"/superadmin/users?saved=welcome_email&email={encoded_email}", 302)
+
+    if send_welcome == "1":
+        from app.utils.email import send_email
+        host = request.headers.get("host", "localhost:8501")
+        scheme = "https" if request.url.scheme == "https" else "http"
+        reset_link = f"{scheme}://{host}/reset-password?token={token}"
+        subject = "Welcome to VCPilot! Set up your account"
+        html_content = (
+            '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px">'
+            '<h2 style="color:#1d4ed8">Welcome to VCPilot!</h2>'
+            f'<p>Hi {user.name},</p>'
+            '<p>An account has been created for you on VCPilot. Click the button below to set up your password and log in:</p>'
+            f'<div style="text-align:center;margin:30px 0"><a href="{reset_link}" '
+            'style="background:#1d4ed8;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px">Set Up Password & Log In</a></div>'
+            f'<p style="font-size:12px;color:#6b7280">Or copy: {reset_link}</p>'
+            '<p style="color:#6b7280;font-size:14px">This link expires in 24 hours.</p></div>'
+        )
+        email_sent = send_email(user.email, subject, html_content)
+        if email_sent:
+            return RedirectResponse(f"/superadmin/users?saved=welcome_email&email={encoded_email}", 302)
+        else:
+            return RedirectResponse(f"/superadmin/users?saved=welcome_manual&token={token}&email={encoded_email}", 302)
     else:
-        return RedirectResponse(f"/superadmin/users?saved=welcome_manual&token={token}&email={encoded_email}", 302)
+        return RedirectResponse(f"/superadmin/users?saved=created&email={encoded_email}", 302)
 
 
 @app.post("/superadmin/users/{user_id}/update-role")

@@ -43,6 +43,13 @@
   </div>
 
   <div class="login-card">
+    {% if current_email %}
+    <div class="p-3 mb-4 text-xs rounded-lg border flex items-center justify-between gap-2" style="background:var(--surface-alt);border-color:var(--border);color:var(--text-muted)">
+      <span>Signed in as <strong style="color:var(--text)">{{ current_email }}</strong></span>
+      <a href="/logout" class="text-xs font-semibold hover:underline" style="color:var(--t-accent)">Sign out</a>
+    </div>
+    {% endif %}
+
     {% if error %}
     <div class="p-3 mb-4 text-xs font-semibold rounded-lg text-red-600 bg-red-50 dark:bg-red-950/20 dark:text-red-400 border border-red-200 dark:border-red-900/50">
       {{ error }}
