@@ -16,7 +16,8 @@
   </div>
 </div>
 
-<!-- Data delay banner -->
+<!-- Data delay banner — only shown when delayed data is present -->
+{% if has_delayed_data %}
 <div id="delay-banner" class="card mb-4 p-3 flex flex-col gap-1" style="border-left:3px solid var(--warn);background:var(--warn-bg)">
   <div class="flex items-center gap-2">
     <svg class="w-4 h-4 flex-shrink-0" style="color:var(--warn)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -25,11 +26,27 @@
     <p class="text-sm font-semibold" style="color:var(--warn)">Data Delay Notice</p>
   </div>
   <p class="text-xs" style="color:var(--text-muted)">
-    <strong>yfinance (free tier)</strong> provides ASX data with a <strong>~15–20 minute delay</strong>.
-    Price shown is not real-time. Connect IBKR Gateway in <a href="/admin/config" style="color:var(--t-accent)">Admin → Config</a>
-    to unlock real-time data. Entry checks run every 5 minutes; data freshness depends on your data source.
+    Some prices below are sourced from <strong>yfinance (free tier)</strong> with a <strong>~15–20 minute delay</strong>.
+    Connect IBKR Gateway (equities) or set your Crypto API credentials in <a href="/admin/config" style="color:var(--t-accent)">Admin → Config</a>
+    to unlock real-time data.
   </p>
 </div>
+{% elif has_realtime_data %}
+<div class="card mb-4 p-3 flex items-center gap-2" style="border-left:3px solid var(--pos);background:var(--pos-bg)">
+  <svg class="w-4 h-4 flex-shrink-0" style="color:var(--pos)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+  </svg>
+  <p class="text-xs font-semibold" style="color:var(--pos)">Real-time data active — prices sourced directly from IBKR or Independent Reserve with 0-minute delay.</p>
+</div>
+{% elif total == 0 %}
+<div class="card mb-4 p-3 flex flex-col gap-1" style="border-left:3px solid var(--border)">
+  <p class="text-xs font-semibold" style="color:var(--text-muted)">No entry check logs yet</p>
+  <p class="text-xs" style="color:var(--text-subtle)">
+    Logs appear here once the entry check task runs. For equities, checks run every 5 min during ASX market hours (10am–4:12pm AEST).
+    For crypto, checks run 24/7. Trigger one manually from <a href="/admin/tasks" style="color:var(--t-accent)">Task Log</a> → <strong>Run Entry Check</strong>.
+  </p>
+</div>
+{% endif %}
 
 <!-- Exchange Filter -->
 {% include "components/exchange_filter.html" %}

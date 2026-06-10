@@ -168,20 +168,9 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                     ).first()
                 regime = regime_cfg.value if regime_cfg else "UNKNOWN"
 
-            if regime == "BEAR":
-                logger.info(f"Market in BEAR regime — skipping Org '{org.name}' new entries")
-                try:
-                    for signal in pending_signals:
-                        db.add(AuditLog(
-                            action=AuditAction.TASK_RUN,
-                            organization_id=org.id,
-                            ticker=signal.ticker,
-                            message="Entry check: skipped because market is in BEAR regime",
-                            detail={"signal_id": signal.id, "result": "skipped_bear_regime"}
-                        ))
-                except Exception as e:
-                    logger.error(f"Failed to log BEAR check for {org.name}: {e}")
-                continue
+            bear_block_rule = "regime_bear_block_crypto" if is_crypto_exchange else "regime_bear_block_equities"
+            bear_block_enabled = engine.is_enabled(bear_block_rule)
+            # BEAR regime blocking is checked per-signal below so per-signal overrides are respected
 
             # Get account capital
             from app.models.account import Account
@@ -270,6 +259,20 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                 overrides = signal.rule_overrides or {}
                 if overrides:
                     engine.apply_signal_overrides(overrides)
+
+                # Per-signal BEAR regime check (after overrides — so per-signal override bypasses it)
+                bear_overridden = overrides.get(bear_block_rule) is False  # False = user disabled (bypassed) this rule
+                if regime == "BEAR" and bear_block_enabled and not bear_overridden:
+                    with get_db() as _db:
+                        _db.add(AuditLog(
+                            action=AuditAction.TASK_RUN,
+                            organization_id=org.id,
+                            ticker=signal.ticker,
+                            message=f"Entry check: skipped because market is in BEAR regime (rule '{bear_block_rule}' enabled)",
+                            detail={"signal_id": signal.id, "result": "skipped_bear_regime"}
+                        ))
+                    engine.clear_signal_overrides()
+                    continue
 
                 # Check breakout conditions
                 breakout_rules = check_breakout(

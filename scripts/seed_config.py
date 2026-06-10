@@ -374,6 +374,22 @@ RULE_CONFIGS = [
          threshold_min=2.0, threshold_max=8.0,
          enabled_globally=True, is_mandatory=False),
 
+    dict(rule_id="regime_bear_block_equities",
+         category="MARKET_REGIME", sort_order=43,
+         label="Block equity entries in BEAR regime",
+         description="No new equity buy orders when the market regime is BEAR. Disable to allow entries in all market conditions.",
+         minervini_ref="Minervini: Never fight the tape — only trade in BULL markets",
+         enabled_globally=True, is_mandatory=False, threshold=None,
+         asset_types="EQUITY"),
+
+    dict(rule_id="regime_bear_block_crypto",
+         category="MARKET_REGIME", sort_order=44,
+         label="Block crypto entries in BEAR regime",
+         description="No new crypto buy orders when the BTC market regime is BEAR. Disable to allow entries regardless of BTC trend.",
+         minervini_ref="Minervini: Trade with the trend — applied to BTC as crypto market proxy",
+         enabled_globally=True, is_mandatory=False, threshold=None,
+         asset_types="CRYPTO"),
+
     # =========================================================================
     # ENTRY RULES
     # =========================================================================

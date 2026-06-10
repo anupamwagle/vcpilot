@@ -140,6 +140,8 @@ def refresh_universe(self):
     """Update ASX200 stock universe in the database, including names and sectors."""
     logger.info("Refreshing ASX universe...")
     try:
+        with get_db() as db:
+            db.add(AuditLog(action=AuditAction.TASK_RUN, message="[ASX] Universe refresh started — fetching ASX200 constituents..."))
         metadata = get_asx200_metadata()
         tickers = get_asx200_tickers()
         with get_db() as db:
@@ -153,14 +155,23 @@ def refresh_universe(self):
                 if not stock:
                     stock = Stock(
                         ticker=ticker,
+                        exchange_code=asx_code,
                         asx_code=asx_code,
+                        exchange_key="ASX",
+                        asset_type="EQUITY",
+                        currency="AUD",
                         in_asx200=True,
                         name=name,
-                        sector=sector
+                        sector=sector,
+                        is_active=True,
                     )
                     db.add(stock)
                 else:
                     stock.in_asx200 = True
+                    if not stock.exchange_code:
+                        stock.exchange_code = asx_code
+                    if not stock.exchange_key:
+                        stock.exchange_key = "ASX"
                     if name and not stock.name:
                         stock.name = name
                     if sector and not stock.sector:
@@ -174,6 +185,51 @@ def refresh_universe(self):
     except Exception as exc:
         logger.error(f"Universe refresh failed: {exc}")
         raise self.retry(exc=exc, countdown=300)
+
+
+def _write_task_heartbeat(progress_msg: str = ""):
+    """
+    Write a heartbeat + optional audit entry during a long-running task.
+    Prevents the health page from showing false 'offline' while the worker
+    is busy with a slow task (e.g. downloading 500 stocks from yfinance).
+    """
+    from datetime import datetime
+    from app.models.account import Organization
+    now_str = datetime.utcnow().isoformat()
+    try:
+        with get_db() as db:
+            # Global heartbeat
+            cfg = db.query(SystemConfig).filter(
+                SystemConfig.key == "last_heartbeat",
+                SystemConfig.organization_id == None,
+            ).first()
+            if cfg:
+                cfg.value = now_str
+            else:
+                db.add(SystemConfig(
+                    key="last_heartbeat", value=now_str,
+                    label="Last Worker Heartbeat", group="system",
+                    organization_id=None,
+                ))
+            # Per-org heartbeats
+            orgs = db.query(Organization).filter(Organization.is_active == True).all()
+            for org in orgs:
+                cfg_org = db.query(SystemConfig).filter(
+                    SystemConfig.key == "last_heartbeat",
+                    SystemConfig.organization_id == org.id,
+                ).first()
+                if cfg_org:
+                    cfg_org.value = now_str
+                else:
+                    db.add(SystemConfig(
+                        key="last_heartbeat", value=now_str,
+                        label="Last Worker Heartbeat", group="system",
+                        organization_id=org.id,
+                    ))
+            if progress_msg:
+                db.add(AuditLog(action=AuditAction.TASK_RUN, message=progress_msg))
+    except Exception as e:
+        logger.warning(f"Task heartbeat write failed (non-fatal): {e}")
 
 
 @app.task(name="app.tasks.screening.refresh_price_data", bind=True, max_retries=2)
@@ -198,6 +254,9 @@ def refresh_price_data(self, exchange_key: str = None):
 
     logger.info(f"Refreshing price data{f' for {exchange_key}' if exchange_key else ' (all exchanges)'}...")
     try:
+        with get_db() as db:
+            db.add(AuditLog(action=AuditAction.TASK_RUN,
+                message=f"[{exchange_key or 'ALL'}] Price data refresh started — downloading 2yr OHLCV history..."))
         with get_db() as db:
             query = db.query(Stock).filter(Stock.is_active == True, Stock.blacklisted == False)
             if exchange_key:
@@ -233,11 +292,18 @@ def refresh_price_data(self, exchange_key: str = None):
         # Fetch in batches of 100
         batch_size = 100
         all_prices = {}
+        total_batches = (len(tickers) + batch_size - 1) // batch_size
         for i in range(0, len(tickers), batch_size):
             batch = tickers[i:i+batch_size]
             prices = get_batch_prices(batch, period="2y")
             all_prices.update(prices)
-            logger.debug(f"Fetched {len(prices)}/{len(batch)} in batch {i//batch_size+1}")
+            batch_num = i // batch_size + 1
+            logger.debug(f"Fetched {len(prices)}/{len(batch)} in batch {batch_num}")
+            # Heartbeat every batch — prevents false 'offline' during long downloads
+            _write_task_heartbeat(
+                f"[{exchange_key or 'ALL'}] Price fetch: batch {batch_num}/{total_batches} "
+                f"({len(all_prices)}/{len(tickers)} stocks)"
+            )
 
         # Compute RS ratings across all stocks
         rs_ratings = compute_rs_ratings(all_prices)
@@ -675,32 +741,72 @@ def run_daily_screen(self, exchange_key: str = "ASX"):
 @app.task(name="app.tasks.screening.run_full_setup", bind=True)
 def run_full_setup(self):
     """
-    First-time setup chain:
-    1. Refresh universe (fetch ASX200 tickers)
-    2. Refresh price data (2yr OHLCV for all tickers)
-    3. Evaluate market regime
-    4. Run Minervini screener
+    First-time setup chain — runs for every active exchange across all orgs:
+      ASX:    universe → price data → regime → screener
+      Crypto: seed universe → price data → regime → screener
     Designed to be triggered manually from the dashboard on first run.
     """
     from celery import chain as celery_chain
-    logger.info("Starting full VCPilot setup sequence...")
     from app.models.account import Organization
+    logger.info("Starting full VCPilot setup sequence...")
+
     with get_db() as db:
         orgs = db.query(Organization).filter(Organization.is_active == True).all()
+
+    # Collect active exchanges across all orgs
+    has_asx = False
+    crypto_keys: set[str] = set()
+    for org in orgs:
+        with get_db() as db:
+            cfg = db.query(SystemConfig).filter(
+                SystemConfig.key == "active_exchanges",
+                SystemConfig.organization_id == org.id,
+            ).first()
+            if cfg and cfg.value:
+                for exc in cfg.value.split(","):
+                    exc = exc.strip()
+                    if exc == "ASX":
+                        has_asx = True
+                    elif exc.startswith("CRYPTO_"):
+                        crypto_keys.add(exc)
+
+    # Default to ASX if nothing configured
+    if not has_asx and not crypto_keys:
+        has_asx = True
+
+    exchanges_desc = (["ASX"] if has_asx else []) + sorted(crypto_keys)
     for org in orgs:
         try:
             notifier = get_notifier(organization_id=org.id)
-            notifier.send("⚙️ VCPilot full setup starting: universe → data → regime → screener")
+            notifier.send(f"⚙️ VCPilot full setup starting for: {', '.join(exchanges_desc)}")
         except Exception as org_err:
             logger.error(f"Failed to notify Org {org.name} (ID: {org.id}) of full setup: {org_err}")
 
-    # Run sequentially as a chain
-    celery_chain(
-        refresh_universe.si(),
-        refresh_price_data.si(),
-        evaluate_market_regime_task.si(),
-        _run_screen_force.si(),
-    ).delay()
+    with get_db() as db:
+        db.add(AuditLog(
+            action=AuditAction.TASK_RUN,
+            message=f"⚙️ Full setup started for exchanges: {', '.join(exchanges_desc)} (15–25 min per exchange)",
+        ))
+
+    # ASX chain
+    if has_asx:
+        celery_chain(
+            refresh_universe.si(),
+            refresh_price_data.si("ASX"),
+            evaluate_market_regime_task.si("ASX"),
+            _run_screen_force.si(exchange_key="ASX"),
+        ).delay()
+        logger.info("ASX setup chain queued")
+
+    # Crypto chains — one independent chain per exchange key
+    for crypto_key in sorted(crypto_keys):
+        celery_chain(
+            refresh_crypto_universe.si(exchange_key=crypto_key),
+            refresh_price_data.si(crypto_key),
+            evaluate_market_regime_task.si(crypto_key),
+            _run_screen_force.si(exchange_key=crypto_key),
+        ).delay()
+        logger.info(f"{crypto_key} setup chain queued")
 
 
 @app.task(name="app.tasks.screening._run_screen_force", bind=True, max_retries=1)

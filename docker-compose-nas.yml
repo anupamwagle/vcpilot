@@ -1,12 +1,11 @@
 # =============================================================================
-# VCPilot — Docker Compose (Code mounted from host — restart to pick up changes)
+# VCPilot — Production Ready Docker Compose (Zero Host Volume Mounts for Code)
 # =============================================================================
 
 x-app-env: &app-env
   env_file: .env
   environment:
-    - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB}
-    #- DATABASE_URL=${DATABASE_URL}
+    - DATABASE_URL=${DATABASE_URL}
     - REDIS_URL=${REDIS_URL}
 
 networks:
@@ -26,22 +25,20 @@ services:
   database:
     image: timescale/timescaledb:latest-pg16
     container_name: vcpilot-database
-    user: root
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_PORT:-5439}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       # REMOVED: Local migrations mount. The initialization container handles seeds.
     networks:
       - vcpilot-net
     healthcheck:
-      #test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      test: ["CMD-SHELL", "pg_isready -U vcpilot -d vcpilot -p 5432"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -81,9 +78,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ./app:/app/app
-      - ./scripts:/app/scripts
+    # REMOVED: Host volumes to enforce utilizing internal Dockerfile code bundle
     networks:
       - vcpilot-net
     command: sh -c "python -m scripts.init_db && python -m scripts.migrate_saas"
@@ -105,8 +100,6 @@ services:
         condition: service_healthy
       app:
         condition: service_completed_successfully
-    volumes:
-      - ./app:/app/app
     networks:
       - vcpilot-net
     command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4 -Q default,reporting,screening_equities,trading_equities
@@ -133,8 +126,6 @@ services:
         condition: service_healthy
       app:
         condition: service_completed_successfully
-    volumes:
-      - ./app:/app/app
     networks:
       - vcpilot-net
     command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2 -Q trading_crypto,screening_crypto
@@ -161,8 +152,6 @@ services:
         condition: service_healthy
       app:
         condition: service_completed_successfully
-    volumes:
-      - ./app:/app/app
     networks:
       - vcpilot-net
     command: >
@@ -191,9 +180,6 @@ services:
         condition: service_completed_successfully
     ports:
       - "0.0.0.0:${DASHBOARD_PORT:-8501}:8501"
-    volumes:
-      - ./app:/app/app
-      - ./dashboard:/app/dashboard
     networks:
       - vcpilot-net
     command: >

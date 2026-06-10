@@ -500,12 +500,12 @@ def migrate():
                         INSERT INTO rule_configs (
                             rule_id, organization_id, category, label, description, minervini_ref,
                             enabled_globally, threshold, threshold_label, threshold_min, threshold_max,
-                            tier_overrides, is_mandatory, sort_order, updated_by
+                            tier_overrides, is_mandatory, sort_order, asset_types, updated_by
                         )
                         SELECT
                             rule_id, :org_id, category, label, description, minervini_ref,
                             enabled_globally, threshold, threshold_label, threshold_min, threshold_max,
-                            tier_overrides, is_mandatory, sort_order, 'migration'
+                            tier_overrides, is_mandatory, sort_order, asset_types, 'migration'
                         FROM rule_configs
                         WHERE organization_id IS NULL;
                     """), {"org_id": org_id})
@@ -782,12 +782,9 @@ def migrate():
 
         # ── Migration 004 — numeric column types on RuleConfig ────────────────
         logger.info("Running migration 004 — numeric column types on RuleConfig...")
-        conn.execute(text("""
-            ALTER TABLE rule_configs ALTER COLUMN threshold TYPE NUMERIC(20, 4);
-            ALTER TABLE rule_configs ALTER COLUMN threshold_min TYPE NUMERIC(20, 4);
-            ALTER TABLE rule_configs ALTER COLUMN threshold_max TYPE NUMERIC(20, 4);
-        """))
-        conn.commit()
+        _safe("ALTER TABLE rule_configs ALTER COLUMN threshold TYPE NUMERIC(20, 4)")
+        _safe("ALTER TABLE rule_configs ALTER COLUMN threshold_min TYPE NUMERIC(20, 4)")
+        _safe("ALTER TABLE rule_configs ALTER COLUMN threshold_max TYPE NUMERIC(20, 4)")
         logger.info("Migration 004 complete.")
 
         # ── Migration 005 — seed Independent Reserve + update Kraken sort_order ─
@@ -824,6 +821,49 @@ def migrate():
         """))
         conn.commit()
         logger.info("Migration 005 complete.")
+
+        # ── Migration 006 — BEAR regime block rules ───────────────────────────
+        logger.info("Running migration 006 — seed regime_bear_block rules...")
+        for rule_id, label, description, asset_types in [
+            ("regime_bear_block_equities",
+             "Block equity entries in BEAR regime",
+             "No new equity buy orders when the market regime is BEAR. Disable to allow entries in all market conditions.",
+             "EQUITY"),
+            ("regime_bear_block_crypto",
+             "Block crypto entries in BEAR regime",
+             "No new crypto buy orders when the BTC market regime is BEAR. Disable to allow entries regardless of BTC trend.",
+             "CRYPTO"),
+        ]:
+            # Seed global template if missing
+            exists_global = conn.execute(text(
+                "SELECT 1 FROM rule_configs WHERE rule_id = :r AND organization_id IS NULL"
+            ), {"r": rule_id}).fetchone()
+            if not exists_global:
+                conn.execute(text("""
+                    INSERT INTO rule_configs (rule_id, organization_id, category, label, description,
+                        minervini_ref, enabled_globally, is_mandatory, sort_order, asset_types, updated_by)
+                    VALUES (:rule_id, NULL, 'MARKET_REGIME', :label, :description,
+                        'Minervini: Only trade in BULL markets', true, false,
+                        (SELECT COALESCE(MAX(sort_order), 40) + 1 FROM rule_configs WHERE organization_id IS NULL AND category = 'MARKET_REGIME'),
+                        :asset_types, 'migration')
+                """), {"rule_id": rule_id, "label": label, "description": description, "asset_types": asset_types})
+            # Seed per-org copy for all existing orgs if missing
+            orgs_list = conn.execute(text("SELECT id FROM organizations WHERE is_active = true")).fetchall()
+            for (oid,) in orgs_list:
+                exists_org = conn.execute(text(
+                    "SELECT 1 FROM rule_configs WHERE rule_id = :r AND organization_id = :oid"
+                ), {"r": rule_id, "oid": oid}).fetchone()
+                if not exists_org:
+                    conn.execute(text("""
+                        INSERT INTO rule_configs (rule_id, organization_id, category, label, description,
+                            minervini_ref, enabled_globally, is_mandatory, sort_order, asset_types, updated_by)
+                        VALUES (:rule_id, :oid, 'MARKET_REGIME', :label, :description,
+                            'Minervini: Only trade in BULL markets', true, false,
+                            (SELECT COALESCE(MAX(sort_order), 40) + 1 FROM rule_configs WHERE organization_id IS NULL AND category = 'MARKET_REGIME'),
+                            :asset_types, 'migration')
+                    """), {"rule_id": rule_id, "oid": oid, "label": label, "description": description, "asset_types": asset_types})
+        conn.commit()
+        logger.info("Migration 006 complete.")
 
         # ── Seed per-org multi-market config keys ──────────────────────────────
         multi_market_configs = [

@@ -253,14 +253,32 @@ def _global(request: Request, db: Session) -> dict:
     whatsapp_enabled = cfg("whatsapp_enabled", "true").lower() == "true"
     notification_channel = cfg("notification_channel", "whatsapp") or "whatsapp"
 
-    # Resolve active market regime: use mock_market_regime when simulation clock is on
+    # Resolve active market regime across all active exchanges; use mock when sim clock is on
     mock_time_on = cfg("mock_time_enabled", "false").lower() == "true"
     if mock_time_on:
-        mock_regime = cfg("mock_market_regime", "")
-        regime_raw  = mock_regime if mock_regime else cfg("last_market_regime", "")
+        regime_raw = cfg("mock_market_regime", "") or cfg("last_market_regime", "")
         regime_is_simulated = True
     else:
-        regime_raw  = cfg("last_market_regime", "")
+        # Derive overall regime = worst across all active exchanges for this org
+        _active_excs = [e.strip() for e in (cfg("active_exchanges", "ASX") or "ASX").split(",") if e.strip()]
+        _regime_order = {"BEAR": 0, "CAUTION": 1, "BULL": 2, "UNKNOWN": 3}
+        _regimes = []
+        for _exc in _active_excs:
+            _rc = db.query(SystemConfig).filter(
+                SystemConfig.key == f"last_market_regime_{_exc}",
+                SystemConfig.organization_id == org_id,
+            ).first()
+            if _rc and _rc.value and _rc.value not in ("UNKNOWN", ""):
+                _regimes.append(_rc.value)
+        # Fall back to legacy global key for ASX if no per-exchange keys found
+        if not _regimes:
+            _legacy = db.query(SystemConfig).filter(
+                SystemConfig.key == "last_market_regime",
+                SystemConfig.organization_id == None,
+            ).first()
+            if _legacy and _legacy.value:
+                _regimes.append(_legacy.value)
+        regime_raw = min(_regimes, key=lambda r: _regime_order.get(r, 3)) if _regimes else ""
         regime_is_simulated = False
 
     is_paper = os.getenv("IBKR_PAPER_MODE", "true").lower() == "true"
@@ -604,19 +622,21 @@ async def home(
     positions = db.query(Position).filter(Position.status == TradeStatus.OPEN, Position.organization_id == org_id).all()
     pos_data, total_risk = [], 0.0
     for p in positions:
-        curr  = float(p.current_price or p.entry_price)
-        entry = float(p.entry_price)
-        stop  = float(p.current_stop)
-        pnl   = (curr - entry) * p.qty
-        total_risk += (entry - stop) * p.qty
+        entry = float(p.entry_price or 0)
+        curr  = float(p.current_price or entry)
+        stop  = float(p.current_stop or 0)
+        qty   = float(p.qty or 0)
+        pnl   = (curr - entry) * qty
+        if entry > 0 and stop > 0:
+            total_risk += (entry - stop) * qty
         pos_data.append({
             "ticker": p.ticker,
             "company_name": stock_names.get(p.ticker, ""),
-            "qty": p.qty,
+            "qty": qty,
             "entry": entry, "current": curr, "stop": stop,
-            "pnl_pct": round((curr - entry) / entry * 100, 2),
+            "pnl_pct": round((curr - entry) / entry * 100, 2) if entry else 0,
             "pnl_aud": round(pnl, 2),
-            "days": (get_current_date() - p.entry_date).days,
+            "days": (get_current_date() - p.entry_date).days if p.entry_date else 0,
             "is_paper": p.is_paper,
         })
 
@@ -818,10 +838,12 @@ async def positions(request: Request, db: Session = Depends(get_db),
     pos_data = []
     total_risk = 0.0
     for p in positions:
-        curr  = float(p.current_price or p.entry_price)
-        entry = float(p.entry_price)
-        stop  = float(p.current_stop)
-        total_risk += (entry - stop) * p.qty
+        entry = float(p.entry_price or 0)
+        curr  = float(p.current_price or entry)
+        stop  = float(p.current_stop or 0)
+        qty   = float(p.qty or 0)
+        if entry > 0 and stop > 0:
+            total_risk += (entry - stop) * qty
         
         # Query last 2 exit checks for this position
         exit_checks = []
@@ -871,14 +893,14 @@ async def positions(request: Request, db: Session = Depends(get_db),
             "currency":      getattr(p, "currency", "AUD") or "AUD",
             "flag_emoji":    flag_map.get(ek, ""),
             "company_name": stock_names.get(p.ticker, ""),
-            "qty": p.qty,
+            "qty": qty,
             "entry": entry, "current": curr,
             "stop": stop,
             "target_1": float(p.target_1 or 0),
-            "invested_aud": round(entry * p.qty, 2),
-            "pnl_pct": round((curr - entry) / entry * 100, 2),
-            "pnl_aud": round((curr - entry) * p.qty, 2),
-            "days": (get_current_date() - p.entry_date).days,
+            "invested_aud": round(entry * qty, 2),
+            "pnl_pct": round((curr - entry) / entry * 100, 2) if entry else 0,
+            "pnl_aud": round((curr - entry) * qty, 2),
+            "days": (get_current_date() - p.entry_date).days if p.entry_date else 0,
             "entry_date": str(p.entry_date),
             "is_paper": p.is_paper,
             "exit_checks": exit_checks,
@@ -903,9 +925,9 @@ async def positions(request: Request, db: Session = Depends(get_db),
         "currency":      getattr(t, "currency", "AUD") or "AUD",
         "flag_emoji":    flag_map.get(getattr(t, "exchange_key", "ASX") or "ASX", ""),
         "company_name": stock_names.get(t.ticker, ""),
-        "entry_date": str(t.entry_date), "exit_date": str(t.exit_date),
-        "days": t.hold_days,
-        "entry": float(t.entry_price), "exit": float(t.exit_price),
+        "entry_date": str(t.entry_date or ""), "exit_date": str(t.exit_date or ""),
+        "days": t.hold_days or 0,
+        "entry": float(t.entry_price or 0), "exit": float(t.exit_price or 0),
         "pnl_pct": round(float(t.pnl_pct or 0) * 100, 2),
         "pnl_aud": round(float(t.net_pnl_aud or 0), 2),
         "reason": str(t.exit_reason).replace("ExitReason.", "").replace("_", " "),
@@ -1178,6 +1200,32 @@ async def signals(request: Request, db: Session = Depends(get_db),
         if last_check and last_check.get("rules"):
             for br in last_check["rules"]:
                 screener_pass_fail[br["rule_id"]] = br["passed"]
+
+        # Inject BEAR regime block as a failed rule when market is in BEAR
+        # so the org admin can override it per-signal from this page
+        from app.models.config import SystemConfig as _SC
+        sig_is_crypto = getattr(s, "asset_type", "EQUITY") == "CRYPTO"
+        bear_rule_id  = "regime_bear_block_crypto" if sig_is_crypto else "regime_bear_block_equities"
+        _exc_key = getattr(s, "exchange_key", "ASX") or "ASX"
+        _is_crypto_exc = _exc_key == "CRYPTO" or _exc_key.startswith("CRYPTO_")
+        if _is_crypto_exc:
+            _eff_exc = _exc_key if _exc_key != "CRYPTO" else "CRYPTO_INDEPENDENTRESERVE"
+            _regime_cfg = db.query(_SC).filter(
+                _SC.key == f"last_market_regime_{_eff_exc}",
+                _SC.organization_id == org_id,
+            ).first()
+            _current_regime = _regime_cfg.value if _regime_cfg else "BULL"
+        else:
+            _regime_cfg = db.query(_SC).filter(
+                _SC.key == "last_market_regime",
+                _SC.organization_id == None,
+            ).first()
+            _current_regime = _regime_cfg.value if _regime_cfg else "UNKNOWN"
+        _bear_rule_meta = rules_meta.get(bear_rule_id, {})
+        _bear_rule_globally_on = _bear_rule_meta.get("globally_enabled", True)
+        if _current_regime == "BEAR" and _bear_rule_globally_on:
+            # True if user already overrode this rule for the signal, False if still blocking
+            screener_pass_fail[bear_rule_id] = overrides.get(bear_rule_id) is False
 
         override_rules_failed = []
         override_rules_passed = []
@@ -1716,8 +1764,8 @@ async def close_position(
     today = get_current_date()
     close_price = exit_price if (exit_price and exit_price > 0) else float(pos.current_price or pos.entry_price)
     entry_price = float(pos.entry_price)
-    pnl_aud = (close_price - entry_price) * pos.qty
-    pnl_pct = (close_price - entry_price) / entry_price * 100
+    pnl_aud = (close_price - entry_price) * float(pos.qty or 0)
+    pnl_pct = (close_price - entry_price) / entry_price * 100 if entry_price else 0
 
     # Validate exit reason
     try:
@@ -2012,7 +2060,7 @@ async def action_full_setup(request: Request):
     # Super admins allowed in standard views under active organization context
     from app.tasks.screening import run_full_setup
     run_full_setup.delay()
-    return RedirectResponse("/admin/health?msg=setup", 302)
+    return RedirectResponse("/admin/tasks?msg=setup", 302)
 
 
 @app.post("/action/dismiss-onboarding")
@@ -2250,6 +2298,18 @@ async def admin_health(request: Request, db: Session = Depends(get_db)):
     from app.models.config import SystemConfig
     from sqlalchemy import func, or_
     ctx = _global(request, db); display_tz = ctx.get("display_tz","UTC")
+    # If worker appears offline, check for recent task activity — it may just be running a
+    # long task (e.g. price refresh) which blocks the heartbeat task from executing.
+    if ctx.get("worker_status") == "offline":
+        from datetime import timedelta
+        _cutoff = datetime.utcnow() - timedelta(minutes=45)
+        _busy = db.query(AuditLog).filter(
+            AuditLog.created_at >= _cutoff,
+            AuditLog.action.in_([AuditAction.SCREENER_RUN, AuditAction.SCREENER_TICKER, AuditAction.TASK_RUN])
+        ).first()
+        if _busy:
+            ctx["worker_status"] = "busy"
+            ctx["trading_active"] = True  # Don't block trading while worker is busy
     account = db.query(Account).filter(Account.is_active==True,Account.organization_id==org_id).first()
     try: logs=db.query(AuditLog).filter(AuditLog.organization_id==org_id).order_by(desc(AuditLog.created_at)).limit(10).all()
     except Exception: logs=[]
@@ -3266,6 +3326,8 @@ async def admin_data_log(
 
     # Distinct tickers for filter dropdown
     all_tickers = sorted(set(r["ticker"] for r in rows))
+    has_delayed_data = any(r["data_source"] == "yfinance" for r in rows)
+    has_realtime_data = any(r["data_source"] in ("ibkr", "independentreserve") for r in rows)
 
     ef = _get_exchange_filters(org_id, db)
     ctx.update({
@@ -3275,6 +3337,8 @@ async def admin_data_log(
         "only_confirmed":         only_confirmed,
         "all_tickers":            all_tickers,
         "total":                  len(rows),
+        "has_delayed_data":       has_delayed_data,
+        "has_realtime_data":      has_realtime_data,
         "msg":                    request.query_params.get("msg", ""),
         "exchange_filters":       ef,
         "active_exchange_filter": exchange_f,

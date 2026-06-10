@@ -1,12 +1,12 @@
 # =============================================================================
-# VCPilot — Docker Compose (Code mounted from host — restart to pick up changes)
+# VCPilot — Docker Compose
+# Services: database, redis, app, worker, beat, api, whatsapp, ibkr
 # =============================================================================
 
 x-app-env: &app-env
   env_file: .env
   environment:
-    - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB}
-    #- DATABASE_URL=${DATABASE_URL}
+    - DATABASE_URL=${DATABASE_URL}
     - REDIS_URL=${REDIS_URL}
 
 networks:
@@ -26,22 +26,20 @@ services:
   database:
     image: timescale/timescaledb:latest-pg16
     container_name: vcpilot-database
-    user: root
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_PORT:-5439}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      # REMOVED: Local migrations mount. The initialization container handles seeds.
+      - ./migrations:/docker-entrypoint-initdb.d:ro
     networks:
       - vcpilot-net
     healthcheck:
-      #test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      test: ["CMD-SHELL", "pg_isready -U vcpilot -d vcpilot -p 5432"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -68,6 +66,7 @@ services:
 
   # ---------------------------------------------------------------------------
   # App — Database setup & migration runner
+  # Runs once on boot to initialize tables, hypertables, seeds, and SaaS migrations.
   # ---------------------------------------------------------------------------
   app:
     build:
@@ -84,6 +83,7 @@ services:
     volumes:
       - ./app:/app/app
       - ./scripts:/app/scripts
+      - ./migrations:/app/migrations
     networks:
       - vcpilot-net
     command: sh -c "python -m scripts.init_db && python -m scripts.migrate_saas"
@@ -146,6 +146,8 @@ services:
 
   # ---------------------------------------------------------------------------
   # Beat — Celery Beat Scheduler
+  # Schedule file is written to /tmp (always writable by any user).
+  # Using --max-interval 30 keeps the loop responsive.
   # ---------------------------------------------------------------------------
   beat:
     build:
@@ -192,8 +194,9 @@ services:
     ports:
       - "0.0.0.0:${DASHBOARD_PORT:-8501}:8501"
     volumes:
-      - ./app:/app/app
       - ./dashboard:/app/dashboard
+      - ./app:/app/app
+      - ./scratch:/app/scratch
     networks:
       - vcpilot-net
     command: >
@@ -204,7 +207,11 @@ services:
              fi"
 
   # ---------------------------------------------------------------------------
-  # WhatsApp — WAHA Core
+  # WhatsApp — WAHA Core (free, single "default" session)
+  # All orgs share one bot phone number. Orgs are distinguished by each org's
+  # configured whatsapp_admin_number — the webhook routes incoming messages to
+  # the correct org by matching the sender's phone number.
+  # For fully separate sessions per org, upgrade to devlikeapro/waha-plus:latest
   # ---------------------------------------------------------------------------
   whatsapp:
     image: devlikeapro/waha:latest
@@ -215,7 +222,9 @@ services:
       WHATSAPP_DEFAULT_ENGINE: WEBJS
       WAHA_DASHBOARD_USERNAME: admin
       WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:-vcpilot_2026}
+      # Auto-start the default session on container boot
       WHATSAPP_START_SESSION: default
+      # Webhook: all incoming messages forwarded here; VCPilot routes by sender phone
       WHATSAPP_HOOK_URL: ${WAHA_HOOK_URL:-http://api:8501/webhook/whatsapp}
       WHATSAPP_HOOK_EVENTS: message,session.status
     ports:
@@ -227,6 +236,7 @@ services:
 
   # ---------------------------------------------------------------------------
   # IBKR — Interactive Brokers Gateway (paper by default)
+  # Start this manually when ready to trade: docker compose --profile trading up ibkr
   # ---------------------------------------------------------------------------
   ibkr:
     image: ghcr.io/gnzsnz/ib-gateway:latest
@@ -235,17 +245,17 @@ services:
     environment:
       TWS_USERID: ${IBKR_USERNAME}
       TWS_PASSWORD: ${IBKR_PASSWORD}
-      TRADING_MODE: ${IBKR_PAPER_MODE:-paper}
+      TRADING_MODE: ${IBKR_PAPER_MODE:-paper}   # paper | live
       TWS_SETTINGS_PATH: /root/Jts
       READ_ONLY_API: "no"
       VNC_SERVER_PASSWORD: changeme
     ports:
-      - "4001:4001"
-      - "4002:4002"
-      - "5900:5900"
+      - "4001:4001"   # Live
+      - "4002:4002"   # Paper
+      - "5900:5900"   # VNC (optional debug)
     volumes:
-      - /share/Container/vcpilot/dev_user/vcpilot/docker/ibkr:/root/Jts
+      - ./docker/ibkr:/root/Jts
     networks:
       - vcpilot-net
     profiles:
-      - trading
+      - trading          # Only starts with: docker compose --profile trading up
