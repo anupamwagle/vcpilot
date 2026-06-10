@@ -814,7 +814,7 @@ async def home(
         _flag, _label = _exc_flag_label.get(_exc, ("", _exc.replace("CRYPTO_", "")))
         regimes_list.append({"flag": _flag, "label": _label, "val": _val})
 
-    total_invested = round(sum(p["invested_aud"] for p in pos_data), 2)
+    total_invested = round(sum(p.get("invested_aud", 0) for p in pos_data), 2)
     available_capital = round(capital - total_invested, 2)
 
     ctx.update({
