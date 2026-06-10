@@ -382,6 +382,22 @@ def _add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _fetch_yf_df(ticker: str, period: str, interval: str) -> Optional[pd.DataFrame]:
+    """Raw yfinance fetch + normalisation. Returns None if empty."""
+    try:
+        df = yf.Ticker(ticker).history(period=period, interval=interval, auto_adjust=False)
+        if df.empty:
+            return None
+        df = df.reset_index()
+        df.columns = [c.lower() for c in df.columns]
+        df = df.rename(columns={"adj close": "adj_close"})
+        df["date"] = pd.to_datetime(df["date"]).dt.date
+        df = df.sort_values("date").reset_index(drop=True)
+        return df
+    except Exception:
+        return None
+
+
 def get_price_history(
     ticker: str,
     period: str = "2y",
@@ -389,24 +405,25 @@ def get_price_history(
 ) -> Optional[pd.DataFrame]:
     """
     Fetch daily OHLCV for a single ticker.
-    Returns DataFrame with: date, open, high, low, close, adj_close, volume
-    or None on failure.
+    For crypto -AUD tickers that have no yfinance data, falls back to the -USD
+    pair so VCP screening can still run (price patterns are FX-agnostic).
+    Returns DataFrame with indicators added, or None on failure.
     """
     try:
-        stock = yf.Ticker(ticker)
-        df = stock.history(period=period, interval=interval, auto_adjust=False)
-        if df.empty:
+        df = _fetch_yf_df(ticker, period, interval)
+
+        # Crypto AUD→USD fallback: many altcoins only have -USD pairs on yfinance
+        if df is None and ticker.endswith("-AUD"):
+            usd_ticker = ticker[:-4] + "-USD"
+            df = _fetch_yf_df(usd_ticker, period, interval)
+            if df is not None:
+                logger.debug(f"Price history for {ticker}: using {usd_ticker} fallback (no -AUD data)")
+
+        if df is None:
             logger.debug(f"No price data for {ticker}")
             return None
 
-        df = df.reset_index()
-        df.columns = [c.lower() for c in df.columns]
-        df = df.rename(columns={"adj close": "adj_close"})
-        df["date"] = pd.to_datetime(df["date"]).dt.date
-        df = df.sort_values("date").reset_index(drop=True)
-
         df = _add_indicators(df)
-
         return df
 
     except Exception as e:
@@ -434,7 +451,7 @@ def get_batch_prices(
         raw = None
 
     if raw is None or raw.empty:
-        # Fallback: individual fetches
+        # Fallback: individual fetches (includes AUD→USD fallback via get_price_history)
         for ticker in tickers:
             df = get_price_history(ticker, period=period)
             if df is not None:
@@ -443,6 +460,7 @@ def get_batch_prices(
         return results
 
     # Parse batch response
+    missing_aud = []
     for ticker in tickers:
         try:
             if len(tickers) == 1:
@@ -451,6 +469,9 @@ def get_batch_prices(
                 df = raw[ticker].copy()
             df = df.dropna(how="all")
             if df.empty:
+                # Track -AUD tickers that had no data for USD fallback below
+                if ticker.endswith("-AUD"):
+                    missing_aud.append(ticker)
                 continue
             df = df.reset_index()
             df.columns = [c.lower() if isinstance(c, str) else c for c in df.columns]
@@ -460,6 +481,17 @@ def get_batch_prices(
             results[ticker] = df
         except Exception as e:
             logger.debug(f"Batch parse failed for {ticker}: {e}")
+            if ticker.endswith("-AUD"):
+                missing_aud.append(ticker)
+
+    # AUD→USD fallback for any crypto tickers that had no -AUD batch data
+    if missing_aud:
+        usd_tickers = [t[:-4] + "-USD" for t in missing_aud]
+        logger.info(f"AUD→USD fallback for {len(missing_aud)} tickers: {usd_tickers[:5]}...")
+        usd_results = get_batch_prices(usd_tickers, period=period)
+        for aud_t, usd_t in zip(missing_aud, usd_tickers):
+            if usd_t in usd_results:
+                results[aud_t] = usd_results[usd_t]  # stored under original -AUD key
 
     return results
 

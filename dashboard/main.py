@@ -18,6 +18,12 @@ from loguru import logger
 app = FastAPI(title="VCPilot", docs_url=None, redoc_url=None)
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("APP_SECRET_KEY", "changeme-secret"))
 
+# ---------------------------------------------------------------------------
+# Mobile REST API (JWT-authenticated, consumed by React Native app)
+# ---------------------------------------------------------------------------
+from app.api.mobile import router as mobile_router
+app.include_router(mobile_router)
+
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.exceptions import RequestValidationError
 from app.utils.cache import cache
