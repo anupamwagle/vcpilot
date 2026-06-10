@@ -81,11 +81,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ./app:/app/app
     networks:
       - vcpilot-net
-    command: sh -c "PYTHONPATH=/app python scripts/init_db.py && PYTHONPATH=/app python scripts/migrate_saas.py"
+    command: sh -c "python -m scripts.init_db && python -m scripts.migrate_saas"
 
   # ---------------------------------------------------------------------------
   # Worker Equities — Celery Worker
