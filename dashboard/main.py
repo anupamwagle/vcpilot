@@ -634,6 +634,7 @@ async def home(
             "company_name": stock_names.get(p.ticker, ""),
             "qty": qty,
             "entry": entry, "current": curr, "stop": stop,
+            "invested_aud": round(entry * qty, 2),
             "pnl_pct": round((curr - entry) / entry * 100, 2) if entry else 0,
             "pnl_aud": round(pnl, 2),
             "days": (get_current_date() - p.entry_date).days if p.entry_date else 0,
