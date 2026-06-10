@@ -324,11 +324,11 @@
 
       {% set r = task_runs.get('screen_asx') %}
       <tr class="tbl-row border-b" style="border-color:var(--border)">
-        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Minervini Screener</td>
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">AstraTrade Screener</td>
         <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">ASX</td>
         <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Mon&ndash;Fri 5:30pm</td>
         <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
-        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Full SEPA/VCP screen &rarr; populates Signals and Watchlist</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Full AstraTrade/VCP screen &rarr; populates Signals and Watchlist</td>
       </tr>
 
       {% set r = task_runs.get('entry_asx') %}
@@ -374,11 +374,11 @@
 
       {% set r = task_runs.get('screen_us') %}
       <tr class="tbl-row border-b" style="border-color:var(--border)">
-        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Minervini Screener</td>
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">AstraTrade Screener</td>
         <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">NYSE / NASDAQ</td>
         <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Tue&ndash;Sat 7:30am</td>
         <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
-        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Full SEPA/VCP screen on US universe</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Full AstraTrade/VCP screen on US universe</td>
       </tr>
 
       {% set r = task_runs.get('entry_us') %}

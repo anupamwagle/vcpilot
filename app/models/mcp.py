@@ -26,7 +26,7 @@ MCP_ALL_SCOPES = [
     "signals:write",   # skip/unskip signals, run screener
     "watchlist:read",  # view watchlist
     "watchlist:write", # add/remove watchlist items
-    "rules:read",      # view Minervini rules
+    "rules:read",      # view AstraTrade rules
     "rules:write",     # update rule thresholds / toggles
     "config:read",     # view system config (non-secret keys)
     "market:read",     # market regime, price data
@@ -35,11 +35,11 @@ MCP_ALL_SCOPES = [
 SCOPE_DESCRIPTIONS = {
     "trading:read":    "View open positions, closed trades, and portfolio statistics",
     "trading:write":   "Place bracket orders, close positions, pause/resume automated trading",
-    "signals:read":    "View generated Minervini signals and their status",
+    "signals:read":    "View generated AstraTrade signals and their status",
     "signals:write":   "Skip/unskip signals, trigger the screener manually",
     "watchlist:read":  "View the organisation's watchlist and labels",
     "watchlist:write": "Add tickers to the watchlist, remove items",
-    "rules:read":      "View Minervini rule configurations and thresholds",
+    "rules:read":      "View AstraTrade rule configurations and thresholds",
     "rules:write":     "Enable/disable rules, adjust thresholds",
     "config:read":     "Read non-secret system configuration values",
     "market:read":     "Read market regime (BULL/CAUTION/BEAR) and price data",

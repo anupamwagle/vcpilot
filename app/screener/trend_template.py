@@ -1,5 +1,5 @@
 """
-Minervini Trend Template — 8 criteria (all must pass for Stage 2 confirmation).
+AstraTrade Trend Template — 8 criteria (all must pass for Stage 2 confirmation).
 
 Rules encoded here (loaded from DB for enable/disable and threshold tuning):
   1. price_above_200ma      — Price > 200-day MA

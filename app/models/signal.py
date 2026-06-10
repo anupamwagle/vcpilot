@@ -1,6 +1,6 @@
 """
 Signal and Watchlist models.
-A Signal is a stock that passed all Minervini screener criteria on a given date.
+A Signal is a stock that passed all AstraTrade screener criteria on a given date.
 """
 import enum
 from datetime import datetime, date
@@ -129,7 +129,7 @@ class WatchlistLabel(Base):
 
 class Watchlist(Base):
     """
-    Stocks that pass partial Minervini criteria — stage 2, trend template met —
+    Stocks that pass partial AstraTrade criteria — stage 2, trend template met —
     but not yet a full signal (e.g. VCP still forming, volume not confirmed).
     Admin can add/remove manually via UI for any supported exchange.
 

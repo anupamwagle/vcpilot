@@ -1,5 +1,5 @@
 """
-VCPilot Dashboard — FastAPI + Flowbite/Tailwind
+AstraTrade Dashboard — FastAPI + Flowbite/Tailwind
 Mobile-first. Split: /trading (client) and /admin (operator).
 """
 import os, sys
@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc, or_
 from loguru import logger
 
-app = FastAPI(title="VCPilot", docs_url=None, redoc_url=None)
+app = FastAPI(title="AstraTrade", docs_url=None, redoc_url=None)
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("APP_SECRET_KEY", "changeme-secret"))
 
 # ---------------------------------------------------------------------------
@@ -90,7 +90,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
             "error_code": "500",
             "error_title": "Server Error",
             "error_heading": "Engine Malfunction!",
-            "error_message": "An internal server error occurred. VCPilot has logged the issue and our team has been alerted.",
+            "error_message": "An internal server error occurred. AstraTrade has logged the issue and our team has been alerted.",
             "error_detail": error_detail,
         },
         status_code=500
@@ -491,11 +491,11 @@ async def login_request_otp(
     db.commit()
 
     # Send email
-    subject = "Your VCPilot One-Time Passcode (OTP)"
+    subject = "Your AstraTrade One-Time Passcode (OTP)"
     html_content = f"""
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px;">
-        <h2 style="color: #1d4ed8; margin-bottom: 20px;">VCPilot OTP Login</h2>
-        <p>You requested a one-time passcode to sign in to your VCPilot account.</p>
+        <h2 style="color: #1d4ed8; margin-bottom: 20px;">AstraTrade OTP Login</h2>
+        <p>You requested a one-time passcode to sign in to your AstraTrade account.</p>
         <p>Please use the passcode below to complete your login:</p>
         <div style="background: #f3f4f6; padding: 15px; border-radius: 8px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 4px; margin: 20px 0; color: #111827;">
             {otp}
@@ -703,7 +703,7 @@ async def home(
         {"name": "EOD Price Data Ingestion", "frequency": "Daily (Mon-Fri 5pm AEST)", "log": latest_price},
         {"name": "Market Regime Evaluation", "frequency": "Daily (Mon-Fri 5:15pm AEST)", "log": latest_regime,
          "active_regime": last_eval, "regime_is_simulated": False},
-        {"name": "Minervini Daily Screener", "frequency": "Daily (Mon-Fri 5:30pm AEST)", "log": latest_screen},
+        {"name": "AstraTrade Daily Screener", "frequency": "Daily (Mon-Fri 5:30pm AEST)", "log": latest_screen},
         {"name": "Intraday Breakout Entry Check", "frequency": "Every 5 min (10am-4:12pm AEST)", "log": latest_entry},
         {"name": "Intraday Position Exit Check", "frequency": "Every 5 min (10am-4:12pm AEST)", "log": latest_exit},
     ]
@@ -1813,7 +1813,7 @@ async def close_position(
     db: Session = Depends(get_db),
 ):
     """
-    Manually close an open position the Minervini way.
+    Manually close an open position using AstraTrade exit rules.
     Records a Trade, marks Position CLOSED, writes audit, sends WhatsApp alert.
     If exit_price is not provided, the last known current_price is used.
     """
@@ -3063,7 +3063,7 @@ async def webhook_whatsapp(request: Request, db: Session = Depends(get_db)):
     if not text:
         return JSONResponse({"ok": True})
 
-    # If the message is from me, only allow it to proceed if it is a valid VCPilot command.
+    # If the message is from me, only allow it to proceed if it is a valid AstraTrade command.
     # This prevents infinite message loops when the bot replies to itself.
     if is_from_me:
         cmd_word = text.split()[0].upper() if text.split() else ""
@@ -3199,7 +3199,7 @@ async def whatsapp_start_session(request: Request):
 
 @app.post("/admin/telegram/set-webhook")
 async def telegram_set_webhook(request: Request):
-    """Register the VCPilot webhook with Telegram."""
+    """Register the AstraTrade webhook with Telegram."""
     if not _auth(request):
         return RedirectResponse("/login", 302)
     org_id = request.session.get("organization_id")
@@ -3235,7 +3235,7 @@ async def comms_send_test(request: Request):
 
     from app.notifications import get_notifier
     notifier = get_notifier(organization_id=org_id)
-    ok = notifier.send("✅ VCPilot test message — integration is working!")
+    ok = notifier.send("✅ AstraTrade test message — integration is working!")
     return RedirectResponse(f"/admin/comms?msg={'test_ok' if ok else 'test_fail'}", 302)
 
 
@@ -3279,7 +3279,7 @@ async def admin_data_log(
     """
     Admin Data Log — shows per-signal intraday metric snapshots captured every
     5–15 minutes during market hours, with per-rule pass/fail colouring so users
-    can see exactly what metrics are being evaluated against Minervini rules.
+    can see exactly what metrics are being evaluated against AstraTrade rules.
     Data source badge warns when using delayed yfinance data (≈15-20 min for ASX).
     """
     if not _auth(request):
@@ -3626,12 +3626,12 @@ async def superadmin_organizations_create(
     scheme = "https" if request.url.scheme == "https" else "http"
     reset_link = f"{scheme}://{host}/reset-password?token={token}"
 
-    subject = "Welcome to VCPilot! Set up your Organisation Admin Account"
+    subject = "Welcome to AstraTrade! Set up your Organisation Admin Account"
     html_content = (
         '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px">'
-        '<h2 style="color:#1d4ed8">Welcome to VCPilot!</h2>'
+        '<h2 style="color:#1d4ed8">Welcome to AstraTrade!</h2>'
         f'<p>Hi {user.name},</p>'
-        f'<p>Your organization <strong>{org.name}</strong> has been created on VCPilot. '
+        f'<p>Your organization <strong>{org.name}</strong> has been created on AstraTrade. '
         'Click the button below to set up your admin password and log in:</p>'
         f'<div style="text-align:center;margin:30px 0"><a href="{reset_link}" '
         'style="background:#1d4ed8;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px">Set Up Password & Log In</a></div>'
@@ -4063,12 +4063,12 @@ async def superadmin_users_create(
         host = request.headers.get("host", "localhost:8501")
         scheme = "https" if request.url.scheme == "https" else "http"
         reset_link = f"{scheme}://{host}/reset-password?token={token}"
-        subject = "Welcome to VCPilot! Set up your account"
+        subject = "Welcome to AstraTrade! Set up your account"
         html_content = (
             '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px">'
-            '<h2 style="color:#1d4ed8">Welcome to VCPilot!</h2>'
+            '<h2 style="color:#1d4ed8">Welcome to AstraTrade!</h2>'
             f'<p>Hi {user.name},</p>'
-            '<p>An account has been created for you on VCPilot. Click the button below to set up your password and log in:</p>'
+            '<p>An account has been created for you on AstraTrade. Click the button below to set up your password and log in:</p>'
             f'<div style="text-align:center;margin:30px 0"><a href="{reset_link}" '
             'style="background:#1d4ed8;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px">Set Up Password & Log In</a></div>'
             f'<p style="font-size:12px;color:#6b7280">Or copy: {reset_link}</p>'
@@ -4124,10 +4124,10 @@ async def superadmin_user_reset_password(user_id: int, request: Request, db: Ses
     scheme = "https" if request.url.scheme == "https" else "http"
     reset_link = f"{scheme}://{host}/reset-password?token={token}"
 
-    subject = "Reset Your VCPilot Password"
+    subject = "Reset Your AstraTrade Password"
     html_content = (
         '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px">'
-        '<h2 style="color:#1d4ed8">VCPilot Password Reset</h2>'
+        '<h2 style="color:#1d4ed8">AstraTrade Password Reset</h2>'
         '<p>Click the button below to set a new password:</p>'
         f'<div style="text-align:center;margin:30px 0"><a href="{reset_link}" '
         'style="background:#1d4ed8;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px">Reset Password</a></div>'
@@ -4614,7 +4614,7 @@ async def oauth_authorize(
         "request": request,
         "client_id": client_id,
         "client_name": cred.name,
-        "org_name": cred.organization.name if cred.organization else "VCPilot Org",
+        "org_name": cred.organization.name if cred.organization else "AstraTrade Org",
         "redirect_uri": redirect_uri,
         "state": state,
         "code_challenge": code_challenge,
@@ -5031,6 +5031,6 @@ try:
     from app.mcp.server import create_mcp_app as _create_mcp_app
     _mcp_asgi = _create_mcp_app()
     app.mount("/mcp", _mcp_asgi)
-    logger.info("VCPilot MCP server mounted at /mcp")
+    logger.info("AstraTrade MCP server mounted at /mcp")
 except Exception as _mcp_err:
     logger.exception(f"MCP server not mounted (install mcp[server] package): {_mcp_err}")

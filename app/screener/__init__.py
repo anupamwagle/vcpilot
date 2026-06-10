@@ -1,1 +1,1 @@
-"""Minervini screener package."""
+"""AstraTrade screener package."""

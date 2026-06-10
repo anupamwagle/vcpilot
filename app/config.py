@@ -1,7 +1,7 @@
 """
-VCPilot — Application Configuration
+AstraTrade — Application Configuration
 Loads environment variables and provides a typed settings object.
-DB-level config (Minervini rules, risk params) is loaded separately via models.
+DB-level config (AstraTrade rules, risk params) is loaded separately via models.
 """
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_use_tls: bool = True
     smtp_from_email: str = ""
-    smtp_from_name: str = "VCPilot"
+    smtp_from_name: str = "AstraTrade"
 
 
     # Trading defaults (overridden by DB SystemConfig)

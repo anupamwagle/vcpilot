@@ -7,6 +7,7 @@ from app.models.signal import Signal, Watchlist, WatchlistLabel                 
 from app.models.trade import Trade, Position, Order                                   # noqa
 from app.models.audit import AuditLog                                                 # noqa
 from app.models.exchange import ExchangeConfig, MarketRegimeRecord                    # noqa
+from app.models.mcp import MCPCredential                                               # noqa
 
 all_models = [
     Account, AccountTier, Organization,
@@ -17,5 +18,6 @@ all_models = [
     Trade, Position, Order,
     AuditLog,
     ExchangeConfig, MarketRegimeRecord,
+    MCPCredential,
 ]
 

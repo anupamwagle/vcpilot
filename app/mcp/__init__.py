@@ -1,7 +1,7 @@
 """
-VCPilot MCP (Model Context Protocol) Server
+AstraTrade MCP (Model Context Protocol) Server
 
-Exposes VCPilot's trading and screening capabilities as MCP tools so that
+Exposes AstraTrade's trading and screening capabilities as MCP tools so that
 AI agents (Claude, etc.) can automate trades, run screens, and read portfolio
 state on behalf of an organisation.
 

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>{% block title %}Dashboard{% endblock %} · VCPilot</title>
+  <title>{% block title %}Dashboard{% endblock %} · AstraTrade</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.3.0/flowbite.min.css"/>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231d4ed8' stroke-width='2.5'><path d='M3 17c1.5-1 2.5-3 4-3s2.5 1.5 4 1.5 2-2 3.5-2 1.5.5 2.5.5L21 9M21 9h-4M21 9v4' stroke-linecap='round' stroke-linejoin='round'/></svg>">
@@ -327,8 +327,8 @@
       </svg>
     </div>
     <div class="flex-1 min-w-0">
-      <p class="font-bold text-sm leading-none" style="color:var(--text)">VCPilot</p>
-      <p class="text-xs mt-0.5" style="color:var(--text-subtle)">ASX · Minervini SEPA</p>
+      <p class="font-bold text-sm leading-none" style="color:var(--text)">AstraTrade</p>
+      <p class="text-xs mt-0.5" style="color:var(--text-subtle)">ASX · Algo Trading</p>
     </div>
     {% if user_role != 'superadmin' %}
       {% if regime == 'BULL' %}<span class="badge badge-bull" style="font-size:.65rem;padding:2px 6px">🟢 BULL</span>
@@ -584,7 +584,7 @@
   </main>
 
   <footer style="padding:.75rem 1rem;font-size:.75rem;display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--border);color:var(--text-subtle)">
-    <span>VCPilot · Minervini SEPA · ASX</span>
+    <span>AstraTrade · Algo Trading</span>
     <span>Heartbeat: {{ heartbeat }}</span>
   </footer>
 </div>

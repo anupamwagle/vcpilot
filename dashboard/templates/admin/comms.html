@@ -23,7 +23,7 @@
 {% elif msg == 'tg_hook_fail' %}
 <div class="alert-danger mb-4">
   <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm-1-9a1 1 0 012 0v4a1 1 0 01-2 0V9zm1-5a1 1 0 100 2 1 1 0 000-2z" clip-rule="evenodd"/></svg>
-  Failed to register Telegram webhook. Ensure your Bot Token is correct and your VCPilot instance is accessible via HTTPS.
+  Failed to register Telegram webhook. Ensure your Bot Token is correct and your AstraTrade instance is accessible via HTTPS.
 </div>
 {% elif msg == 'tg_no_token' %}
 <div class="alert-warn mb-4">
@@ -82,7 +82,7 @@
       Webhook URL: <code style="font-size:.65rem">{{ tg_webhook_url }}</code>
     </p>
     <p style="font-size:.65rem;color:var(--warn);margin-top:.25rem">
-      ⚠️ Telegram requires your VCPilot instance to be accessible via <strong>HTTPS</strong> for webhooks to work.
+      ⚠️ Telegram requires your AstraTrade instance to be accessible via <strong>HTTPS</strong> for webhooks to work.
     </p>
   </div>
 
@@ -157,7 +157,7 @@
 
   <div id="console-chat-box" style="background:var(--surface-alt);border:1px solid var(--border);border-radius:.5rem;padding:1rem;height:350px;overflow-y:auto;display:flex;flex-direction:column;gap:.75rem;margin-bottom:1rem">
     <div style="display:flex;flex-direction:column;align-self:flex-start;max-width:85%;background:var(--surface);border:1px solid var(--border);border-radius:.5rem;padding:.5rem .75rem">
-      <span style="font-size:.65rem;color:var(--t-accent);font-weight:700;margin-bottom:.25rem">VCPilot Bot</span>
+      <span style="font-size:.65rem;color:var(--t-accent);font-weight:700;margin-bottom:.25rem">AstraTrade Bot</span>
       <p style="font-size:.8125rem;color:var(--text);white-space:pre-wrap;margin:0">🤖 Welcome! How can I assist with your trading today?</p>
       <span style="font-size:.6rem;color:var(--text-subtle);align-self:flex-end;margin-top:.25rem">System</span>
     </div>
@@ -260,7 +260,7 @@ async function submitConsoleCommand(event) {
       const data = await resp.json();
       const botBubble = document.createElement('div');
       botBubble.style.cssText = 'display:flex;flex-direction:column;align-self:flex-start;max-width:85%;background:var(--surface);border:1px solid var(--border);border-radius:.5rem;padding:.5rem .75rem';
-      botBubble.innerHTML = `<span style="font-size:.65rem;color:var(--a-accent);font-weight:700;margin-bottom:.25rem">VCPilot Bot</span>
+      botBubble.innerHTML = `<span style="font-size:.65rem;color:var(--a-accent);font-weight:700;margin-bottom:.25rem">AstraTrade Bot</span>
         <p style="font-size:.8125rem;color:var(--text);white-space:pre-wrap;margin:0">${formatMarkdown(data.response)}</p>
         <span style="font-size:.6rem;color:var(--text-subtle);align-self:flex-end;margin-top:.25rem">${timeStr}</span>`;
       chatBox.appendChild(botBubble);

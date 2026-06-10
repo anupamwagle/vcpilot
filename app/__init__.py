@@ -1,1 +1,1 @@
-# VCPilot application package
+# AstraTrade application package

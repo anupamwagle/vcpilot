@@ -1,7 +1,7 @@
 """
 VCP — Volatility Contraction Pattern Detection.
 
-Minervini's VCP characteristics:
+VCP characteristics (AstraTrade methodology):
   - 3–4 successive price contractions (each tighter than the last)
   - Volume decreases on each contraction (dries up to lowest point)
   - Final contraction is the tightest (pivot area)

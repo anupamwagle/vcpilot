@@ -22,7 +22,7 @@ export function LoginScreen() {
       return;
     }
     if (!serverURL) {
-      Alert.alert('Missing server URL', 'Enter your VCPilot server address.');
+      Alert.alert('Missing server URL', 'Enter your AstraTrade server address.');
       return;
     }
     setLoading(true);
@@ -46,8 +46,8 @@ export function LoginScreen() {
         {/* Logo / heading */}
         <View style={styles.header}>
           <Text style={styles.logo}>📈</Text>
-          <Text style={styles.title}>VCPilot</Text>
-          <Text style={styles.subtitle}>Minervini SEPA Trading System</Text>
+          <Text style={styles.title}>AstraTrade</Text>
+          <Text style={styles.subtitle}>Algorithmic Trading Platform</Text>
         </View>
 
         {/* Form */}

@@ -159,7 +159,7 @@ export function ActionsScreen() {
       {hasASX && (
         <ActionButton
           label="Force Screen — ASX"
-          description="Run Minervini screener on full ASX universe now"
+          description="Run AstraTrade screener on full ASX universe now"
           icon="🔍"
           onPress={() => api.forceScreen().then()}
         />

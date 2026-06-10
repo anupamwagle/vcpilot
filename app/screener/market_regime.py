@@ -1,5 +1,5 @@
 """
-Market Regime Filter — Minervini only trades in confirmed uptrending markets.
+Market Regime Filter — AstraTrade only trades in confirmed uptrending markets.
 
 Rules:
   regime_index_above_200ma      — ASX200 price > 200-day MA
@@ -149,7 +149,7 @@ def is_trading_allowed(regime: MarketRegime) -> bool:
 
 
 def get_size_multiplier(regime: MarketRegime) -> float:
-    """Scale position size based on market regime (Minervini).
+    """Scale position size based on market regime.
     BULL=100%, CAUTION=50%, BEAR=0%
     """
     if regime == MarketRegime.BULL:

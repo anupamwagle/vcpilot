@@ -3,7 +3,7 @@ import requests
 import sys
 
 url = "https://en.wikipedia.org/wiki/S%26P/ASX_200"
-headers = {"User-Agent": "Mozilla/5.0 (compatible; VCPilot/1.0)"}
+headers = {"User-Agent": "Mozilla/5.0 (compatible; AstraTrade/1.0)"}
 try:
     resp = requests.get(url, headers=headers, timeout=15)
     print(f"Status: {resp.status_code}")

@@ -136,7 +136,7 @@ export function SignalsScreen() {
               <Text style={styles.emptyEmoji}>👁</Text>
               <Text style={styles.emptyTitle}>Watchlist is empty</Text>
               <Text style={styles.emptyText}>
-                Stocks meeting 6+/8 Minervini trend criteria are automatically added here.
+                Stocks meeting 6+/8 AstraTrade trend criteria are automatically added here.
               </Text>
             </View>
           ) : (

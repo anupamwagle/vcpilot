@@ -2,7 +2,7 @@
 SystemConfig and RuleConfig models.
 
 SystemConfig: key-value store for global operational parameters.
-RuleConfig:   each Minervini rule as a row — enabled/disabled, threshold values,
+RuleConfig:   each AstraTrade rule as a row — enabled/disabled, threshold values,
               tier-level applicability. Admin can toggle any rule globally or per tier.
 """
 import enum
@@ -24,7 +24,7 @@ class ConfigValueType(str, enum.Enum):
 
 
 class RuleCategory(str, enum.Enum):
-    TREND_TEMPLATE  = "TREND_TEMPLATE"    # 8 Minervini trend conditions
+    TREND_TEMPLATE  = "TREND_TEMPLATE"    # 8 AstraTrade trend conditions
     FUNDAMENTAL     = "FUNDAMENTAL"       # EPS, sales, ROE, margins (equity only)
     VCP             = "VCP"               # Volatility Contraction Pattern
     MARKET_REGIME   = "MARKET_REGIME"     # Market direction / health filter
@@ -84,7 +84,7 @@ class SystemConfig(Base):
 
 class RuleConfig(Base):
     """
-    One row per Minervini rule. Each rule can be:
+    One row per AstraTrade rule. Each rule can be:
     - Enabled/disabled globally
     - Overridden per account tier (stored in tier_overrides JSON)
     - Have its threshold(s) adjusted without code changes

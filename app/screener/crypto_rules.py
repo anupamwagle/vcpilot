@@ -1,5 +1,5 @@
 """
-Crypto-specific Minervini rule evaluators.
+Crypto-specific AstraTrade rule evaluators.
 These rules supplement (not replace) the standard trend template + VCP rules
 for crypto assets. Fundamental rules are skipped entirely for crypto.
 
@@ -302,7 +302,7 @@ def evaluate_crypto_rules(
             atr   = float(df["atr_14"].iloc[-1]) if "atr_14" in df.columns and df["atr_14"].iloc[-1] else close * 0.10
             est_stop   = close - (1.5 * atr)
             risk_dist  = close - est_stop
-            # Target: 20% above current price (Minervini first target)
+            # Target: 20% above current price (AstraTrade first target)
             target_dist = close * 0.20
             rr_ratio = target_dist / risk_dist if risk_dist > 0 else 0
             passed = rr_ratio >= min_rr

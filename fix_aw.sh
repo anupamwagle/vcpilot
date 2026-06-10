@@ -195,7 +195,7 @@ with get_db() as db:
 # ─── 6. What would trigger a signal? ─────────────────────
 print()
 print('[SIGNAL CONDITIONS] What would generate a PENDING signal for AW:')
-print('  For any crypto token to pass Minervini trend template, ALL of:')
+print('  For any crypto token to pass AstraTrade trend template, ALL of:')
 print('  1. price > 200MA  (currently ALL tokens fail this)')
 print('  2. price > 150MA')
 print('  3. MA150 > MA200  (bear market — 150 has crossed below 200)')

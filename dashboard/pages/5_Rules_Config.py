@@ -1,4 +1,4 @@
-"""Minervini Rules Configuration — enable/disable and tune thresholds."""
+"""AstraTrade Rules Configuration — enable/disable and tune thresholds."""
 import sys; sys.path.insert(0, "/app")
 import streamlit as st
 import pandas as pd
@@ -7,7 +7,7 @@ from app.models.config import RuleConfig, RuleCategory
 from app.models.audit import AuditLog, AuditAction
 
 st.set_page_config(page_title="Rules — VCPilot", layout="wide")
-st.title("⚙️ Minervini Rules Configuration")
+st.title("⚙️ AstraTrade Rules Configuration")
 st.caption("Enable/disable rules globally. Mandatory rules cannot be disabled.")
 
 # Filter by category

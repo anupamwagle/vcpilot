@@ -96,7 +96,7 @@ echo ""
 
 # ─── Step 4: Force screen ASX for AW org ─────────────────────────────────────
 echo "━━━ 4/6  Force screen ASX for AW org ━━━"
-echo "  Running full Minervini pipeline on ASX200 (may take 5-10 min)..."
+echo "  Running full AstraTrade pipeline on ASX200 (may take 5-10 min)..."
 docker compose exec -T worker-equities python << 'PY'
 from app.database import SessionLocal
 from app.models.account import Organization

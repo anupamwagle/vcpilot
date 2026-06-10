@@ -1,5 +1,5 @@
 """
-VCPilot MCP Tool Implementations.
+AstraTrade MCP Tool Implementations.
 
 All tools read org context from the async ContextVar set by the auth middleware.
 Every write action appends an AuditLog row so the full trail is preserved.
@@ -24,13 +24,13 @@ Watchlist
 Positions & Trading
   get_positions          → list open positions with live P&L
   get_portfolio_stats    → summary: capital, heat, P&L
-  place_order            → submit a Minervini bracket order for a signal
+  place_order            → submit a AstraTrade bracket order for a signal
   close_position         → close an open position with an exit reason
   pause_trading          → halt automated trading for the org
   resume_trading         → re-enable automated trading for the org
 
 Rules & Config
-  get_rules              → list Minervini rule configs (with optional category filter)
+  get_rules              → list AstraTrade rule configs (with optional category filter)
   update_rule            → enable/disable a rule or adjust its threshold
   get_config             → read non-secret SystemConfig values
 """
@@ -175,7 +175,7 @@ def get_signals(
     limit: int = 50,
 ) -> dict:
     """
-    Return today's Minervini signals for the organisation.
+    Return today's AstraTrade signals for the organisation.
 
     Args:
         status:       Filter by status: PENDING, TRIGGERED, SKIPPED, EXPIRED, CANCELLED.
@@ -229,7 +229,7 @@ def get_signals(
 
 def run_screener(exchange_key: str = "ASX") -> dict:
     """
-    Immediately trigger the Minervini screener for the organisation.
+    Immediately trigger the AstraTrade screener for the organisation.
 
     This bypasses the trading-day gate (safe to call any time).
     Results appear in /signals within a few minutes.
@@ -283,7 +283,7 @@ def skip_signal(signal_id: int, reason: str = "Skipped via MCP") -> dict:
 
         s.status = SignalStatus.SKIPPED
         from app.models.audit import AuditAction
-        _audit_action(db, AuditAction.SIGNAL_SKIPPED,
+        _audit_action(db, AuditAction.MANUAL_OVERRIDE,
                       f"[MCP] Signal {signal_id} skipped — {reason}", ticker=s.ticker)
         db.commit()
         return {"ok": True, "signal_id": signal_id, "ticker": s.ticker}
@@ -419,7 +419,7 @@ def add_to_watchlist(
     label_name: Optional[str] = None,
 ) -> dict:
     """
-    Add a ticker to the organisation's watchlist and trigger a Minervini screen.
+    Add a ticker to the organisation's watchlist and trigger a AstraTrade screen.
 
     The ticker will be fetched from yfinance and screened against all enabled rules.
     If it passes 6+/8 trend criteria it lands in the watchlist; a full VCP pass
@@ -661,7 +661,7 @@ def place_order(
     """
     Execute a bracket order for an existing PENDING signal.
 
-    Fetches the live price, calculates Minervini position size, and submits
+    Fetches the live price, calculates AstraTrade position size, and submits
     a bracket order (entry + stop-loss + take-profit) to the exchange.
     For crypto signals, routes to CryptoBroker (Independent Reserve via ccxt).
     For equity signals, routes to IBKRBroker (simulation fallback if not connected).
@@ -706,7 +706,7 @@ def close_position(
     exit_price: Optional[float] = None,
 ) -> dict:
     """
-    Close an open position with a Minervini exit reason.
+    Close an open position with a AstraTrade exit reason.
 
     Args:
         position_id: ID of the open Position to close.
@@ -900,7 +900,7 @@ def _set_trading_pause(org_id: int, paused: bool, reason: str) -> dict:
 
 def get_rules(category: Optional[str] = None) -> dict:
     """
-    Return the Minervini rule configurations for the organisation.
+    Return the AstraTrade rule configurations for the organisation.
 
     Args:
         category: Filter by category: TREND_TEMPLATE, FUNDAMENTAL, VCP,
@@ -953,7 +953,7 @@ def update_rule(
     threshold: Optional[float] = None,
 ) -> dict:
     """
-    Enable/disable a Minervini rule or adjust its threshold for the organisation.
+    Enable/disable a AstraTrade rule or adjust its threshold for the organisation.
 
     Args:
         rule_id:    Rule identifier string (e.g. "trend_price_above_200ma").

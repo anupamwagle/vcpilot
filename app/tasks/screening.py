@@ -510,14 +510,14 @@ def evaluate_market_regime_task(self, exchange_key: str = "ASX"):
 @app.task(name="app.tasks.screening.run_daily_screen", bind=True, max_retries=2)
 def run_daily_screen(self, exchange_key: str = "ASX"):
     """
-    Main Minervini screening task. Runs all enabled rules against the full universe.
+    Main AstraTrade screening task. Runs all enabled rules against the full universe.
     Auto-bootstraps the universe if the stocks table is empty (first run).
     """
     if exchange_key != "CRYPTO" and not today_is_trading_day(exchange_key):
         logger.info(f"Not a trading day for {exchange_key} — skipping screener")
         return
 
-    logger.info(f"Starting Minervini daily screen for {exchange_key}...")
+    logger.info(f"Starting AstraTrade daily screen for {exchange_key}...")
     today    = get_current_date()
 
     try:
@@ -754,7 +754,7 @@ def run_full_setup(self):
     """
     from celery import chain as celery_chain
     from app.models.account import Organization
-    logger.info("Starting full VCPilot setup sequence...")
+    logger.info("Starting full AstraTrade setup sequence...")
 
     with get_db() as db:
         orgs = db.query(Organization).filter(Organization.is_active == True).all()
@@ -784,7 +784,7 @@ def run_full_setup(self):
     for org in orgs:
         try:
             notifier = get_notifier(organization_id=org.id)
-            notifier.send(f"⚙️ VCPilot full setup starting for: {', '.join(exchanges_desc)}")
+            notifier.send(f"⚙️ AstraTrade full setup starting for: {', '.join(exchanges_desc)}")
         except Exception as org_err:
             logger.error(f"Failed to notify Org {org.name} (ID: {org.id}) of full setup: {org_err}")
 
@@ -818,7 +818,7 @@ def run_full_setup(self):
 @app.task(name="app.tasks.screening._run_screen_force", bind=True, max_retries=1)
 def _run_screen_force(self, organization_id: int = None, exchange_key: str = "ASX"):
     """
-    Full Minervini screen bypassing the trading-day gate. For manual triggers.
+    Full AstraTrade screen bypassing the trading-day gate. For manual triggers.
     When organization_id is provided, runs ONLY for that org (manual dashboard trigger).
     When None (scheduled or superadmin), runs for all active orgs.
     Writes a SCREENER_TICKER audit row per stock so the Task Log shows live progress.
@@ -1244,7 +1244,7 @@ def screen_single_ticker(
       1. Creates/updates the Stock record with exchange metadata
       2. Fetches 2 years of price history via yfinance
       3. Stores price bars in the central price_bars table
-      4. Runs Minervini rules (trend template + fundamentals + VCP)
+      4. Runs AstraTrade rules (trend template + fundamentals + VCP)
          - Crypto assets skip the fundamentals check
       5. Creates a Signal (full pass) or Watchlist entry (partial pass)
     """
@@ -1369,7 +1369,7 @@ def screen_single_ticker(
                     db.add(stock_db)
                     db.commit()
 
-        # 5. Run Minervini Screener check
+        # 5. Run AstraTrade Screener check
         # --- Trend Template ---
         trend_results = evaluate_trend_template(ticker, df, engine)
         trend_passed = sum(1 for r in trend_results.values() if r.passed)

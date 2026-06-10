@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Exchange Management — VCPilot{% endblock %}
+{% block title %}Exchange Management — AstraTrade{% endblock %}
 
 {% block content %}
 <div style="max-width:900px;margin:0 auto;padding:1.5rem 1rem">
@@ -192,9 +192,9 @@
   <div class="card p-4 mt-4" style="background:var(--surface-alt)">
     <h4 class="text-sm font-semibold mb-2" style="color:var(--text)">How Exchange Management Works</h4>
     <div class="text-sm" style="color:var(--text-muted);line-height:1.7">
-      <p><strong>Step 1 — Super Admin (here):</strong> Enable exchanges that VCPilot supports. Equity exchanges (ASX, NYSE, NASDAQ) route via IBKR. Crypto exchanges route via the ccxt library.</p>
+      <p><strong>Step 1 — Super Admin (here):</strong> Enable exchanges that AstraTrade supports. Equity exchanges (ASX, NYSE, NASDAQ) route via IBKR. Crypto exchanges route via the ccxt library.</p>
       <p class="mt-2"><strong>Step 2 — Org Admin (/admin/config):</strong> Set <code style="background:var(--surface);padding:.1rem .3rem;border-radius:.2rem">active_exchanges</code> to comma-separated exchange keys (e.g. <code style="background:var(--surface);padding:.1rem .3rem;border-radius:.2rem">ASX,NYSE</code>). Only enabled exchanges can be activated.</p>
-      <p class="mt-2"><strong>Step 3 — Trader (/watchlist):</strong> Add stocks/crypto via the exchange selector. VCPilot fetches price history on-demand and screens the instrument against Minervini rules.</p>
+      <p class="mt-2"><strong>Step 3 — Trader (/watchlist):</strong> Add stocks/crypto via the exchange selector. AstraTrade fetches price history on-demand and screens the instrument against AstraTrade rules.</p>
       <p class="mt-2"><strong>Crypto only:</strong> Org admins must also configure <code style="background:var(--surface);padding:.1rem .3rem;border-radius:.2rem">crypto_api_key</code> and <code style="background:var(--surface);padding:.1rem .3rem;border-radius:.2rem">crypto_api_secret</code> in /admin/config for live crypto trading. Fundamentals screening is skipped for crypto assets.</p>
     </div>
   </div>

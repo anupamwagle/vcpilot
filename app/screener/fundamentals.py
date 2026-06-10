@@ -1,5 +1,5 @@
 """
-Minervini Fundamental Criteria.
+AstraTrade Fundamental Criteria.
 
 Rules:
   fundamental_eps_growth_recent   — EPS growth ≥ 25% in most recent quarter

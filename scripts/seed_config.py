@@ -1,6 +1,6 @@
 """
-VCPilot — Default Configuration Seeder
-Seeds SystemConfig and ALL Minervini RuleConfig rows on first startup.
+AstraTrade — Default Configuration Seeder
+Seeds SystemConfig and ALL AstraTrade RuleConfig rows on first startup.
 Safe to re-run: uses INSERT ... ON CONFLICT DO NOTHING.
 """
 import sys, os
@@ -149,7 +149,7 @@ SYSTEM_CONFIGS = [
 
 
 # =============================================================================
-# RuleConfig defaults — every Minervini rule
+# RuleConfig defaults — every AstraTrade rule
 # =============================================================================
 RULE_CONFIGS = [
 
@@ -235,7 +235,7 @@ RULE_CONFIGS = [
          category="FUNDAMENTAL", sort_order=20,
          label="EPS Growth ≥ 25% (recent quarter YoY)",
          description="Most recent quarter EPS must be ≥ 25% higher than same quarter last year.",
-         minervini_ref="SEPA Fundamental: EPS growth 25%+",
+         minervini_ref="AstraTrade Fundamental: EPS growth 25%+",
          threshold=25.0, threshold_label="Min EPS growth %",
          threshold_min=10.0, threshold_max=100.0,
          enabled_globally=True, is_mandatory=False),
@@ -244,14 +244,14 @@ RULE_CONFIGS = [
          category="FUNDAMENTAL", sort_order=21,
          label="EPS Acceleration",
          description="EPS growth rate must be accelerating — Q1 growth > Q2 growth.",
-         minervini_ref="SEPA Fundamental: Earnings acceleration",
+         minervini_ref="AstraTrade Fundamental: Earnings acceleration",
          enabled_globally=True, is_mandatory=False, threshold=None),
 
     dict(rule_id="fundamental_eps_growth_annual",
          category="FUNDAMENTAL", sort_order=22,
          label="Annual EPS Growth ≥ 25%",
          description="TTM EPS growth vs prior year must be ≥ 25%.",
-         minervini_ref="SEPA Fundamental: 3-year EPS growth",
+         minervini_ref="AstraTrade Fundamental: 3-year EPS growth",
          threshold=25.0, threshold_label="Min annual EPS growth %",
          threshold_min=10.0, threshold_max=100.0,
          enabled_globally=True, is_mandatory=False),
@@ -260,7 +260,7 @@ RULE_CONFIGS = [
          category="FUNDAMENTAL", sort_order=23,
          label="Revenue Growth ≥ 25% (recent quarter)",
          description="Most recent quarter revenue must be ≥ 25% higher YoY.",
-         minervini_ref="SEPA Fundamental: Sales growth 25%+",
+         minervini_ref="AstraTrade Fundamental: Sales growth 25%+",
          threshold=25.0, threshold_label="Min revenue growth %",
          threshold_min=10.0, threshold_max=100.0,
          enabled_globally=True, is_mandatory=False),
@@ -269,7 +269,7 @@ RULE_CONFIGS = [
          category="FUNDAMENTAL", sort_order=24,
          label="Return on Equity ≥ 17%",
          description="ROE must be ≥ 17% (above-average capital efficiency).",
-         minervini_ref="SEPA Fundamental: ROE ≥ 17%",
+         minervini_ref="AstraTrade Fundamental: ROE ≥ 17%",
          threshold=17.0, threshold_label="Min ROE %",
          threshold_min=10.0, threshold_max=40.0,
          enabled_globally=True, is_mandatory=False),
@@ -278,14 +278,14 @@ RULE_CONFIGS = [
          category="FUNDAMENTAL", sort_order=25,
          label="Net Profit Margin positive and improving",
          description="Net margin must be positive and higher than prior period.",
-         minervini_ref="SEPA Fundamental: Improving profit margins",
+         minervini_ref="AstraTrade Fundamental: Improving profit margins",
          enabled_globally=True, is_mandatory=False, threshold=None),
 
     dict(rule_id="fundamental_institutional_own",
          category="FUNDAMENTAL", sort_order=26,
          label="Institutional Ownership present",
          description="Some institutional ownership required (min 5%, max 80%).",
-         minervini_ref="SEPA Fundamental: Institutional sponsorship",
+         minervini_ref="AstraTrade Fundamental: Institutional sponsorship",
          threshold=5.0, threshold_label="Min institutional ownership %",
          threshold_min=1.0, threshold_max=20.0,
          enabled_globally=True, is_mandatory=False),
@@ -378,7 +378,7 @@ RULE_CONFIGS = [
          category="MARKET_REGIME", sort_order=43,
          label="Block equity entries in BEAR regime",
          description="No new equity buy orders when the market regime is BEAR. Disable to allow entries in all market conditions.",
-         minervini_ref="Minervini: Never fight the tape — only trade in BULL markets",
+         minervini_ref="AstraTrade: Never fight the tape — only trade in BULL markets",
          enabled_globally=True, is_mandatory=False, threshold=None,
          asset_types="EQUITY"),
 
@@ -386,7 +386,7 @@ RULE_CONFIGS = [
          category="MARKET_REGIME", sort_order=44,
          label="Block crypto entries in BEAR regime",
          description="No new crypto buy orders when the BTC market regime is BEAR. Disable to allow entries regardless of BTC trend.",
-         minervini_ref="Minervini: Trade with the trend — applied to BTC as crypto market proxy",
+         minervini_ref="AstraTrade: Trade with the trend — applied to BTC as crypto market proxy",
          enabled_globally=True, is_mandatory=False, threshold=None,
          asset_types="CRYPTO"),
 
@@ -669,7 +669,7 @@ RULE_CONFIGS = [
          category="CRYPTO", sort_order=108, asset_types="CRYPTO",
          label="Volume surge ≥ 1.5× 20-day average",
          description="Breakout volume must be at least 1.5× the 20-day average volume. "
-                     "This is the core Minervini volume confirmation principle — price breakouts "
+                     "This is the core AstraTrade volume confirmation principle — price breakouts "
                      "without volume are low-conviction. For crypto, higher volume surges (2×+) "
                      "indicate institutional or major retail accumulation.",
          threshold=1.5, threshold_label="Volume surge multiplier (×20-day avg)",

@@ -124,7 +124,7 @@ ok "Market regime evaluated"
 
 # ─── Step 6: Force screen ──────────────────────────────────────────────────────
 step "6/7  Running force screen (CRYPTO_INDEPENDENTRESERVE)"
-info "Running full Minervini pipeline (trend template → fundamentals → VCP) on all tokens..."
+info "Running full AstraTrade pipeline (trend template → fundamentals → VCP) on all tokens..."
 info "This may take 5-10 minutes. Watch Task Log in the dashboard for live progress."
 rpy "
 from app.tasks.screening import _run_screen_force

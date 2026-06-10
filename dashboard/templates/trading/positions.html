@@ -246,14 +246,14 @@
               <div>
                 <label class="field-label" style="display:block;margin-bottom:.25rem">Exit Reason</label>
                 <select name="exit_reason" class="input text-xs py-1" style="min-width:11rem">
-                  <optgroup label="Defensive (Minervini)">
+                  <optgroup label="Defensive">
                     <option value="STOP_LOSS">🛑 Stop Loss Hit</option>
                     <option value="TRAILING_STOP">📉 Break Below 50MA</option>
                     <option value="TIME_STOP">⏱ Time Stop (no progress)</option>
                     <option value="EARNINGS_AVOID">📅 Earnings Avoidance</option>
                     <option value="MARKET_REGIME">🌡️ Market Regime (BEAR)</option>
                   </optgroup>
-                  <optgroup label="Offensive (Minervini)">
+                  <optgroup label="Offensive">
                     <option value="PROFIT_TARGET_1">💰 Profit Target 1 (20%)</option>
                     <option value="PROFIT_TARGET_2">💰 Profit Target 2 (40%)</option>
                     <option value="CLIMAX_TOP">🚀 Climax Top / Parabolic</option>
@@ -282,9 +282,9 @@
 
             </form>
 
-            {# Minervini exit guidance #}
+            {# AstraTrade exit guidance #}
             <div style="margin-top:.75rem;padding:.625rem;background:var(--surface);border-radius:.375rem;border:1px solid var(--border)">
-              <p style="font-size:.7rem;font-weight:600;color:var(--text-muted);margin-bottom:.25rem">📖 Minervini Exit Framework</p>
+              <p style="font-size:.7rem;font-weight:600;color:var(--text-muted);margin-bottom:.25rem">📖 AstraTrade Exit Framework</p>
               <p style="font-size:.7rem;color:var(--text-subtle);line-height:1.5">
                 <strong>Defensive:</strong> Hard stop mandatory (never override). Time stop if &lt;10% gain after 3 weeks. Exit before earnings.
                 Break below 50MA on volume = trend break.<br>

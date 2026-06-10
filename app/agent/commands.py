@@ -112,7 +112,7 @@ class AgentCommandHandler:
 
         status = "⏸ PAUSED" if trading_paused else "▶️ ACTIVE"
         return (
-            f"🤖 *VCPilot Status*\n"
+            f"🤖 *AstraTrade Status*\n"
             f"Trading: {status}\n"
             f"Open positions: {open_positions}\n"
             f"Today's signals: {today_signals}\n"
@@ -390,7 +390,7 @@ class AgentCommandHandler:
         Stage a live trade for confirmation.
 
         Looks up today's PENDING signal for the ticker and replies with the
-        Minervini-calculated entry/stop/target/size/risk so the user can review
+        AstraTrade-calculated entry/stop/target/size/risk so the user can review
         before committing capital. Nothing is submitted to the broker here —
         send `CONFIRM <TICKER>` to actually execute via the same audited
         execute_signal_order() path the dashboard and MCP use.
@@ -535,7 +535,7 @@ class AgentCommandHandler:
 
     def cmd_help(self, args) -> str:
         return (
-            "🤖 *VCPilot Commands*\n"
+            "🤖 *AstraTrade Commands*\n"
             "STATUS — System overview\n"
             "POSITIONS — Open positions\n"
             "SIGNALS — Today's signals\n"

@@ -1,5 +1,5 @@
 """
-VCPilot MCP Server
+AstraTrade MCP Server
 
 Creates a FastMCP server and wraps it with an auth middleware so every
 request to /mcp requires a valid Bearer JWT from POST /mcp/oauth/token.
@@ -58,7 +58,7 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 {"error": "unauthorized", "detail": "Missing Bearer token"},
                 status_code=401,
-                headers={"WWW-Authenticate": 'Bearer realm="VCPilot MCP"'},
+                headers={"WWW-Authenticate": 'Bearer realm="AstraTrade MCP"'},
             )
 
         token = auth_header[len("Bearer "):]
@@ -67,7 +67,7 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 {"error": "unauthorized", "detail": "Invalid or expired token"},
                 status_code=401,
-                headers={"WWW-Authenticate": 'Bearer realm="VCPilot MCP"'},
+                headers={"WWW-Authenticate": 'Bearer realm="AstraTrade MCP"'},
             )
 
         # Validate credential is still active in DB (catches revocations)
@@ -118,7 +118,7 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
 # ---------------------------------------------------------------------------
 
 def _build_mcp_server():
-    """Construct and register all VCPilot MCP tools."""
+    """Construct and register all AstraTrade MCP tools."""
     try:
         from mcp.server.fastmcp import FastMCP
     except ImportError:
@@ -128,10 +128,9 @@ def _build_mcp_server():
         )
 
     mcp = FastMCP(
-        name="VCPilot",
+        name="AstraTrade",
         instructions=(
-            "VCPilot is an automated stock trading system built on Mark Minervini's SEPA "
-            "(Specific Entry Point Analysis) / VCP methodology. Use these tools to read "
+            "AstraTrade is an automated stock trading system using the VCP / algorithmic trading methodology. Use these tools to read "
             "market signals, manage watchlists, monitor positions, and execute or close "
             "trades on behalf of the authenticated organisation. "
             "All actions are org-scoped — you can only see and affect the organisation "

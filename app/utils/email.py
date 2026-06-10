@@ -1,5 +1,5 @@
 """
-VCPilot — Email Notification Utility
+AstraTrade — Email Notification Utility
 Handles sending HTML emails (OTPs, password reset tokens) via smtplib.
 """
 import smtplib

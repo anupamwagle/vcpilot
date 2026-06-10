@@ -10,8 +10,8 @@ call execute_signal_order().
 Flow:
   1. Load & validate the PENDING signal (must belong to the org).
   2. Fetch a live price (or use force_entry_price); reject if >10% extended
-     past the pivot (Minervini "don't chase" rule).
-  3. Calculate Minervini risk-based position size from account capital.
+     past the pivot (AstraTrade "don't chase" rule).
+  3. Calculate AstraTrade risk-based position size from account capital.
   4. Submit a bracket order (entry + stop + target) to the correct broker
      (CryptoBroker/ccxt for crypto, IBKRBroker — with simulation fallback —
      for equities).
@@ -37,7 +37,7 @@ def execute_signal_order(
     force_entry_price: Optional[float] = None,
 ) -> dict:
     """
-    Execute a Minervini bracket order for an existing PENDING signal.
+    Execute a AstraTrade bracket order for an existing PENDING signal.
 
     Args:
         signal_id:         ID of the PENDING signal to trade.
@@ -221,6 +221,7 @@ def execute_signal_order(
                 exchange_key     = exchange_key,
                 asset_type       = asset_type,
                 currency         = currency,
+                entry_date       = datetime.utcnow().date(),
                 qty              = qty,
                 entry_price      = entry_price,
                 initial_stop     = stop_price,

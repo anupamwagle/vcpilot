@@ -1,5 +1,5 @@
 """
-VCPilot Mobile API — JWT-authenticated JSON endpoints for the React Native app.
+AstraTrade Mobile API — JWT-authenticated JSON endpoints for the React Native app.
 All routes are prefixed /api/mobile (registered in dashboard/main.py).
 
 Auth flow:

@@ -1,5 +1,5 @@
 """
-VCPilot Backtest Runner CLI
+AstraTrade Backtest Runner CLI
 Example: python scripts/run_backtest.py --ticker BHP.AX --start 2024-01-01 --end 2026-06-01
 """
 import sys
@@ -15,7 +15,7 @@ from app.models.market import PriceBar
 from app.backtester.backtest_engine import run_backtest_for_ticker
 
 def main():
-    parser = argparse.ArgumentParser(description="VCPilot Rule Backtest Runner")
+    parser = argparse.ArgumentParser(description="AstraTrade Rule Backtest Runner")
     parser.add_argument("--ticker", type=str, help="Ticker to backtest (e.g. BHP.AX). If not specified, runs on the first available ticker with data.")
     parser.add_argument("--start", type=str, default="2025-01-01", help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", type=str, default=None, help="End date (YYYY-MM-DD), defaults to today")

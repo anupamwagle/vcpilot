@@ -46,7 +46,7 @@ def calculate_position_size(
     is_crypto: bool = False,          # If True, skip commission checks and allow fractional shares
 ) -> SizingResult:
     """
-    Minervini position sizing: Risk-based, currency-aware.
+    AstraTrade position sizing: Risk-based, currency-aware.
 
     Position size = (Capital × Risk%) ÷ (Entry − Stop)
     All calculations normalised to AUD for portfolio heat comparison.
@@ -234,7 +234,7 @@ def calculate_pyramid_size(
     engine: RuleEngine,
 ) -> Optional[SizingResult]:
     """
-    Pyramid add-on sizing (Minervini: only add to winning positions).
+    Pyramid add-on sizing — only add to winning positions.
     Add-on size = 50% of initial for first pyramid, 25% for second.
     Only allowed if position is up at least 2-3%.
     """

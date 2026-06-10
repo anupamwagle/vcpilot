@@ -267,7 +267,7 @@ class WhatsAppNotifier(BaseNotifier):
         risk_aud = signal_data.get("risk_per_trade_aud", 0)
 
         msg = (
-            f"📈 *VCPilot Signal*\n"
+            f"📈 *AstraTrade Signal*\n"
             f"Ticker: *{ticker}*\n"
             f"Pivot: ${pivot:.3f}\n"
             f"Stop: ${stop:.3f}\n"
@@ -316,7 +316,7 @@ class WhatsAppNotifier(BaseNotifier):
         pnl_total = report.get("pnl_total_aud", 0)
         regime    = report.get("market_regime", "UNKNOWN")
         msg = (
-            f"📊 *VCPilot Daily Report — {date_str}*\n"
+            f"📊 *AstraTrade Daily Report — {date_str}*\n"
             f"Market: {regime}\n"
             f"Signals today: {signals}\n"
             f"Open positions: {positions}\n"
@@ -326,5 +326,5 @@ class WhatsAppNotifier(BaseNotifier):
         return self.send(msg)
 
     def send_health_alert(self, component: str, error: str) -> bool:
-        msg = f"⚠️ *VCPilot Health Alert*\n{component} error:\n{error[:200]}"
+        msg = f"⚠️ *AstraTrade Health Alert*\n{component} error:\n{error[:200]}"
         return self.send(msg)

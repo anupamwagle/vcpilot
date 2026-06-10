@@ -1,5 +1,5 @@
 """
-VCPilot Backtesting Engine
+AstraTrade Backtesting Engine
 Runs historical replay simulation of VCP screening, entry breakouts, and exit rule evaluations
 using price bars stored in the database.
 """

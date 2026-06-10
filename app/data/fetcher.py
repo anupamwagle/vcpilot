@@ -1,5 +1,5 @@
 """
-VCPilot Data Fetcher — yfinance wrapper for price, volume, and fundamental data.
+AstraTrade Data Fetcher — yfinance wrapper for price, volume, and fundamental data.
 
 Strategy:
   - yfinance for ALL price/volume/MA data (free, unlimited EOD)
@@ -278,7 +278,7 @@ def get_asx200_tickers() -> list[str]:
     import io, requests as _req
     try:
         # pd.read_html blocks Wikipedia without a browser UA — use requests first
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; VCPilot/1.0; +https://github.com/anupamwagle/vcpilot)"}
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; AstraTrade/1.0; +https://github.com/anupamwagle/vcpilot)"}
         resp = _req.get(ASX200_WIKIPEDIA_URL, headers=headers, timeout=20)
         resp.raise_for_status()
         tables = pd.read_html(io.StringIO(resp.text))
@@ -312,7 +312,7 @@ def get_asx200_metadata() -> dict[str, dict]:
     import io, requests as _req
     results = {}
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; VCPilot/1.0; +https://github.com/anupamwagle/vcpilot)"}
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; AstraTrade/1.0; +https://github.com/anupamwagle/vcpilot)"}
         resp = _req.get(ASX200_WIKIPEDIA_URL, headers=headers, timeout=20)
         resp.raise_for_status()
         tables = pd.read_html(io.StringIO(resp.text))
@@ -565,7 +565,7 @@ def _get_ir_live_price(ticker: str) -> dict | None:
         f"https://api.independentreserve.com/Public/GetMarketSummary"
         f"?primaryCurrencyCode={ir_code}&secondaryCurrencyCode=aud"
     )
-    headers = {"User-Agent": "VCPilot/1.0 (+https://github.com/anupamwagle/vcpilot)"}
+    headers = {"User-Agent": "AstraTrade/1.0 (+https://github.com/anupamwagle/vcpilot)"}
     last_exc = None
     for attempt in range(1, 4):  # up to 3 attempts
         try:
@@ -701,7 +701,7 @@ def compute_rs_ratings(
     scoped to the same exchange's universe.
 
     RS formula: (stock weighted 12m performance) ranked as percentile within peers.
-    Minervini uses IBD RS Rating; we implement a compatible percentile rank.
+    AstraTrade uses IBD RS Rating; we implement a compatible percentile rank.
 
     For small watchlist-only universes (< 20 stocks), RS is still computed but
     should be interpreted relative to the available set, not the full market.

@@ -2,7 +2,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 class BaseNotifier(ABC):
-    """Abstract Base Class defining the unified interface for all VCPilot notification channels."""
+    """Abstract Base Class defining the unified interface for all AstraTrade notification channels."""
 
     @abstractmethod
     def __init__(self, organization_id: int | None = None):

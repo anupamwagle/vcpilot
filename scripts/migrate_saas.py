@@ -1,5 +1,5 @@
 """
-VCPilot — SaaS/Multi-tenant Database Migration Script
+AstraTrade — SaaS/Multi-tenant Database Migration Script
 Applies schema updates (adding organization_id), creates new tables, and seeds defaults.
 Run via: python3 -m scripts.migrate_saas
 """
@@ -843,7 +843,7 @@ def migrate():
                     INSERT INTO rule_configs (rule_id, organization_id, category, label, description,
                         minervini_ref, enabled_globally, is_mandatory, sort_order, asset_types, updated_by)
                     VALUES (:rule_id, NULL, 'MARKET_REGIME', :label, :description,
-                        'Minervini: Only trade in BULL markets', true, false,
+                        'AstraTrade: Only trade in BULL markets', true, false,
                         (SELECT COALESCE(MAX(sort_order), 40) + 1 FROM rule_configs WHERE organization_id IS NULL AND category = 'MARKET_REGIME'),
                         :asset_types, 'migration')
                 """), {"rule_id": rule_id, "label": label, "description": description, "asset_types": asset_types})
@@ -858,7 +858,7 @@ def migrate():
                         INSERT INTO rule_configs (rule_id, organization_id, category, label, description,
                             minervini_ref, enabled_globally, is_mandatory, sort_order, asset_types, updated_by)
                         VALUES (:rule_id, :oid, 'MARKET_REGIME', :label, :description,
-                            'Minervini: Only trade in BULL markets', true, false,
+                            'AstraTrade: Only trade in BULL markets', true, false,
                             (SELECT COALESCE(MAX(sort_order), 40) + 1 FROM rule_configs WHERE organization_id IS NULL AND category = 'MARKET_REGIME'),
                             :asset_types, 'migration')
                     """), {"rule_id": rule_id, "oid": oid, "label": label, "description": description, "asset_types": asset_types})

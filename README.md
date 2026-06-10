@@ -1,8 +1,8 @@
 # VCPilot 📈
 
-> **Minervini-grade algorithmic trading on ASX stocks — fully automated, locally deployable.**
+> **Institutional-grade algorithmic trading on ASX stocks — fully automated, locally deployable.**
 
-VCPilot implements Mark Minervini's SEPA (Specific Entry Point Analysis) methodology as a production-grade automated trading system. It screens the ASX universe daily, detects Volatility Contraction Patterns (VCP), manages risk with precision, and executes trades via Interactive Brokers (equities) or Independent Reserve (crypto via ccxt) — all controlled remotely via WhatsApp.
+AstraTrade is a production-grade automated trading system. It screens the ASX universe daily, detects Volatility Contraction Patterns (VCP), manages risk with precision, and executes trades via Interactive Brokers (equities) or Independent Reserve (crypto via ccxt) — all controlled remotely via WhatsApp.
 
 ---
 
@@ -71,7 +71,7 @@ docker compose --profile trading up ibkr -d
 
 ---
 
-## Minervini Rules Implemented
+## AstraTrade Rules Implemented
 
 All rules are configurable per organization via the Rules Config page, allowing Organisation Admins and Super Admins to enable/disable rules or update thresholds independently. The Super Admin can also customize the default tier configurations inherited by organizations.
 
@@ -180,7 +180,7 @@ vcpilot/
 │   ├── models/       # SQLAlchemy models
 │   ├── notifications/# WhatsApp (WAHA)
 │   ├── risk/         # Position sizing, portfolio heat
-│   ├── screener/     # Minervini rules, VCP, exit rules
+│   ├── screener/     # AstraTrade rules, VCP, exit rules
 │   └── tasks/        # Celery tasks
 ├── dashboard/        # FastAPI + Jinja2 dashboard (4 trading + 4 admin pages)
 ├── docker/           # Dockerfiles

@@ -1,5 +1,5 @@
 """
-VCPilot Celery Application.
+AstraTrade Celery Application.
 Broker: Redis. All tasks are registered here and imported by workers.
 
 Beat schedule file: /tmp/celerybeat-schedule (always writable — no permission issues).
@@ -63,7 +63,7 @@ app.conf.update(
         },
 
         # =================================================================
-        # Minervini screener (runs after data refresh at 5:30pm)
+        # AstraTrade screener (runs after data refresh at 5:30pm)
         # =================================================================
         "run-screener": {
             "task": "app.tasks.screening.run_daily_screen",

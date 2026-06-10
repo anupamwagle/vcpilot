@@ -89,12 +89,12 @@
   - **Dashboard — Watchlist add form**: Exchange dropdown (shows enabled exchanges). Ticker input updates placeholder/hint on exchange selection. Exchange badge on each watchlist card (🇦🇺/🇺🇸/₿).
   - **Dashboard — `/superadmin/exchanges`** (new page): Table of all ExchangeConfig rows. Enable/disable toggles. Inline configure panel for crypto (ccxt_provider, sandbox mode). Info panel explaining the 3-step setup flow.
   - **Sidebar**: "Exchanges" link added under SaaS Management section.
-  - **Data flow (on-demand)**: User adds AAPL/NYSE → `screen_single_ticker.delay("AAPL", exchange_key="NYSE")` → fetches 2yr yfinance history → stores in central `price_bars` table → runs Minervini rules → lands in Watchlist or Signals. Central data shared across all orgs.
+  - **Data flow (on-demand)**: User adds AAPL/NYSE → `screen_single_ticker.delay("AAPL", exchange_key="NYSE")` → fetches 2yr yfinance history → stores in central `price_bars` table → runs AstraTrade rules → lands in Watchlist or Signals. Central data shared across all orgs.
 
 - **Position Sizing Diagnosis & Sizing Synchronization (6 Jun 2026):**
   - **Position Sizing Diagnosis**: Investigated why positions were opened for ~$25k instead of ~$1,250 (which corresponds to 25% of the updated $5k working capital). Verified that the positions were entered on June 4th and early June 5th when the active account's capital was set to $100,000. The settings were updated to $5,000 at 7:42 AM on June 5th, which was after the positions had already been opened. Position quantities are calculated at trade entry and are not retroactively resized.
   - **WhatsApp Config Sizing Sync**: Updated the WhatsApp `CONFIG` command in [commands.py](file:///c:/vcpilot/app/agent/commands.py) to synchronize the active `Account.capital_aud` column when `working_capital_aud` is updated, ensuring parity with the Web UI settings behavior.
-  - **Manual Watchlist Sizing**: Enriched the manual watchlist promotion background task (`promote_watchlist_item_task` in [trading.py](file:///c:/vcpilot/app/tasks/trading.py)) to compute Minervini position sizing using the active account's capital at the time of promotion, populating `suggested_size_shares`, `suggested_size_aud`, and `risk_per_trade_aud` fields.
+  - **Manual Watchlist Sizing**: Enriched the manual watchlist promotion background task (`promote_watchlist_item_task` in [trading.py](file:///c:/vcpilot/app/tasks/trading.py)) to compute AstraTrade position sizing using the active account's capital at the time of promotion, populating `suggested_size_shares`, `suggested_size_aud`, and `risk_per_trade_aud` fields.
   - **Fix `/action/force-position-sync` 500 error**: Fixed the 500 database error when forcing position sync by defining the missing `sync_ibkr_positions_task` Celery task in [trading.py](file:///c:/vcpilot/app/tasks/trading.py).
   - **Global Task Trigger Safety Wraps**: Wrapped all Celery `.delay()` calls for manual action triggers (e.g. screener runs, breakout checks, exit checks, stop syncs, etc.) inside [main.py](file:///c:/vcpilot/dashboard/main.py) with try/except blocks to log backend exceptions and redirect cleanly in case of Redis/Celery outages instead of displaying a 500 page.
 
@@ -149,8 +149,8 @@
 - Full project scaffold (52 files)
 - Docker Compose stack: database, redis, app, worker, beat, api, whatsapp, ibkr
 - All SQLAlchemy models (account, config, market, signal, trade, audit)
-- Minervini rule engine: trend template, VCP detector, fundamentals, market regime, exit rules
-- 40+ RuleConfig rows seeded with Minervini defaults and thresholds
+- AstraTrade rule engine: trend template, VCP detector, fundamentals, market regime, exit rules
+- 40+ RuleConfig rows seeded with AstraTrade defaults and thresholds
 - FastAPI dashboard (replaced Streamlit): 4 trading pages + 4 admin pages
 - Light/dark theme (CSS variables — Flowbite blue/white default)
 - Worker status detection (online/starting/offline based on heartbeat age)
@@ -205,7 +205,7 @@
   - **`admin_tasks_poll` superadmin bug fixed:** The live task log poll endpoint was incorrectly returning HTTP 403 for Super Admin sessions (inverted guard — `== "superadmin"` instead of `!= "superadmin"`). Now all authenticated users can poll, and the org scope is correctly applied.
   - **Per-org worker heartbeat:** `health_check` Celery task now writes both a global `last_heartbeat` (backward compatible) AND a per-org `last_heartbeat` row for every active organisation. The `_global()` function in `main.py` now prefers the per-org heartbeat row, falling back to global for old deployments. This means each org's Health page accurately reflects whether the shared worker is alive.
   - **Global rules → org rules sync:** Added `POST /superadmin/rules/sync-all` endpoint that propagates global template rule settings (`enabled_globally`, `threshold`, `tier_overrides`) to all org-level copies. Added *Soft Sync* (skips org-customised rows) and *Force Sync* (overwrites all) buttons to the superadmin/rules page. `synced` and `skipped` counts shown in the success banner.
-  - **Minervini-style position close:** Added `POST /positions/{pos_id}/close` route. Open positions table now has a **Close** button per row. Clicking reveals an inline form with all Minervini exit reasons grouped into *Defensive* (stop loss, time stop, earnings, 50MA break, market regime) and *Offensive* (target 1/2, climax top, parabolic, 3-weeks-tight) categories, plus a Manual option. An optional exit price field overrides the last known price. Confirming marks the position CLOSED, creates a Trade record, writes audit log, and sends WhatsApp alert. Inline Minervini exit framework guidance shown in form for reference.
+  - **AstraTrade position close:** Added `POST /positions/{pos_id}/close` route. Open positions table now has a **Close** button per row. Clicking reveals an inline form with all AstraTrade exit reasons grouped into *Defensive* (stop loss, time stop, earnings, 50MA break, market regime) and *Offensive* (target 1/2, climax top, parabolic, 3-weeks-tight) categories, plus a Manual option. An optional exit price field overrides the last known price. Confirming marks the position CLOSED, creates a Trade record, writes audit log, and sends WhatsApp alert. Inline AstraTrade exit framework guidance shown in form for reference.
   - **Unskip signal:** Added `POST /signals/{signal_id}/unskip` route and `↩ Unskip` button in `signals.html` for SKIPPED signals. Added `UNSKIP <TICKER>` WhatsApp command to `AgentCommandHandler`. Signal is restored to `PENDING` so it can be triggered in the intraday entry check.
   - **`promoted` flash message:** `signals.html` now shows a success banner when redirected from watchlist promote (`?msg=promoted`).
 
@@ -303,7 +303,7 @@
   - **50 IR tokens seeded**: All 50 Stock records in DB. 47 tickers returned price bars from yfinance.
   - **IR live prices confirmed**: BTC A$89,847 | ETH A$2,393 | SOL A$94 | XRP A$1.63 | DOGE A$0.12 | LINK A$11.16 (all 0-delay from IR public API).
   - **11 crypto rules active for AW**: 6 original + 5 enhanced (RSI, MACD, vol surge, R/R, BTC RS). All ON.
-  - **Market regime**: CAUTION (BTC-AUD $89,723 vs 200MA $113,533 = -21%). ASX also BEAR. No signals generated — correct Minervini behaviour in bear market.
+  - **Market regime**: CAUTION (BTC-AUD $89,723 vs 200MA $113,533 = -21%). ASX also BEAR. No signals generated — correct AstraTrade behaviour in bear market.
   - **Entry check loop confirmed**: Celery beat firing every 5 min. Audit log shows checks at 03:27 and 03:30 AEST.
   - **Watchlist clean**: 67 items (66 equity + BTC-AUD crypto). Stale ETH-USD removed.
   - **Celery beat schedules**: 5-min entry/exit/stop sync/P&L for crypto, 4× daily screener, 6h data refresh.
@@ -404,7 +404,7 @@ First signals likely from: BTC-AUD, DOGE-AUD, LINK-AUD, XRP-AUD (closest to 200M
 | IR market regime | ✅ CAUTION (BTC -21% vs 200MA) |
 | IR signals (AW) | 0 — CAUTION regime, no VCP breakouts |
 | IR watchlist (AW) | 1 item: BTC-AUD |
-| Minervini rules | ✅ 56 total | 11 crypto | 45 equity |
+| AstraTrade rules | ✅ 56 total | 11 crypto | 45 equity |
 | IBKR connection | ⏸ Not connected (simulation mode active) |
 | IR API credentials | ⚠️ Needs config in /admin/config |
 | WhatsApp | ⚠️ QR not scanned for AW org |
@@ -418,7 +418,7 @@ First signals likely from: BTC-AUD, DOGE-AUD, LINK-AUD, XRP-AUD (closest to 200M
 |---|---|
 | ASX200 universe | Empty — run `refresh_universe` task first |
 | Price history | Empty — run `refresh_price_data` after universe |
-| Minervini rules | ✅ 40+ rules seeded |
+| AstraTrade rules | ✅ 40+ rules seeded |
 | Market regime | Not evaluated — trigger manually on health page |
 | Signals | None yet — run screener after data loaded |
 

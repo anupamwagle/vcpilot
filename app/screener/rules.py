@@ -1,5 +1,5 @@
 """
-VCPilot — Rule Engine
+AstraTrade — Rule Engine
 Loads all RuleConfig rows from DB and provides helpers to check rules
 against a stock's data. Each rule returns a RuleResult with pass/fail + detail.
 """
@@ -31,7 +31,7 @@ class ScreenResult:
     ticker: str
     passed: bool = False
     rule_results: dict[str, RuleResult] = field(default_factory=dict)
-    trend_score: int = 0      # 0–8 (Minervini trend template criteria met)
+    trend_score: int = 0      # 0–8 (AstraTrade trend template criteria met)
     fund_score: int = 0       # Fundamental criteria met
     rs_rating: float = 0.0
 

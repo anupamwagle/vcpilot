@@ -1,5 +1,5 @@
 """
-VCPilot — Database Setup
+AstraTrade — Database Setup
 SQLAlchemy engine, session factory, and Base for all models.
 """
 from contextlib import contextmanager

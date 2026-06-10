@@ -42,7 +42,7 @@ The mobile app uses JWT — your token is stored securely in the device keychain
 | Tab | What it shows |
 |---|---|
 | **Dashboard** | Live P&L, positions count, signals count, market regime, worker status. Auto-refreshes every 30s. |
-| **Positions** | All open positions with live unrealised P&L. Tap **Close ↗** to close with full Minervini exit reason picker. |
+| **Positions** | All open positions with live unrealised P&L. Tap **Close ↗** to close with full AstraTrade exit reason picker. |
 | **Signals** | Today's breakout signals (configurable 1/7/14 day window). Filter by status. Skip/restore signals. Watchlist tab shows stocks approaching VCP completion. |
 | **Actions** | Pause/resume trading, force screener, refresh price data, evaluate regime, ping worker, send WhatsApp report. Trade history with win rate stats. |
 

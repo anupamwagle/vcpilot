@@ -1,5 +1,5 @@
 """
-VCPilot — Database Initialisation
+AstraTrade — Database Initialisation
 Creates all tables, sets up TimescaleDB hypertables, and seeds default config.
 Run once on first startup: python -m scripts.init_db
 """
@@ -24,7 +24,7 @@ def setup_hypertables():
 
 
 def main():
-    logger.info("Initialising VCPilot database...")
+    logger.info("Initialising AstraTrade database...")
 
     # 1. Create all SQLAlchemy tables
     init_db()
