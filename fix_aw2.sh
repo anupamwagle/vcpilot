@@ -1,5 +1,5 @@
 #!/bin/bash
-# VCPilot — AW Org Fix Part 2
+# AstraTrade — AW Org Fix Part 2
 # Complete what fix_aw.sh couldn't finish after the audit log error
 cd /mnt/c/vcpilot
 

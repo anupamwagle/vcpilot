@@ -1,7 +1,7 @@
 """Backtest — run AstraTrade strategy against historical data."""
 import sys; sys.path.insert(0, "/app")
 import streamlit as st
-st.set_page_config(page_title="Backtest — VCPilot", layout="wide")
+st.set_page_config(page_title="Backtest — AstraTrade", layout="wide")
 st.title("🧪 Backtest")
 st.info("Backtest engine (Vectorbt) — implementation coming in Phase 2.")
 st.markdown("""

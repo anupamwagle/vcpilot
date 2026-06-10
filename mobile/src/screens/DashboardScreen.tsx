@@ -61,7 +61,7 @@ export function DashboardScreen() {
       <View style={styles.header}>
         <View>
           <Text style={styles.greeting}>Good {getGreeting()}, {user?.name?.split(' ')[0] || 'Trader'}</Text>
-          <Text style={styles.subtitle}>VCPilot Dashboard</Text>
+          <Text style={styles.subtitle}>AstraTrade Dashboard</Text>
         </View>
         <TouchableOpacity onPress={logout} style={styles.logoutBtn}>
           <Text style={styles.logoutText}>Sign out</Text>

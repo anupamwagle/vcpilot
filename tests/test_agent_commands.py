@@ -305,3 +305,147 @@ def test_cmd_buy_signal_not_found(db_session, org_and_account):
     h, _ = _make_handler(db_session, org)
     result = h.cmd_buy(["NONEXISTENT.AX"])
     assert "not found" in result.lower() or "No pending" in result or "signal" in result.lower()
+
+
+def test_cmd_buy_with_signal(db_session, org_and_account):
+    """BUY with a pending signal shows the trade preview."""
+    from app.models.signal import Signal, SignalStatus
+    from app.utils.time_helper import get_current_date
+    org, _ = org_and_account
+    db_session.add(Signal(
+        organization_id=org.id, ticker="CBA.AX", exchange_key="ASX",
+        signal_date=get_current_date(), status=SignalStatus.PENDING,
+        pivot_price=120.0, stop_price=115.0, rs_rating=90, trend_score=8,
+        close_price=120.0, suggested_size_shares=50,
+    ))
+    db_session.commit()
+    h, _ = _make_handler(db_session, org)
+    result = h.cmd_buy(["CBA.AX"])
+    assert "CBA.AX" in result or "cba" in result.lower()
+    assert "120" in result or "Pivot" in result or "CONFIRM" in result
+
+
+def test_cmd_exit_with_position(db_session, org_and_account, open_crypto_position):
+    """EXIT with an open position flags it for exit."""
+    org, _ = org_and_account
+    h, _ = _make_handler(db_session, org)
+    result = h.cmd_exit(["TRX-AUD"])
+    assert "TRX" in result or "exit" in result.lower() or "flagged" in result.lower()
+
+
+def test_cmd_stop_with_position(db_session, org_and_account, open_crypto_position):
+    """STOP <TICKER> <PRICE> updates the stop price."""
+    org, _ = org_and_account
+    h, _ = _make_handler(db_session, org)
+    result = h.cmd_stop(["TRX-AUD", "0.09"])
+    assert "TRX" in result or "updated" in result.lower() or "Stop" in result
+
+
+def test_cmd_stop_invalid_price(db_session, org_and_account):
+    """STOP with non-numeric price returns an error."""
+    org, _ = org_and_account
+    h, _ = _make_handler(db_session, org)
+    result = h.cmd_stop(["TRX-AUD", "notanumber"])
+    assert "Invalid" in result or "invalid" in result.lower()
+
+
+def test_cmd_stop_position_not_found(db_session, org_and_account):
+    """STOP with unknown ticker returns not found."""
+    org, _ = org_and_account
+    h, _ = _make_handler(db_session, org)
+    result = h.cmd_stop(["NONEXISTENT.AX", "10.0"])
+    assert "not found" in result.lower() or "No open" in result
+
+
+def test_cmd_unskip_with_skipped_signal(db_session, org_and_account):
+    """UNSKIP with a skipped signal restores it to PENDING."""
+    from app.models.signal import Signal, SignalStatus
+    from app.utils.time_helper import get_current_date
+    org, _ = org_and_account
+    db_session.add(Signal(
+        organization_id=org.id, ticker="BHP.AX", exchange_key="ASX",
+        signal_date=get_current_date(), status=SignalStatus.SKIPPED,
+        pivot_price=45.0, stop_price=42.0, rs_rating=80, trend_score=7,
+        close_price=45.0,
+    ))
+    db_session.commit()
+    h, _ = _make_handler(db_session, org)
+    result = h.cmd_unskip(["BHP.AX"])
+    assert "BHP" in result or "PENDING" in result or "restored" in result.lower()
+
+
+def test_cmd_unskip_not_found(db_session, org_and_account):
+    """UNSKIP with no matching skipped signal."""
+    org, _ = org_and_account
+    h, _ = _make_handler(db_session, org)
+    result = h.cmd_unskip(["AAPL"])
+    assert "not found" in result.lower() or "No skipped" in result
+
+
+def test_cmd_confirm_no_args(db_session, org_and_account):
+    """CONFIRM with no args returns usage."""
+    org, _ = org_and_account
+    h, _ = _make_handler(db_session, org)
+    result = h.cmd_confirm([])
+    assert "Usage" in result or "CONFIRM" in result
+
+
+def test_cmd_confirm_signal_not_found(db_session, org_and_account):
+    """CONFIRM with no matching signal returns error."""
+    org, _ = org_and_account
+    h, _ = _make_handler(db_session, org)
+    result = h.cmd_confirm(["NONEXISTENT.AX"])
+    assert "not found" in result.lower() or "No PENDING" in result
+
+
+def test_cmd_rule_toggle_on(db_session, org_and_account):
+    """RULE <id> ON enables a rule."""
+    from app.models.config import RuleConfig
+    org, _ = org_and_account
+    db_session.add(RuleConfig(
+        rule_id="test_rule", organization_id=org.id, category="TREND_TEMPLATE",
+        label="Test Rule", enabled_globally=False, is_mandatory=False,
+        tier_overrides={},
+    ))
+    db_session.commit()
+    h, _ = _make_handler(db_session, org)
+    result = h.cmd_rule(["test_rule", "ON"])
+    assert "ENABLED" in result or "test_rule" in result
+
+
+def test_cmd_rule_toggle_off(db_session, org_and_account):
+    """RULE <id> OFF disables a rule."""
+    from app.models.config import RuleConfig
+    org, _ = org_and_account
+    db_session.add(RuleConfig(
+        rule_id="test_rule2", organization_id=org.id, category="TREND_TEMPLATE",
+        label="Test Rule 2", enabled_globally=True, is_mandatory=False,
+        tier_overrides={},
+    ))
+    db_session.commit()
+    h, _ = _make_handler(db_session, org)
+    result = h.cmd_rule(["test_rule2", "OFF"])
+    assert "DISABLED" in result or "test_rule2" in result
+
+
+def test_cmd_rule_mandatory_cannot_disable(db_session, org_and_account):
+    """Mandatory rules cannot be disabled."""
+    from app.models.config import RuleConfig
+    org, _ = org_and_account
+    db_session.add(RuleConfig(
+        rule_id="mandatory_rule", organization_id=org.id, category="EXIT_DEFENSIVE",
+        label="Stop Loss", enabled_globally=True, is_mandatory=True,
+        tier_overrides={},
+    ))
+    db_session.commit()
+    h, _ = _make_handler(db_session, org)
+    result = h.cmd_rule(["mandatory_rule", "OFF"])
+    assert "mandatory" in result.lower() or "cannot" in result.lower()
+
+
+def test_cmd_rule_invalid_state(db_session, org_and_account):
+    """RULE with invalid state (not ON/OFF) returns error."""
+    org, _ = org_and_account
+    h, _ = _make_handler(db_session, org)
+    result = h.cmd_rule(["some_rule", "MAYBE"])
+    assert "ON or OFF" in result or "State must" in result

@@ -1,13 +1,13 @@
 #!/bin/bash
 # =============================================================================
-# VCPilot — ASX + IBKR Full Refresh & Diagnostic for AW Org
+# AstraTrade — ASX + IBKR Full Refresh & Diagnostic for AW Org
 # Usage: wsl bash /mnt/c/vcpilot/refresh_asx.sh
 # =============================================================================
 cd /mnt/c/vcpilot
 
 echo ""
 echo "╔══════════════════════════════════════════════╗"
-echo "║  VCPilot ASX/IBKR Refresh — AW Org          ║"
+echo "║  AstraTrade ASX/IBKR Refresh — AW Org          ║"
 echo "╚══════════════════════════════════════════════╝"
 echo ""
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# VCPilot — AW Fix Part 3: proper atomic transactions
+# AstraTrade — AW Fix Part 3: proper atomic transactions
 cd /mnt/c/vcpilot
 
 echo ""

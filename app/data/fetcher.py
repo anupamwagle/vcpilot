@@ -574,6 +574,8 @@ def _get_ir_live_price(ticker: str) -> dict | None:
                 logger.warning(
                     f"IR API attempt {attempt}: {resp.status_code} for {ticker} ({ir_code}): {resp.text[:120]}"
                 )
+                if resp.status_code == 400:
+                    return None  # Invalid coin on IR — retrying won't help
                 if attempt < 3:
                     _time.sleep(1.5 * attempt)
                     continue
@@ -633,8 +635,8 @@ def get_intraday_price(
         if ir_result:
             return ir_result
 
-    # 2. Try IBKR real-time if available and connected (equities and non-IR crypto)
-    if organization_id is not None:
+    # 2. Try IBKR real-time if available and connected (equities only — crypto uses IR/ccxt)
+    if organization_id is not None and asset_type != "CRYPTO":
         try:
             from app.broker.ibkr import IBKRBroker
             from app.config import settings as _s

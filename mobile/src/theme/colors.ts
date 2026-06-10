@@ -1,5 +1,5 @@
 /**
- * VCPilot dark trading theme — charcoal/emerald palette.
+ * AstraTrade dark trading theme — charcoal/emerald palette.
  * Mirrors the existing CSS vars from the web dashboard.
  */
 export const C = {

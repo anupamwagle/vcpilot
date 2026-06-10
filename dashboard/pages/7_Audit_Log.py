@@ -5,7 +5,7 @@ import pandas as pd
 from app.database import get_db
 from app.models.audit import AuditLog, AuditAction
 
-st.set_page_config(page_title="Audit Log — VCPilot", layout="wide")
+st.set_page_config(page_title="Audit Log — AstraTrade", layout="wide")
 st.title("📜 Audit Log")
 
 col1, col2, col3 = st.columns(3)

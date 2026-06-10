@@ -1,4 +1,4 @@
-# VCPilot 📈
+# AstraTrade 📈
 
 > **Institutional-grade algorithmic trading on ASX stocks — fully automated, locally deployable.**
 
@@ -197,7 +197,7 @@ vcpilot/
 
 ## Testing
 
-VCPilot ships with a pytest regression suite (`tests/`) covering the critical watchlist → signal → position → trade lifecycle — the paths where a silent bug means real capital goes unmanaged (e.g. a stop-loss that never fires, or a manual action that appears to do nothing). Tests run the real production code against an isolated in-memory database, so they're safe to run anytime with no risk to live data.
+AstraTrade ships with a pytest regression suite (`tests/`) covering the critical watchlist → signal → position → trade lifecycle — the paths where a silent bug means real capital goes unmanaged (e.g. a stop-loss that never fires, or a manual action that appears to do nothing). Tests run the real production code against an isolated in-memory database, so they're safe to run anytime with no risk to live data.
 
 ```bash
 pip install -r requirements.txt   # installs pytest + pytest-mock
@@ -210,7 +210,7 @@ Covered scenarios include: watchlist → signal promotion (including the rollbac
 
 ## Production & Cloudflare Tunnel Deployment
 
-To run VCPilot in a production environment behind a reverse proxy like Cloudflare Tunnel:
+To run AstraTrade in a production environment behind a reverse proxy like Cloudflare Tunnel:
 
 1. **Set Production Mode**:
    In your `.env` file, change the environment to:
@@ -231,4 +231,4 @@ To run VCPilot in a production environment behind a reverse proxy like Cloudflar
 
 ## Disclaimer
 
-VCPilot is for personal use and educational purposes only. Not financial advice. Trading involves significant risk of loss. Always paper trade before going live.
+AstraTrade is for personal use and educational purposes only. Not financial advice. Trading involves significant risk of loss. Always paper trade before going live.

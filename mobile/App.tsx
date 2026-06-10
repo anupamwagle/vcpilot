@@ -1,5 +1,5 @@
 /**
- * VCPilot Mobile — Root entry point.
+ * AstraTrade Mobile — Root entry point.
  * Wraps the app in QueryClient (TanStack) + AuthProvider.
  */
 import React, { useEffect } from 'react';
@@ -56,12 +56,12 @@ const queryClient = new QueryClient({
 export default function App() {
   useEffect(() => {
     registerForPushNotificationsAsync().then((token) => {
-      if (token) console.log('[VCPilot] Push token:', token);
+      if (token) console.log('[AstraTrade] Push token:', token);
     });
 
     // Handle notifications received while app is foregrounded
     const sub = Notifications.addNotificationReceivedListener((notification) => {
-      console.log('[VCPilot] Notification received:', notification);
+      console.log('[AstraTrade] Notification received:', notification);
       // Invalidate relevant queries when a push arrives
       queryClient.invalidateQueries({ queryKey: ['positions'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });

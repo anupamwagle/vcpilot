@@ -161,6 +161,7 @@ def test_mcp_credential_can_be_instantiated(db_session, org_and_account):
     from app.models.mcp import MCPCredential, generate_client_id, generate_client_secret, hash_secret
     org, _ = org_and_account
     secret = generate_client_secret()
+    from datetime import datetime, timedelta
     client_id = generate_client_id()
     cred = MCPCredential(
         organization_id=org.id,
@@ -169,6 +170,7 @@ def test_mcp_credential_can_be_instantiated(db_session, org_and_account):
         client_secret_hash=hash_secret(secret),
         client_secret_preview=secret[:8] + "...",
         scopes=["trading:read"],
+        expires_at=datetime.utcnow() + timedelta(days=365),
         is_active=True,
     )
     db_session.add(cred)

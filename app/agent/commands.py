@@ -1,5 +1,5 @@
 """
-WhatsApp Agent — Command handler for remote control of VCPilot.
+WhatsApp Agent — Command handler for remote control of AstraTrade.
 
 Supported commands (case-insensitive):
   STATUS              — System status overview

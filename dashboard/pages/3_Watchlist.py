@@ -5,7 +5,7 @@ import pandas as pd
 from app.database import get_db
 from app.models.signal import Watchlist, WatchlistStatus
 
-st.set_page_config(page_title="Watchlist — VCPilot", layout="wide")
+st.set_page_config(page_title="Watchlist — AstraTrade", layout="wide")
 st.title("👀 Watchlist")
 with get_db() as db:
     items = db.query(Watchlist).filter(Watchlist.status == WatchlistStatus.WATCHING).all()

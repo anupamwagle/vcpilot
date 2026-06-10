@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# VCPilot — AW Org Full Pipeline Refresh
+# AstraTrade — AW Org Full Pipeline Refresh
 # Runs: migrations → universe seed → price data → regime → screen → entry check
 # Usage: wsl bash /mnt/c/vcpilot/refresh_aw.sh
 # =============================================================================
@@ -19,7 +19,7 @@ rpy() { docker compose exec -T worker-equities python -c "$1"; }
 
 echo ""
 echo -e "${CYAN}╔══════════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║  VCPilot — AW Org Full Pipeline Refresh      ║${NC}"
+echo -e "${CYAN}║  AstraTrade — AW Org Full Pipeline Refresh      ║${NC}"
 echo -e "${CYAN}╚══════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -186,7 +186,7 @@ echo -e "${GREEN}╔════════════════════
 echo -e "${GREEN}║  ✅  All 7 steps completed successfully!     ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════╝${NC}"
 echo ""
-echo "  Open the VCPilot dashboard:"
+echo "  Open the AstraTrade dashboard:"
 echo "  → http://localhost:8501"
 echo ""
 echo "  Dashboard pages to check:"

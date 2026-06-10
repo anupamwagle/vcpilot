@@ -233,3 +233,213 @@ def test_refresh_price_data_no_tickers(db_session, org_and_account, monkeypatch)
 
     # No stocks → aborts gracefully
     refresh_price_data.run(exchange_key="NYSE")
+
+
+# --- run_daily_screen with stocks (exercises per-ticker loop) ---
+
+def _make_rule_result(passed=True):
+    from app.screener.rules import RuleResult
+    return RuleResult(rule_id="test", passed=passed, value=1.0, threshold=1.0, message="ok")
+
+
+def test_run_daily_screen_with_stock_trend_fails_low_score(db_session, org_and_account, monkeypatch):
+    """Trend passes < 6 → no watchlist entry (update_if_exists only)."""
+    from app.tasks.screening import run_daily_screen
+    from app.models.market import Stock
+    from app.models.signal import Watchlist
+
+    org, _ = org_and_account
+    db_session.add(Stock(
+        ticker="ANZ.AX", exchange_key="ASX", asset_type="EQUITY",
+        currency="AUD", in_asx200=True, is_active=True,
+        name="ANZ", sector="Financials", exchange_code="ANZ",
+    ))
+    db_session.commit()
+
+    monkeypatch.setattr("app.tasks.screening.today_is_trading_day", lambda *a: True)
+    df = _make_price_df(252)
+    monkeypatch.setattr("app.tasks.screening.get_price_history", lambda *a, **kw: df)
+    monkeypatch.setattr("app.tasks.screening.get_fundamentals", lambda *a, **kw: {})
+
+    # 4 out of 8 trend rules pass — not enough for watchlist
+    fail_r = _make_rule_result(False)
+    pass_r = _make_rule_result(True)
+    fake_trend = {f"rule_{i}": (pass_r if i < 4 else fail_r) for i in range(8)}
+    monkeypatch.setattr("app.tasks.screening.evaluate_trend_template", lambda *a, **kw: fake_trend)
+
+    mock_notifier = MagicMock()
+    monkeypatch.setattr("app.tasks.screening.get_notifier", lambda **kw: mock_notifier)
+    monkeypatch.setattr("app.notifications.get_notifier", lambda **kw: mock_notifier)
+
+    run_daily_screen.run(exchange_key="ASX")
+    # No watchlist entry added (< 6 criteria)
+    assert db_session.query(Watchlist).count() == 0
+
+
+def test_run_daily_screen_with_stock_trend_passes_6_adds_watchlist(db_session, org_and_account, monkeypatch):
+    """6/8 trend rules pass → stock added to watchlist."""
+    from app.tasks.screening import run_daily_screen
+    from app.models.market import Stock
+    from app.models.signal import Watchlist
+
+    org, _ = org_and_account
+    db_session.add(Stock(
+        ticker="CBA.AX", exchange_key="ASX", asset_type="EQUITY",
+        currency="AUD", in_asx200=True, is_active=True,
+        name="CBA", sector="Financials", exchange_code="CBA",
+    ))
+    db_session.commit()
+
+    monkeypatch.setattr("app.tasks.screening.today_is_trading_day", lambda *a: True)
+    df = _make_price_df(252)
+    monkeypatch.setattr("app.tasks.screening.get_price_history", lambda *a, **kw: df)
+    monkeypatch.setattr("app.tasks.screening.get_fundamentals", lambda *a, **kw: {})
+
+    # 6 of 8 trend rules pass → watchlist eligible
+    fail_r = _make_rule_result(False)
+    pass_r = _make_rule_result(True)
+    fake_trend = {f"rule_{i}": (pass_r if i < 6 else fail_r) for i in range(8)}
+    monkeypatch.setattr("app.tasks.screening.evaluate_trend_template", lambda *a, **kw: fake_trend)
+
+    mock_notifier = MagicMock()
+    monkeypatch.setattr("app.tasks.screening.get_notifier", lambda **kw: mock_notifier)
+    monkeypatch.setattr("app.notifications.get_notifier", lambda **kw: mock_notifier)
+
+    run_daily_screen.run(exchange_key="ASX")
+    # Watchlist entry added
+    assert db_session.query(Watchlist).filter_by(ticker="CBA.AX").count() >= 1
+
+
+def test_run_daily_screen_full_pass_creates_signal(db_session, org_and_account, monkeypatch):
+    """All rules pass + VCP detected → Signal created."""
+    from app.tasks.screening import run_daily_screen
+    from app.models.market import Stock
+    from app.models.signal import Signal
+
+    org, _ = org_and_account
+    db_session.add(Stock(
+        ticker="WBC.AX", exchange_key="ASX", asset_type="EQUITY",
+        currency="AUD", in_asx200=True, is_active=True,
+        name="Westpac", sector="Financials", exchange_code="WBC",
+    ))
+    db_session.commit()
+
+    monkeypatch.setattr("app.tasks.screening.today_is_trading_day", lambda *a: True)
+    df = _make_price_df(252)
+    monkeypatch.setattr("app.tasks.screening.get_price_history", lambda *a, **kw: df)
+    monkeypatch.setattr("app.tasks.screening.get_fundamentals", lambda *a, **kw: {
+        "company_name": "Westpac", "sector": "Financials", "industry": "Banks",
+        "eps_quarterly": [1.0, 1.1, 1.2, 1.3],
+        "revenue_quarterly": [10, 11, 12, 13],
+        "roe": 0.15, "net_margin": 0.2,
+        "inst_ownership_pct": 70, "next_earnings_date": None,
+    })
+
+    pass_r = _make_rule_result(True)
+    all_pass = {f"rule_{i}": pass_r for i in range(8)}
+    monkeypatch.setattr("app.tasks.screening.evaluate_trend_template", lambda *a, **kw: all_pass)
+    monkeypatch.setattr("app.tasks.screening.evaluate_fundamentals", lambda *a, **kw: all_pass)
+
+    from app.screener.vcp import VCPResult
+    fake_vcp = VCPResult(detected=True, contraction_count=3, base_weeks=8,
+                         pivot_price=50.5, stop_price=47.0, volume_dried_up=True)
+    monkeypatch.setattr("app.tasks.screening.detect_vcp",
+                        lambda *a, **kw: (fake_vcp, {}))
+
+    mock_notifier = MagicMock()
+    monkeypatch.setattr("app.tasks.screening.get_notifier", lambda **kw: mock_notifier)
+    monkeypatch.setattr("app.notifications.get_notifier", lambda **kw: mock_notifier)
+
+    run_daily_screen.run(exchange_key="ASX")
+    sig = db_session.query(Signal).filter_by(ticker="WBC.AX", organization_id=org.id).first()
+    assert sig is not None
+    assert sig.pivot_price is not None
+
+
+# --- _run_screen_force deeper coverage ---
+
+def test_run_screen_force_vcp_detected_creates_signal(db_session, org_and_account, monkeypatch):
+    """_run_screen_force: all rules pass + VCP → Signal."""
+    from app.tasks.screening import _run_screen_force
+    from app.models.market import Stock
+    from app.models.signal import Signal
+
+    org, _ = org_and_account
+    db_session.add(Stock(
+        ticker="NAB.AX", exchange_key="ASX", asset_type="EQUITY",
+        currency="AUD", in_asx200=True, is_active=True,
+        name="NAB", sector="Financials", exchange_code="NAB",
+    ))
+    db_session.commit()
+
+    df = _make_price_df(252)
+    monkeypatch.setattr("app.tasks.screening.get_price_history", lambda *a, **kw: df)
+    monkeypatch.setattr("app.tasks.screening.get_batch_prices", lambda *a, **kw: {"NAB.AX": df})
+    monkeypatch.setattr("app.tasks.screening.compute_rs_ratings", lambda *a, **kw: {"NAB.AX": 75})
+    monkeypatch.setattr("app.tasks.screening.get_fundamentals", lambda *a, **kw: {
+        "company_name": "NAB", "sector": "Financials", "industry": "Banks",
+        "eps_quarterly": [1.0, 1.1, 1.2, 1.3],
+        "revenue_quarterly": [10, 11, 12, 13],
+        "roe": 0.15, "net_margin": 0.2,
+        "inst_ownership_pct": 70, "next_earnings_date": None,
+    })
+
+    pass_r = _make_rule_result(True)
+    all_pass = {f"rule_{i}": pass_r for i in range(8)}
+    monkeypatch.setattr("app.tasks.screening.evaluate_trend_template", lambda *a, **kw: all_pass)
+    monkeypatch.setattr("app.tasks.screening.evaluate_fundamentals", lambda *a, **kw: all_pass)
+
+    from app.screener.vcp import VCPResult
+    fake_vcp = VCPResult(detected=True, contraction_count=3, base_weeks=8,
+                         pivot_price=50.5, stop_price=47.0, volume_dried_up=True)
+    monkeypatch.setattr("app.tasks.screening.detect_vcp",
+                        lambda *a, **kw: (fake_vcp, {}))
+
+    mock_notifier = MagicMock()
+    monkeypatch.setattr("app.tasks.screening.get_notifier", lambda **kw: mock_notifier)
+    monkeypatch.setattr("app.notifications.get_notifier", lambda **kw: mock_notifier)
+
+    _run_screen_force.run(organization_id=org.id, exchange_key="ASX")
+    sig = db_session.query(Signal).filter_by(ticker="NAB.AX", organization_id=org.id).first()
+    assert sig is not None
+
+
+def test_run_screen_force_no_vcp_adds_watchlist(db_session, org_and_account, monkeypatch):
+    """_run_screen_force: all trend/fund rules pass but VCP not detected → watchlist."""
+    from app.tasks.screening import _run_screen_force
+    from app.models.market import Stock
+    from app.models.signal import Watchlist
+
+    org, _ = org_and_account
+    db_session.add(Stock(
+        ticker="WES.AX", exchange_key="ASX", asset_type="EQUITY",
+        currency="AUD", in_asx200=True, is_active=True,
+        name="Wesfarmers", sector="Retail", exchange_code="WES",
+    ))
+    db_session.commit()
+
+    df = _make_price_df(252)
+    monkeypatch.setattr("app.tasks.screening.get_price_history", lambda *a, **kw: df)
+    monkeypatch.setattr("app.tasks.screening.get_batch_prices", lambda *a, **kw: {"WES.AX": df})
+    monkeypatch.setattr("app.tasks.screening.compute_rs_ratings", lambda *a, **kw: {})
+    monkeypatch.setattr("app.tasks.screening.get_fundamentals", lambda *a, **kw: {})
+
+    pass_r = _make_rule_result(True)
+    all_pass = {f"rule_{i}": pass_r for i in range(8)}
+    monkeypatch.setattr("app.tasks.screening.evaluate_trend_template", lambda *a, **kw: all_pass)
+    monkeypatch.setattr("app.tasks.screening.evaluate_fundamentals", lambda *a, **kw: all_pass)
+
+    from app.screener.vcp import VCPResult
+    no_vcp = VCPResult(detected=False, contraction_count=0, base_weeks=0,
+                       pivot_price=0, stop_price=0, volume_dried_up=False)
+    monkeypatch.setattr("app.tasks.screening.detect_vcp",
+                        lambda *a, **kw: (no_vcp, {}))
+
+    mock_notifier = MagicMock()
+    monkeypatch.setattr("app.tasks.screening.get_notifier", lambda **kw: mock_notifier)
+    monkeypatch.setattr("app.notifications.get_notifier", lambda **kw: mock_notifier)
+
+    _run_screen_force.run(organization_id=org.id, exchange_key="ASX")
+    # Should be in watchlist
+    wl = db_session.query(Watchlist).filter_by(ticker="WES.AX", organization_id=org.id).first()
+    assert wl is not None

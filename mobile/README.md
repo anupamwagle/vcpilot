@@ -1,13 +1,13 @@
-# VCPilot Mobile App
+# AstraTrade Mobile App
 
-React Native (Expo) mobile trading interface for VCPilot.
+React Native (Expo) mobile trading interface for AstraTrade.
 
 ## Prerequisites
 
 - Node.js 18+
 - Expo CLI: `npm install -g expo-cli` (or use `npx expo`)
 - Expo Go app on your phone (iOS or Android) — for dev testing
-- Your VCPilot server running and accessible on your local network
+- Your AstraTrade server running and accessible on your local network
 
 ## Quick Start
 
@@ -30,11 +30,11 @@ When you log in, tap **Advanced → Server settings** and enter your server URL:
 
 Find your server's local IP:
 - Windows: `ipconfig` → IPv4 Address
-- The port is `8501` (VCPilot API default)
+- The port is `8501` (AstraTrade API default)
 
 ## Login Credentials
 
-Use your VCPilot dashboard credentials (email + password).  
+Use your AstraTrade dashboard credentials (email + password).  
 The mobile app uses JWT — your token is stored securely in the device keychain (Expo SecureStore).
 
 ## What's in the App
@@ -74,7 +74,7 @@ eas build --platform all
 - **Auth**: JWT stored in Expo SecureStore (device keychain). 7-day expiry.
 - **Data**: TanStack Query handles caching + background refetch. Dashboard refreshes every 30s, positions every 15s.
 - **Push notifications**: Expo Notifications. The backend sends pushes when orders fill (requires additional backend wiring for production).
-- **Theme**: Dark charcoal/emerald palette matching the VCPilot web dashboard.
+- **Theme**: Dark charcoal/emerald palette matching the AstraTrade web dashboard.
 
 ## File Structure
 

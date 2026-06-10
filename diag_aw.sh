@@ -1,10 +1,10 @@
 #!/bin/bash
-# VCPilot — AW Org Diagnostic
+# AstraTrade — AW Org Diagnostic
 # Quick check of all DB state for AW org
 cd /mnt/c/vcpilot
 
 echo ""
-echo "━━━ VCPilot AW Org Diagnostic ━━━"
+echo "━━━ AstraTrade AW Org Diagnostic ━━━"
 echo ""
 
 docker compose exec -T worker-equities python -c "

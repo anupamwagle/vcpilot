@@ -6,7 +6,7 @@ from app.database import get_db
 from app.models.config import RuleConfig, RuleCategory
 from app.models.audit import AuditLog, AuditAction
 
-st.set_page_config(page_title="Rules — VCPilot", layout="wide")
+st.set_page_config(page_title="Rules — AstraTrade", layout="wide")
 st.title("⚙️ AstraTrade Rules Configuration")
 st.caption("Enable/disable rules globally. Mandatory rules cannot be disabled.")
 

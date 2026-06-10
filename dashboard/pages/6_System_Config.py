@@ -6,7 +6,7 @@ from app.database import get_db
 from app.models.config import SystemConfig
 from app.models.audit import AuditLog, AuditAction
 
-st.set_page_config(page_title="System Config — VCPilot", layout="wide")
+st.set_page_config(page_title="System Config — AstraTrade", layout="wide")
 st.title("🔧 System Configuration")
 
 with get_db() as db:

@@ -1,5 +1,5 @@
 #!/bin/bash
-# VCPilot deploy script — run on NAS after pushing code changes from dev machine
+# AstraTrade deploy script — run on NAS after pushing code changes from dev machine
 # Usage: bash deploy.sh
 # Or to rebuild only specific services: bash deploy.sh api
 # Or to rebuild all: bash deploy.sh --all

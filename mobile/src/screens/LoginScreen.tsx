@@ -114,7 +114,7 @@ export function LoginScreen() {
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.footer}>VCPilot Mobile v1.0 · astradigital.com.au</Text>
+        <Text style={styles.footer}>AstraTrade Mobile v1.0 · astradigital.com.au</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );

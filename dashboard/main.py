@@ -1198,6 +1198,33 @@ async def signals(request: Request, db: Session = Depends(get_db),
     sigs = q.all()
     stock_names = get_cached_stock_names(db)
 
+    # ── Pre-fetch audit entries for all tickers in one query (avoids N+1) ──
+    _sig_tickers = list({s.ticker for s in sigs})
+    _all_audit_entries = []
+    if _sig_tickers:
+        _all_audit_entries = db.query(AuditLog).filter(
+            AuditLog.organization_id == org_id,
+            AuditLog.action == AuditAction.TASK_RUN,
+            AuditLog.ticker.in_(_sig_tickers),
+        ).order_by(desc(AuditLog.created_at)).limit(len(_sig_tickers) * 20).all()
+    from collections import defaultdict as _defaultdict
+    _audit_by_ticker: dict = _defaultdict(list)
+    for _e in _all_audit_entries:
+        if _e.ticker:
+            _audit_by_ticker[_e.ticker].append(_e)
+
+    # ── Pre-fetch all regime configs in one query (avoids N+1 per signal) ──
+    from app.models.config import SystemConfig as _SC
+    _regime_rows = db.query(_SC).filter(
+        or_(
+            (_SC.key.like("last_market_regime_%") & (_SC.organization_id == org_id)),
+            (_SC.key == "last_market_regime") & (_SC.organization_id == None),
+        )
+    ).all()
+    _regime_map: dict[str, str] = {}  # key → value
+    for _rc in _regime_rows:
+        _regime_map[_rc.key] = _rc.value or "UNKNOWN"
+
     sig_data = []
     for s in sigs:
         company_name = stock_names.get(s.ticker, "")
@@ -1229,11 +1256,7 @@ async def signals(request: Request, db: Session = Depends(get_db),
         # ── Latest entry check result for this signal ────────────────────
         last_check = None
         try:
-            audit_entries = db.query(AuditLog).filter(
-                AuditLog.organization_id == org_id,
-                AuditLog.action == AuditAction.TASK_RUN,
-                AuditLog.ticker == s.ticker,
-            ).order_by(desc(AuditLog.created_at)).limit(20).all()
+            audit_entries = _audit_by_ticker.get(s.ticker, [])
             for entry in audit_entries:
                 d = entry.detail or {}
                 if d.get("signal_id") == s.id:
@@ -1275,24 +1298,15 @@ async def signals(request: Request, db: Session = Depends(get_db),
 
         # Inject BEAR regime block as a failed rule when market is in BEAR
         # so the org admin can override it per-signal from this page
-        from app.models.config import SystemConfig as _SC
         sig_is_crypto = getattr(s, "asset_type", "EQUITY") == "CRYPTO"
         bear_rule_id  = "regime_bear_block_crypto" if sig_is_crypto else "regime_bear_block_equities"
         _exc_key = getattr(s, "exchange_key", "ASX") or "ASX"
         _is_crypto_exc = _exc_key == "CRYPTO" or _exc_key.startswith("CRYPTO_")
         if _is_crypto_exc:
             _eff_exc = _exc_key if _exc_key != "CRYPTO" else "CRYPTO_INDEPENDENTRESERVE"
-            _regime_cfg = db.query(_SC).filter(
-                _SC.key == f"last_market_regime_{_eff_exc}",
-                _SC.organization_id == org_id,
-            ).first()
-            _current_regime = _regime_cfg.value if _regime_cfg else "BULL"
+            _current_regime = _regime_map.get(f"last_market_regime_{_eff_exc}", "BULL")
         else:
-            _regime_cfg = db.query(_SC).filter(
-                _SC.key == "last_market_regime",
-                _SC.organization_id == None,
-            ).first()
-            _current_regime = _regime_cfg.value if _regime_cfg else "UNKNOWN"
+            _current_regime = _regime_map.get("last_market_regime", "UNKNOWN")
         _bear_rule_meta = rules_meta.get(bear_rule_id, {})
         _bear_rule_globally_on = _bear_rule_meta.get("globally_enabled", True)
         if _current_regime == "BEAR" and _bear_rule_globally_on:
@@ -1558,8 +1572,12 @@ async def watchlist(
 
         if is_crypto_item:
             live_cache_key = f"live_price:{w.ticker}"
-            bar_data = cache.get(live_cache_key)
-            if bar_data is None:
+            cached = cache.get(live_cache_key)
+            if cached is not None:
+                # Cache hit — could be real data or a failure sentinel
+                bar_data = None if cached.get("_failed") else cached
+            else:
+                # Cache miss — attempt live fetch
                 try:
                     from app.data.fetcher import get_intraday_price
                     price_result = get_intraday_price(w.ticker, org_id, asset_type="CRYPTO")
@@ -1582,8 +1600,10 @@ async def watchlist(
                         cache.set(live_cache_key, bar_data, expire_seconds=300)  # 5-min TTL
                     else:
                         bar_data = None
+                        cache.set(live_cache_key, {"_failed": True}, expire_seconds=120)  # 2-min back-off
                 except Exception:
                     bar_data = None
+                    cache.set(live_cache_key, {"_failed": True}, expire_seconds=120)  # 2-min back-off
 
             if bar_data and bar_data.get("live_price"):
                 live_price_used = True

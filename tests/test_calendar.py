@@ -106,3 +106,133 @@ def test_next_trading_day_crypto_is_tomorrow():
     from app.data.calendar import next_trading_day
     nxt = next_trading_day("CRYPTO_INDEPENDENTRESERVE", date(2026, 6, 5))
     assert nxt == date(2026, 6, 6)
+
+
+# --- previous_trading_day ---
+
+def test_previous_trading_day_asx():
+    from app.data.calendar import previous_trading_day
+    tuesday = date(2026, 6, 9)
+    prev = previous_trading_day("ASX", tuesday)
+    assert prev < tuesday
+
+
+def test_previous_trading_day_crypto():
+    from app.data.calendar import previous_trading_day
+    today = date(2026, 6, 10)
+    prev = previous_trading_day("CRYPTO_INDEPENDENTRESERVE", today)
+    assert prev == date(2026, 6, 9)
+
+
+def test_previous_trading_day_asx_from_monday_skips_weekend():
+    from app.data.calendar import previous_trading_day
+    monday = date(2026, 6, 9)
+    prev = previous_trading_day("ASX", monday)
+    # Queen's Birthday Mon June 8 is holiday → previous is Fri June 5
+    assert prev == date(2026, 6, 5)
+
+
+# --- get_trading_days ---
+
+def test_get_trading_days_crypto_returns_all_days():
+    from app.data.calendar import get_trading_days
+    start = date(2026, 6, 1)
+    end = date(2026, 6, 7)
+    days = get_trading_days("CRYPTO_BINANCE", start, end)
+    assert len(days) == 7
+
+
+def test_get_trading_days_asx_weekends_excluded():
+    from app.data.calendar import get_trading_days
+    start = date(2026, 6, 8)   # Monday (holiday)
+    end = date(2026, 6, 14)    # Sunday
+    days = get_trading_days("ASX", start, end)
+    # Should exclude Saturday, Sunday and Monday (Queen's Birthday)
+    assert len(days) <= 4
+
+
+# --- minutes_to_open ---
+
+def test_minutes_to_open_crypto_is_zero():
+    from app.data.calendar import minutes_to_open
+    result = minutes_to_open("CRYPTO")
+    assert result == 0
+
+
+def test_minutes_to_open_asx_returns_int(monkeypatch):
+    from app.data import calendar as cal
+    from app.data.calendar import minutes_to_open
+    # Mock market closed at 7am
+    monkeypatch.setattr(cal, "_local_now", lambda exchange_key: datetime(2026, 6, 9, 7, 0))
+    monkeypatch.setattr(cal, "market_is_open_now", lambda *a: False)
+    result = minutes_to_open("ASX")
+    assert isinstance(result, int)
+    assert result >= 0
+
+
+def test_minutes_to_open_unknown_exchange():
+    from app.data.calendar import minutes_to_open
+    result = minutes_to_open("UNKNOWN_EXCHANGE")
+    assert result == 9999
+
+
+# --- get_exchange_timezone ---
+
+def test_get_exchange_timezone_asx():
+    from app.data.calendar import get_exchange_timezone
+    tz = get_exchange_timezone("ASX")
+    assert "Sydney" in tz or "Australia" in tz
+
+
+def test_get_exchange_timezone_nyse():
+    from app.data.calendar import get_exchange_timezone
+    tz = get_exchange_timezone("NYSE")
+    assert "New_York" in tz or "America" in tz
+
+
+def test_get_exchange_timezone_crypto_utc():
+    from app.data.calendar import get_exchange_timezone
+    tz = get_exchange_timezone("CRYPTO_BINANCE")
+    assert tz == "UTC"
+
+
+def test_get_exchange_timezone_unknown():
+    from app.data.calendar import get_exchange_timezone
+    tz = get_exchange_timezone("SOME_UNKNOWN_EXCHANGE")
+    assert tz == "UTC"
+
+
+# --- backward-compat ASX helpers ---
+
+def test_asx_is_trading_day_delegates():
+    from app.data.calendar import asx_is_trading_day
+    saturday = date(2026, 6, 13)
+    assert asx_is_trading_day(saturday) is False
+    monday = date(2026, 6, 9)
+    assert isinstance(asx_is_trading_day(monday), bool)
+
+
+def test_asx_market_is_open_now_returns_bool():
+    from app.data.calendar import asx_market_is_open_now
+    result = asx_market_is_open_now()
+    assert isinstance(result, bool)
+
+
+def test_asx_today_is_trading_day_returns_bool():
+    from app.data.calendar import asx_today_is_trading_day
+    result = asx_today_is_trading_day()
+    assert isinstance(result, bool)
+
+
+# --- _local_now ---
+
+def test_local_now_returns_localized_datetime():
+    from app.data.calendar import _local_now
+    result = _local_now("ASX")
+    assert result.tzinfo is not None
+
+
+def test_local_now_crypto_uses_utc():
+    from app.data.calendar import _local_now
+    result = _local_now("CRYPTO")
+    assert result.tzinfo is not None

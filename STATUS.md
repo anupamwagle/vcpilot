@@ -1,4 +1,4 @@
-# VCPilot — Operational Status
+# AstraTrade — Operational Status
 
 > Last updated: 8 June 2026 AEST. Update this file when major milestones are reached.
 
@@ -123,7 +123,7 @@
     - Added a `⚡ Promoted` label to the Signals page for signals manually promoted from the watchlist.
     - Aligned entry check and exit check Celery task logs to print timestamps in the local `Australia/Sydney` (AEST) timezone.
     - Prevented "No entry check yet" UI confusion by logging detailed audit checks per signal when tasks bypass execution due to BEAR regime, max positions, or paused states.
-    - **Sidebar Market Regime Indicator**: Moved Bull/Bear/Caution regime badge from the top navbar to the sidebar logo area so it's always visible next to "VCPilot".
+    - **Sidebar Market Regime Indicator**: Moved Bull/Bear/Caution regime badge from the top navbar to the sidebar logo area so it's always visible next to "AstraTrade".
     - **Company Name Labels on Signals**: Fixed missing company names on signals by adding lazy backfill from yfinance when a stock's name is not yet populated in the DB. Also added auto-population during watchlist-to-signal promotion.
     - **Production & Cloudflare Tunnel Readiness**:
       - Configured Uvicorn inside `docker/Dockerfile.dashboard` and `docker-compose.yml` with `--proxy-headers` and `--forwarded-allow-ips='*'` to correctly handle reverse proxies and SSL termination at the edge (Cloudflare).
@@ -333,12 +333,12 @@
 
 4. **Scan WhatsApp QR** — Go to `/admin/whatsapp` → scan QR → test with `HELP` message.
 
-5. **Generate MCP credentials for AW** — Go to `/superadmin/organizations` → AW org → MCP Credentials section → Generate → grant ALL scopes. Configure in Claude Desktop Settings → MCP → VCPilot.
+5. **Generate MCP credentials for AW** — Go to `/superadmin/organizations` → AW org → MCP Credentials section → Generate → grant ALL scopes. Configure in Claude Desktop Settings → MCP → AstraTrade.
 
 6. **Switch account to live** — Once funded, go to DB (superadmin) and set `Account.is_paper=False` for AW org.
 
 7. **Trigger Step 2** — In a new Claude session, say:
-   > "VCPilot Step 2 — live session. AW org ready. MCP connected. Let's trade."
+   > "AstraTrade Step 2 — live session. AW org ready. MCP connected. Let's trade."
 
 ### Recovery milestones to watch (crypto)
 

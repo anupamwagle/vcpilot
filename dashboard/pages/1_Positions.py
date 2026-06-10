@@ -6,7 +6,7 @@ from datetime import date
 from app.database import get_db
 from app.models.trade import Position, Trade, TradeStatus
 
-st.set_page_config(page_title="Positions — VCPilot", layout="wide")
+st.set_page_config(page_title="Positions — AstraTrade", layout="wide")
 st.title("📋 Positions")
 
 tab1, tab2 = st.tabs(["Open", "Closed"])

@@ -1,5 +1,5 @@
 /**
- * VCPilot API client
+ * AstraTrade API client
  * Reads base URL + token from SecureStore.
  * All requests use Bearer JWT auth.
  */

@@ -1,5 +1,5 @@
 #!/bin/bash
-# VCPilot — AW Org Fix Script
+# AstraTrade — AW Org Fix Script
 # 1. Sync 5 new crypto rules to AW org
 # 2. Fix ETH-USD watchlist entry to ETH-AUD
 # 3. Run ASX screener for AW
@@ -7,7 +7,7 @@
 cd /mnt/c/vcpilot
 
 echo ""
-echo "━━━ VCPilot AW Org Fix Script ━━━"
+echo "━━━ AstraTrade AW Org Fix Script ━━━"
 echo ""
 
 docker compose exec -T worker-equities python -c "

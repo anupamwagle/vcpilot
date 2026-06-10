@@ -1,5 +1,5 @@
 """
-Shared pytest fixtures for VCPilot's critical-path test suite.
+Shared pytest fixtures for AstraTrade's critical-path test suite.
 
 Strategy: stand up an isolated in-memory SQLite database that mirrors the
 production schema (all models are portable — no Postgres-specific column types),

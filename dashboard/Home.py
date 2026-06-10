@@ -1,11 +1,11 @@
 """
-VCPilot Dashboard — Home Page
+AstraTrade Dashboard — Home Page
 """
 import streamlit as st
 from datetime import date, datetime
 
 st.set_page_config(
-    page_title="VCPilot",
+    page_title="AstraTrade",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -20,7 +20,7 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
 if not st.session_state.authenticated:
-    st.title("🔒 VCPilot")
+    st.title("🔒 AstraTrade")
     pwd = st.text_input("Password", type="password")
     if st.button("Login"):
         if pwd == _pwd:
@@ -42,7 +42,7 @@ from app.models.signal import Signal, SignalStatus
 from app.models.config import SystemConfig
 from app.models.audit import AuditLog
 
-st.title("📈 VCPilot Dashboard")
+st.title("📈 AstraTrade Dashboard")
 st.caption(f"Last updated: {datetime.now().strftime('%d %b %Y %H:%M:%S AEST')}")
 
 # ---------------------------------------------------------------------------

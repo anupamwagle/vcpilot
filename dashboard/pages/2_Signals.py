@@ -6,7 +6,7 @@ from datetime import date
 from app.database import get_db
 from app.models.signal import Signal
 
-st.set_page_config(page_title="Signals — VCPilot", layout="wide")
+st.set_page_config(page_title="Signals — AstraTrade", layout="wide")
 st.title("📈 Signals")
 screen_date = st.date_input("Date", value=date.today())
 with get_db() as db:

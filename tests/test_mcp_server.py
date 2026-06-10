@@ -45,6 +45,7 @@ async def test_middleware_valid_token_calls_next(db_session, org_and_account):
     from app.models.mcp import MCPCredential, generate_client_id, generate_client_secret, hash_secret
 
     org, _ = org_and_account
+    from datetime import datetime, timedelta
     secret = generate_client_secret()
     client_id = generate_client_id()
     cred = MCPCredential(
@@ -54,6 +55,7 @@ async def test_middleware_valid_token_calls_next(db_session, org_and_account):
         client_secret_hash=hash_secret(secret),
         client_secret_preview=secret[:8] + "...",
         scopes=["trading:read"],
+        expires_at=datetime.utcnow() + timedelta(days=365),
         is_active=True,
     )
     db_session.add(cred)
@@ -77,6 +79,7 @@ async def test_middleware_valid_token_but_revoked_cred_returns_401(db_session, o
     from app.models.mcp import MCPCredential, generate_client_id, generate_client_secret, hash_secret
 
     org, _ = org_and_account
+    from datetime import datetime, timedelta
     secret = generate_client_secret()
     client_id2 = generate_client_id()
     cred = MCPCredential(
@@ -86,6 +89,7 @@ async def test_middleware_valid_token_but_revoked_cred_returns_401(db_session, o
         client_secret_hash=hash_secret(secret),
         client_secret_preview=secret[:8] + "...",
         scopes=["trading:read"],
+        expires_at=datetime.utcnow() + timedelta(days=365),
         is_active=False,  # Revoked
     )
     db_session.add(cred)
