@@ -85,7 +85,7 @@ services:
       - ./app:/app/app
     networks:
       - vcpilot-net
-    command: sh -c "python scripts/init_db.py && python scripts/migrate_saas.py"
+    command: sh -c "PYTHONPATH=/app python scripts/init_db.py && PYTHONPATH=/app python scripts/migrate_saas.py"
 
   # ---------------------------------------------------------------------------
   # Worker Equities — Celery Worker
