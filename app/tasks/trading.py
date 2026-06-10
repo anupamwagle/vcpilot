@@ -653,7 +653,7 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
                     db_pos = _db.query(Position).get(pos.id)
                     if db_pos:
                         db_pos.current_price   = current
-                        db_pos.unrealised_pnl  = round((current - float(db_pos.entry_price)) * db_pos.qty, 2)
+                        db_pos.unrealised_pnl  = round((current - float(db_pos.entry_price)) * float(db_pos.qty), 2)
                         db_pos.unrealised_pct  = round((current - float(db_pos.entry_price)) / float(db_pos.entry_price) * 100, 4)
                         _db.commit()
 
