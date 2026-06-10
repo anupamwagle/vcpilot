@@ -102,8 +102,6 @@ services:
         condition: service_healthy
       app:
         condition: service_completed_successfully
-    volumes:
-      - ./app:/app/app
     networks:
       - vcpilot-net
     command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4 -Q default,reporting,screening_equities,trading_equities
@@ -130,8 +128,6 @@ services:
         condition: service_healthy
       app:
         condition: service_completed_successfully
-    volumes:
-      - ./app:/app/app
     networks:
       - vcpilot-net
     command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2 -Q trading_crypto,screening_crypto
@@ -158,8 +154,6 @@ services:
         condition: service_healthy
       app:
         condition: service_completed_successfully
-    volumes:
-      - ./app:/app/app
     networks:
       - vcpilot-net
     command: >
@@ -188,9 +182,6 @@ services:
         condition: service_completed_successfully
     ports:
       - "0.0.0.0:${DASHBOARD_PORT:-8501}:8501"
-    volumes:
-      - ./app:/app/app
-      - ./dashboard:/app/dashboard
     networks:
       - vcpilot-net
     command: >
