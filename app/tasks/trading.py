@@ -622,8 +622,27 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
 
         for pos in positions:
             try:
+                if not pos.current_stop:
+                    try:
+                        with get_db() as _db:
+                            _db.add(AuditLog(action=AuditAction.TASK_RUN, organization_id=org.id,
+                                             ticker=pos.ticker, message=f"Exit check @ {now_str}: skipped — no stop price set",
+                                             entity_type="Position", entity_id=str(pos.id),
+                                             detail={"result": "skipped", "reason": "no_stop_price"}))
+                    except Exception:
+                        pass
+                    continue
+
                 df = get_price_history(pos.ticker, period="6mo")
                 if df is None or df.empty:
+                    try:
+                        with get_db() as _db:
+                            _db.add(AuditLog(action=AuditAction.TASK_RUN, organization_id=org.id,
+                                             ticker=pos.ticker, message=f"Exit check @ {now_str}: skipped — no price data",
+                                             entity_type="Position", entity_id=str(pos.id),
+                                             detail={"result": "skipped", "reason": "no_price_data"}))
+                    except Exception:
+                        pass
                     continue
 
                 latest  = df.iloc[-1]
@@ -759,6 +778,15 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
 
             except Exception as e:
                 logger.error(f"Exit check error for {pos.ticker} (Org: {org.name}): {e}")
+                try:
+                    with get_db() as _db:
+                        _db.add(AuditLog(action=AuditAction.TASK_RUN, organization_id=org.id,
+                                         ticker=pos.ticker,
+                                         message=f"Exit check @ {now_str}: error — {type(e).__name__}: {e}",
+                                         entity_type="Position", entity_id=str(pos.id),
+                                         detail={"result": "error", "error": str(e)}))
+                except Exception:
+                    pass
 
 
 @app.task(name="app.tasks.trading.sync_stop_orders", bind=True)

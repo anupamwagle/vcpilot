@@ -895,11 +895,15 @@ async def positions(request: Request, db: Session = Depends(get_db),
         exit_checks = []
         try:
             from app.models.audit import AuditLog, AuditAction
+            from sqlalchemy import or_
             log_entries = db.query(AuditLog).filter(
                 AuditLog.organization_id == org_id,
                 AuditLog.action == AuditAction.TASK_RUN,
                 AuditLog.ticker == p.ticker,
-                AuditLog.message.ilike("Exit check @ %"),
+                or_(
+                    AuditLog.entity_id == str(p.id),
+                    AuditLog.message.ilike("Exit check @ %"),
+                ),
             ).order_by(desc(AuditLog.created_at)).limit(3).all()
             for log_entry in log_entries:
                 d = log_entry.detail or {}
@@ -928,6 +932,10 @@ async def positions(request: Request, db: Session = Depends(get_db),
                     reason_str = msg.split("EXIT triggered — ")[1].split(" | ")[0]
                 elif result == "holding":
                     reason_str = "holding — no exit criteria met"
+                elif result == "skipped":
+                    reason_str = d.get("reason", "skipped")
+                elif result == "error":
+                    reason_str = d.get("error", "check error")
                 exit_checks.append({
                     "id": log_entry.id,
                     "time": _fmt_dt(str(log_entry.created_at), ctx.get("display_tz", "UTC")),
