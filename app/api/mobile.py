@@ -220,7 +220,7 @@ def dashboard(auth=Depends(_current_user), db: Session = Depends(get_db)):
 
     # Account capital
     acct = db.query(Account).filter(Account.organization_id == org_id).first()
-    capital_aud = _float(acct.working_capital_aud) if acct else 0
+    capital_aud = _float(acct.capital_aud) if acct else 0
 
     # Active exchanges
     active_exchanges = _cfg(db, "active_exchanges", org_id, "ASX")
@@ -347,7 +347,7 @@ def close_position(
         action="POSITION_CLOSED",
         entity_type="position",
         entity_id=pos.id,
-        details=f"Mobile: {pos.ticker} closed @ {exit_price:.4f} | {exit_reason.value} | P&L {pnl_pct:.1f}%",
+        detail=f"Mobile: {pos.ticker} closed @ {exit_price:.4f} | {exit_reason.value} | P&L {pnl_pct:.1f}%",
     ))
 
     db.commit()
@@ -425,7 +425,7 @@ def skip_signal(signal_id: int, auth=Depends(_current_user), db: Session = Depen
     db.add(AuditLog(
         organization_id=org_id, user_id=user.id, actor=user.email,
         action="SIGNAL_SKIPPED", entity_type="signal", entity_id=sig.id,
-        details=f"Mobile: {sig.ticker} skipped",
+        detail=f"Mobile: {sig.ticker} skipped",
     ))
     db.commit()
     return {"success": True, "signal_id": signal_id, "status": "SKIPPED"}
@@ -507,7 +507,7 @@ def pause_trading(auth=Depends(_current_user), db: Session = Depends(get_db)):
     db.add(AuditLog(
         organization_id=org_id, user_id=user.id, actor=user.email,
         action="TRADING_PAUSED", entity_type="system", entity_id=None,
-        details="Mobile: trading paused",
+        detail="Mobile: trading paused",
     ))
     db.commit()
     return {"success": True, "trading_paused": True}
@@ -526,7 +526,7 @@ def resume_trading(auth=Depends(_current_user), db: Session = Depends(get_db)):
     db.add(AuditLog(
         organization_id=org_id, user_id=user.id, actor=user.email,
         action="TRADING_RESUMED", entity_type="system", entity_id=None,
-        details="Mobile: trading resumed",
+        detail="Mobile: trading resumed",
     ))
     db.commit()
     return {"success": True, "trading_paused": False}
@@ -540,7 +540,7 @@ def force_screen(auth=Depends(_current_user), db: Session = Depends(get_db)):
     db.add(AuditLog(
         organization_id=org_id, user_id=user.id, actor=user.email,
         action="FORCE_SCREEN", entity_type="system", entity_id=None,
-        details=f"Mobile: force screen queued={queued}",
+        detail=f"Mobile: force screen queued={queued}",
     ))
     db.commit()
     return {"success": queued, "message": "Screener queued" if queued else "Worker offline — will run when available"}

@@ -629,11 +629,11 @@ def get_portfolio_stats() -> dict:
             if getattr(p, "unrealised_pnl", None) is not None
         )
 
-        # Portfolio heat: sum of (entry_price - stop_price) * qty per position
+        # Portfolio heat: sum of (entry_price - current_stop) * qty per position
         heat = 0.0
         for p in positions:
-            if p.entry_price and p.stop_price and p.qty:
-                risk_per_share = float(p.entry_price) - float(p.stop_price)
+            if p.entry_price and p.current_stop and p.qty:
+                risk_per_share = float(p.entry_price) - float(p.current_stop)
                 heat += max(0.0, risk_per_share * float(p.qty))
         heat_pct = (heat / capital * 100) if capital > 0 else 0.0
 
@@ -995,7 +995,7 @@ def update_rule(
             rule.threshold = threshold
 
         _audit_action(
-            db, AuditAction.RULE_CHANGED,
+            db, AuditAction.RULE_THRESHOLD_SET,
             f"[MCP] Rule '{rule_id}' updated: {changes}",
         )
         db.commit()

@@ -250,13 +250,17 @@ def calculate_pyramid_size(
     mult = multipliers.get(pyramid_number, 0.25)
     add_shares = max(1, math.floor(original_size.shares * mult))
 
+    capital_aud = round(add_shares * original_size.entry_price, 2)
     return SizingResult(
         shares=add_shares,
-        capital_aud=round(add_shares * original_size.entry_price, 2),
+        capital_aud=capital_aud,
+        capital_local=capital_aud,
         risk_aud=round(original_size.risk_aud * mult, 2),
         risk_pct=round(original_size.risk_pct * mult, 3),
         portfolio_pct=round(original_size.portfolio_pct * mult, 2),
         stop_price=original_size.stop_price,
         entry_price=original_size.entry_price,
+        currency=original_size.currency,
+        fx_rate_aud=original_size.fx_rate_aud,
         message=f"Pyramid #{pyramid_number}: {add_shares} shares ({mult*100:.0f}% of initial)",
     )

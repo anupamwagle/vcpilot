@@ -179,3 +179,68 @@ def test_execute_signal_order_zero_size(db_session, org_and_account, monkeypatch
     )
     assert result["ok"] is False
     assert "zero" in result["error"].lower()
+
+
+# --- Price fetch fallback path ---
+
+def test_execute_signal_order_price_fetch_fallback(db_session, org_and_account, monkeypatch):
+    """When get_intraday_price fails, fall back to close_price."""
+    from app.trading.order_executor import execute_signal_order
+    from app.risk.manager import SizingResult
+    org, _ = org_and_account
+    sig = _make_pending_signal(db_session, org.id)
+
+    # Return no price from intraday
+    monkeypatch.setattr("app.data.fetcher.get_intraday_price",
+                        lambda *a, **kw: {"ok": False})
+    sizing = SizingResult(10, 10, 450.0, 420.0, 30.0, 300.0, 42.0, 45.0, "AUD", 1.0, "OK")
+    monkeypatch.setattr("app.risk.manager.calculate_position_size", lambda **kw: sizing)
+    _patch_ibkr_simulate(monkeypatch)
+    mock_notifier = MagicMock()
+    monkeypatch.setattr("app.notifications.get_notifier", lambda organization_id=None: mock_notifier)
+
+    result = execute_signal_order(signal_id=sig.id, organization_id=org.id)
+    # Should succeed using close_price as entry
+    assert result["ok"] is True
+
+
+# --- Sizing exception path ---
+
+def test_execute_signal_order_sizing_exception(db_session, org_and_account, monkeypatch):
+    """When calculate_position_size raises, returns error."""
+    from app.trading.order_executor import execute_signal_order
+    org, _ = org_and_account
+    sig = _make_pending_signal(db_session, org.id)
+
+    monkeypatch.setattr("app.risk.manager.calculate_position_size",
+                        lambda **kw: (_ for _ in ()).throw(Exception("Config missing")))
+
+    result = execute_signal_order(
+        signal_id=sig.id, organization_id=org.id, force_entry_price=45.0
+    )
+    assert result["ok"] is False
+    assert "sizing" in result["error"].lower() or "failed" in result["error"].lower()
+
+
+# --- Broker exception path ---
+
+def test_execute_signal_order_broker_exception(db_session, org_and_account, monkeypatch):
+    """When broker.submit_bracket_order raises, returns error."""
+    from app.trading.order_executor import execute_signal_order
+    from app.risk.manager import SizingResult
+    org, _ = org_and_account
+    sig = _make_pending_signal(db_session, org.id)
+
+    sizing = SizingResult(10, 10, 450.0, 420.0, 30.0, 300.0, 42.0, 45.0, "AUD", 1.0, "OK")
+    monkeypatch.setattr("app.risk.manager.calculate_position_size", lambda **kw: sizing)
+
+    from app.broker.ibkr import IBKRBroker
+    monkeypatch.setattr(IBKRBroker, "connect", lambda self: False)
+    monkeypatch.setattr(IBKRBroker, "submit_bracket_order",
+                        lambda self, **kw: (_ for _ in ()).throw(Exception("Connection reset")))
+
+    result = execute_signal_order(
+        signal_id=sig.id, organization_id=org.id, force_entry_price=45.0
+    )
+    assert result["ok"] is False
+    assert "broker" in result["error"].lower() or "failed" in result["error"].lower()
