@@ -85,16 +85,17 @@ def _safe_int(val):
 
 
 @app.task(name="app.tasks.screening.refresh_crypto_universe", bind=True, max_retries=2)
-def refresh_crypto_universe(self, exchange_key: str = "CRYPTO_INDEPENDENTRESERVE"):
+def refresh_crypto_universe(self, exchange_key: str = "CRYPTO_INDEPENDENTRESERVE", organization_id: int = None):
     """
     Bootstrap (or refresh) the crypto stock universe for a given exchange.
-    Seeds the top-100 crypto tokens as Stock records so that refresh_price_data
+    Seeds the top-200 crypto tokens as Stock records so that refresh_price_data
     and the screener have something to work with.
     Called automatically by refresh_price_data when the crypto universe is empty.
     """
     logger.info(f"Refreshing crypto universe for {exchange_key}...")
     try:
         from app.data.fetcher import CRYPTO_AUD_EXCHANGES
+        from app.models.account import Organization
         currency = "AUD" if exchange_key in CRYPTO_AUD_EXCHANGES else "USD"
         tickers = get_top_crypto_tickers(exchange_key)
         seeded = 0
@@ -125,11 +126,16 @@ def refresh_crypto_universe(self, exchange_key: str = "CRYPTO_INDEPENDENTRESERVE
                     if not stock.currency:
                         stock.currency = currency
 
-            db.add(AuditLog(
-                action=AuditAction.SYSTEM_STARTED,
-                message=f"[{exchange_key}] Crypto universe refreshed: {seeded} new / {len(tickers)} total tokens seeded",
-            ))
-        logger.info(f"[{exchange_key}] Crypto universe: {seeded} new stocks seeded ({len(tickers)} total)")
+            summary = f"[{exchange_key}] Crypto universe seeded: {seeded} new / {len(tickers)} total tokens"
+            # Write one TASK_RUN log per active org so it appears in every org's audit/task log
+            orgs = db.query(Organization).filter(Organization.is_active == True).all()
+            for org in orgs:
+                db.add(AuditLog(
+                    action=AuditAction.TASK_RUN,
+                    organization_id=org.id,
+                    message=summary,
+                ))
+        logger.info(summary)
     except Exception as exc:
         logger.error(f"Crypto universe refresh failed for {exchange_key}: {exc}")
         raise self.retry(exc=exc, countdown=120)
