@@ -779,10 +779,42 @@ async def home(
             (active_exchange == "US"  and row.get("exchange_key") in ("NYSE", "NASDAQ")) or
             (active_exchange == "CRYPTO" and row.get("asset_type") == "CRYPTO")]
 
+    # Working capital currency
+    _wcc_cfg = db.query(SystemConfig).filter(SystemConfig.key == "working_capital_currency", SystemConfig.organization_id == org_id).first()
+    working_capital_currency = (_wcc_cfg.value if _wcc_cfg and _wcc_cfg.value else "AUD")
+
+    # Build per-exchange regime list for the Market Regime stat card
+    _exc_flag_label = {
+        "ASX": ("🇦🇺", "ASX"), "NYSE": ("🇺🇸", "NYSE"), "NASDAQ": ("🇺🇸", "NASDAQ"),
+        "CRYPTO_INDEPENDENTRESERVE": ("₿", "IR"), "CRYPTO_BINANCE": ("₿", "Binance"),
+        "CRYPTO_COINBASE": ("₿", "Coinbase"), "CRYPTO_KRAKEN": ("₿", "Kraken"),
+    }
+    _active_excs_home = [e.strip() for e in (
+        db.query(SystemConfig).filter(SystemConfig.key == "active_exchanges", SystemConfig.organization_id == org_id).first() or
+        type("_", (), {"value": "ASX"})()
+    ).value.split(",") if e.strip()]
+    _regime_order_home = {"BEAR": 0, "CAUTION": 1, "BULL": 2}
+    regimes_list = []
+    for _exc in _active_excs_home:
+        _rc = db.query(SystemConfig).filter(
+            SystemConfig.key == f"last_market_regime_{_exc}",
+            SystemConfig.organization_id == org_id,
+        ).first()
+        _val = (_rc.value if _rc and _rc.value else "") or "—"
+        _flag, _label = _exc_flag_label.get(_exc, ("", _exc.replace("CRYPTO_", "")))
+        regimes_list.append({"flag": _flag, "label": _label, "val": _val})
+
+    total_invested = round(sum(p["invested_aud"] for p in pos_data), 2)
+    available_capital = round(capital - total_invested, 2)
+
     ctx.update({
         "capital": capital,
+        "working_capital_currency": working_capital_currency,
+        "total_invested": total_invested,
+        "available_capital": available_capital,
         "positions": pos_data,
         "signals": sig_data,
+        "regimes": regimes_list,
         "portfolio_heat": round(total_risk / capital * 100, 1) if capital else 0,
         "today_pnl": round(sum(float(t.net_pnl_aud or 0) for t in today_trades), 2),
         "total_pnl":  round(sum(float(t.net_pnl_aud or 0) for t in all_trades), 2),
@@ -845,7 +877,8 @@ async def positions(request: Request, db: Session = Depends(get_db),
         if entry > 0 and stop > 0:
             total_risk += (entry - stop) * qty
         
-        # Query last 2 exit checks for this position
+        # Query last 3 exit checks for this position — filter by ticker + message pattern
+        # (avoids dependency on entity_type/entity_id columns which may not be in DB)
         exit_checks = []
         try:
             from app.models.audit import AuditLog, AuditAction
@@ -853,32 +886,43 @@ async def positions(request: Request, db: Session = Depends(get_db),
                 AuditLog.organization_id == org_id,
                 AuditLog.action == AuditAction.TASK_RUN,
                 AuditLog.ticker == p.ticker,
-                AuditLog.entity_type == "Position",
-                AuditLog.entity_id == str(p.id)
-            ).order_by(desc(AuditLog.created_at)).limit(2).all()
+                AuditLog.message.ilike("Exit check @ %"),
+            ).order_by(desc(AuditLog.created_at)).limit(3).all()
             for log_entry in log_entries:
                 d = log_entry.detail or {}
+                msg = log_entry.message or ""
+                # Derive result from detail JSON; fall back to message text
                 result = d.get("result", "")
+                if not result:
+                    result = "exit_triggered" if "EXIT triggered" in msg else ("holding" if "holding" in msg else "")
                 close_price = d.get("close")
                 pnl_pct = d.get("pnl_pct")
-                hold_days = d.get("hold_days")
-                # Build a reason string from the message for non-holding checks
+                # Extract pnl from message if not in detail: "P&L +1.2%"
+                if pnl_pct is None and "P&L " in msg:
+                    try:
+                        pnl_pct = float(msg.split("P&L ")[1].split("%")[0])
+                    except Exception:
+                        pass
+                # Extract price from message if not in detail: "Price $1.234"
+                if close_price is None and "Price $" in msg:
+                    try:
+                        close_price = float(msg.split("Price $")[1].split(" ")[0].split("|")[0].strip())
+                    except Exception:
+                        pass
+                # Build reason string
                 reason_str = ""
-                if result == "exit_triggered":
-                    # Extract reason from message: "Exit check: exit triggered (reason msg)"
-                    msg = log_entry.message
-                    if "(" in msg and msg.endswith(")"):
-                        reason_str = msg[msg.rfind("(") + 1:-1]
+                if result == "exit_triggered" and "EXIT triggered — " in msg:
+                    reason_str = msg.split("EXIT triggered — ")[1].split(" | ")[0]
                 elif result == "holding":
-                    reason_str = "all rules passed — holding"
+                    reason_str = "holding — no exit criteria met"
                 exit_checks.append({
                     "id": log_entry.id,
                     "time": _fmt_dt(str(log_entry.created_at), ctx.get("display_tz", "UTC")),
-                    "message": log_entry.message,
+                    "message": msg,
                     "result": result,
                     "close": close_price,
                     "pnl_pct": pnl_pct,
-                    "hold_days": hold_days,
+                    "hold_days": d.get("hold_days"),
                     "reason": reason_str,
                 })
         except Exception:
@@ -898,6 +942,7 @@ async def positions(request: Request, db: Session = Depends(get_db),
             "stop": stop,
             "target_1": float(p.target_1 or 0),
             "invested_aud": round(entry * qty, 2),
+            "market_value_aud": round(curr * qty, 2),
             "pnl_pct": round((curr - entry) / entry * 100, 2) if entry else 0,
             "pnl_aud": round((curr - entry) * qty, 2),
             "days": (get_current_date() - p.entry_date).days if p.entry_date else 0,

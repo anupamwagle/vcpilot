@@ -129,8 +129,8 @@
   </div>
 
   <!-- Positions Card -->
-  <div class="stat-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md border-t-2" 
-       style="border-top-color: var(--a-accent); 
+  <div class="stat-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md border-t-2"
+       style="border-top-color: var(--a-accent);
               background-image: linear-gradient(to bottom right, var(--surface), rgba(109, 40, 217, 0.03));
               position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; min-height: 80px; padding: 0.85rem 1rem;">
     <div style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
@@ -143,6 +143,27 @@
       </span>
     </div>
     <span style="font-size:0.58rem;font-weight:600;color:var(--text-subtle);display:block;margin-top:0.15rem">ACTIVE RISK UNITS</span>
+  </div>
+
+  <!-- Deployed Capital Card -->
+  <div class="stat-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md border-t-2"
+       style="border-top-color: var(--a-accent);
+              background-image: linear-gradient(to bottom right, var(--surface), rgba(109, 40, 217, 0.03));
+              position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; min-height: 80px; padding: 0.85rem 1rem;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
+      <div style="width:100%">
+        <p class="field-label mb-0.5" style="font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;">Deployed</p>
+        <p class="text-base font-bold" style="color:var(--text)">
+          {{ "{:,.0f}".format(total_invested) }}
+          <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 500;">{{ working_capital_currency }}</span>
+        </p>
+        <p style="font-size:0.68rem;margin-top:.15rem">
+          <span style="color:var(--pos);font-weight:600">{{ "{:,.0f}".format(available_capital) }} avail</span>
+          <span style="color:var(--text-subtle)"> · {{ "{:.0f}".format(total_invested / capital * 100) if capital else 0 }}% used</span>
+        </p>
+      </div>
+    </div>
+    <span style="font-size:0.58rem;font-weight:600;color:var(--text-subtle);display:block;margin-top:0.15rem">ALL EXCHANGES · COST BASIS</span>
   </div>
 
   <!-- Portfolio Heat Card -->

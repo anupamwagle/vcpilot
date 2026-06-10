@@ -146,6 +146,7 @@
       <thead><tr>
         <th>Ticker</th><th class="text-right">Qty</th><th class="text-right">Entry</th>
         <th class="text-right">Invested $</th>
+        <th class="text-right">Mkt Value $</th>
         <th class="text-right">Current</th><th class="text-right">Stop</th>
         <th class="text-right">Target</th><th class="text-center">Trade Map</th><th class="text-right">P&L %</th>
         <th class="text-right">P&L $</th><th class="text-right">Days</th><th>Mode</th>
@@ -181,6 +182,10 @@
           </td>
           <td class="text-right mono font-semibold" style="color:var(--text-muted)" title="Total capital invested: {{ p.qty }} × ${{ '%.3f'|format(p.entry) }}">
             ${{ "{:,.0f}".format(p.invested_aud) }}
+          </td>
+          <td class="text-right mono font-semibold {% if p.market_value_aud >= p.invested_aud %}pnl-pos{% else %}pnl-neg{% endif %}"
+              title="Market value: {{ p.qty }} × ${{ '%.3f'|format(p.current) }}">
+            ${{ "{:,.0f}".format(p.market_value_aud) }}
           </td>
           <td class="text-right mono font-semibold">${{ "%.3f"|format(p.current) }}</td>
           <td class="text-right mono pnl-neg">${{ "%.3f"|format(p.stop) }}</td>
@@ -232,7 +237,7 @@
         {# ── Close position modal ──────────────────────────────────────── #}
         <tr id="close-modal-{{ p.id }}"
             style="display:none;background:var(--surface-alt)">
-          <td colspan="13" style="padding:1rem 1.25rem">
+          <td colspan="14" style="padding:1rem 1.25rem">
             <form method="post" action="/positions/{{ p.id }}/close"
                   onsubmit="return confirm('Close {{ p.ticker }}? This records the trade and cannot be undone.')"
                   style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:.75rem">
@@ -293,7 +298,7 @@
 
         {# ── Exit Checks sub-row ────────────────────────────────────────── #}
         <tr style="background:var(--surface-alt)">
-          <td colspan="13" style="padding:.5rem 1.25rem;border-top:none;border-bottom:1px solid var(--border)">
+          <td colspan="14" style="padding:.5rem 1.25rem;border-top:none;border-bottom:1px solid var(--border)">
             <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem">
               <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
                 <span style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">⏱ Exit Checks:</span>

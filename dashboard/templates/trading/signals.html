@@ -215,7 +215,7 @@
             style="font-size:.68rem;color:var(--text-subtle);background:none;border:none;cursor:pointer;padding:0">
       ▶ Show passing rules ({{ s.override_rules_passed|length }}) — click to expand and override individually
     </button>
-    <div id="ovr-pass-{{ s.id }}" style="display:none;margin-top:.5rem;display:flex;flex-wrap:wrap;gap:.375rem">
+    <div id="ovr-pass-{{ s.id }}" style="display:none;margin-top:.5rem;flex-wrap:wrap;gap:.375rem">
       {% for r in s.override_rules_passed %}
       <div style="display:inline-flex;align-items:center;gap:.35rem;padding:.25rem .5rem .25rem .375rem;border-radius:.375rem;border:1px solid var(--border);background:var(--surface);opacity:{% if r.is_mandatory %}0.55{% else %}1{% endif %}">
         <form method="post" action="/signals/{{ s.id }}/toggle-rule" style="margin:0">
