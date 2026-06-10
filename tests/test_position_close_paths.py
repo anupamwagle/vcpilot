@@ -83,7 +83,7 @@ def test_sync_stop_orders_closes_position_and_writes_correct_trade(db_session, o
 
     monkeypatch.setattr("app.utils.time_helper.get_current_date", lambda: date(2026, 6, 5))
     monkeypatch.setattr("app.data.fetcher.get_intraday_price",
-                        lambda ticker, org_id: {"ok": True, "price": stopped_out_price})
+                        lambda ticker, org_id, asset_type="EQUITY": {"ok": True, "price": stopped_out_price})
     monkeypatch.setattr("app.data.fetcher.get_price_history", lambda *a, **kw: None)
     monkeypatch.setattr(trading_module, "get_notifier", lambda **kw: SimpleNamespace(send=lambda *_a, **_kw: None))
 

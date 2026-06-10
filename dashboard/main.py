@@ -4202,7 +4202,7 @@ async def superadmin_data(
       Tab 1 (universe): ASX200 stocks with latest PriceBar metrics.
       Tab 2 (us):       US equities (NYSE/NASDAQ) tracked in DB.
       Tab 3 (crypto):   Crypto assets tracked in DB.
-      Tab 4 (custom):   Per-org manually added stocks not in the main universe.
+      Tab 4 (custom):   ASX equities manually added by orgs that are not in the ASX200 universe.
     """
     if not _auth(request):
         return RedirectResponse("/login", 302)
@@ -4437,6 +4437,10 @@ async def superadmin_data(
                 LIMIT 1
             ) pb ON TRUE
             WHERE (s.in_asx200 IS NULL OR s.in_asx200 = FALSE)
+              AND (s.asset_type IS NULL OR s.asset_type = 'EQUITY')
+              AND (s.exchange_key IS NULL OR s.exchange_key NOT LIKE 'CRYPTO_%')
+              AND (w.exchange_key IS NULL OR w.exchange_key NOT LIKE 'CRYPTO_%')
+              AND (w.exchange_key IS NULL OR w.exchange_key NOT IN ('NYSE', 'NASDAQ'))
             ORDER BY org_count DESC, w.ticker, o.name
         """)).fetchall()
 

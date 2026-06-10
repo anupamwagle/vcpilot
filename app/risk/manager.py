@@ -83,6 +83,10 @@ def calculate_position_size(
         except Exception:
             fx_rate_base_asset = 0.65 if (base_currency == "AUD" and currency == "USD") else 1.0
 
+    if regime_multiplier <= 0:
+        return SizingResult(0, 0, 0, 0, 0, 0, stop_price, entry_price, currency,
+                            fx_rate_base_asset or 1.0, "Blocked: BEAR market regime")
+
     # Convert capital to native currency for sizing
     if fx_rate_base_asset <= 0:
         capital_local = capital_base

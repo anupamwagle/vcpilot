@@ -12,6 +12,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ ./app/
 COPY dashboard/ ./dashboard/
+COPY tests/ ./tests/
+COPY pytest.ini .
 
 RUN useradd -m -u 1000 vcpilot && chown -R vcpilot:vcpilot /app
 USER vcpilot
