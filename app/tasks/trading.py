@@ -712,9 +712,9 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
                     if not exit_sig.should_exit:
                         continue
 
-                    qty_to_sell = pos.qty
+                    qty_to_sell = float(pos.qty)
                     if exit_sig.exit_type == "PARTIAL":
-                        qty_to_sell = max(1, int(pos.qty * exit_sig.partial_pct / 100))
+                        qty_to_sell = max(1, int(float(pos.qty) * exit_sig.partial_pct / 100))
 
                     if is_crypto:
                         from app.broker.crypto import get_crypto_broker_for_org
