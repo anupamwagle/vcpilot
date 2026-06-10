@@ -781,8 +781,11 @@ async def home(
             (active_exchange == "CRYPTO" and row.get("asset_type") == "CRYPTO")]
 
     # Working capital currency
-    _wcc_cfg = db.query(SystemConfig).filter(SystemConfig.key == "working_capital_currency", SystemConfig.organization_id == org_id).first()
-    working_capital_currency = (_wcc_cfg.value if _wcc_cfg and _wcc_cfg.value else "AUD")
+    try:
+        _wcc_cfg = db.query(SystemConfig).filter(SystemConfig.key == "working_capital_currency", SystemConfig.organization_id == org_id).first()
+        working_capital_currency = (_wcc_cfg.value if _wcc_cfg and _wcc_cfg.value else "AUD") or "AUD"
+    except Exception:
+        working_capital_currency = "AUD"
 
     # Build per-exchange regime list for the Market Regime stat card
     _exc_flag_label = {
@@ -790,18 +793,24 @@ async def home(
         "CRYPTO_INDEPENDENTRESERVE": ("₿", "IR"), "CRYPTO_BINANCE": ("₿", "Binance"),
         "CRYPTO_COINBASE": ("₿", "Coinbase"), "CRYPTO_KRAKEN": ("₿", "Kraken"),
     }
-    _active_excs_home = [e.strip() for e in (
-        db.query(SystemConfig).filter(SystemConfig.key == "active_exchanges", SystemConfig.organization_id == org_id).first() or
-        type("_", (), {"value": "ASX"})()
-    ).value.split(",") if e.strip()]
-    _regime_order_home = {"BEAR": 0, "CAUTION": 1, "BULL": 2}
+    try:
+        _ae_cfg = db.query(SystemConfig).filter(
+            SystemConfig.key == "active_exchanges", SystemConfig.organization_id == org_id
+        ).first()
+        _ae_str = (_ae_cfg.value if _ae_cfg and _ae_cfg.value else "ASX") or "ASX"
+        _active_excs_home = [e.strip() for e in _ae_str.split(",") if e.strip()]
+    except Exception:
+        _active_excs_home = ["ASX"]
     regimes_list = []
     for _exc in _active_excs_home:
-        _rc = db.query(SystemConfig).filter(
-            SystemConfig.key == f"last_market_regime_{_exc}",
-            SystemConfig.organization_id == org_id,
-        ).first()
-        _val = (_rc.value if _rc and _rc.value else "") or "—"
+        try:
+            _rc = db.query(SystemConfig).filter(
+                SystemConfig.key == f"last_market_regime_{_exc}",
+                SystemConfig.organization_id == org_id,
+            ).first()
+            _val = (_rc.value if _rc and _rc.value else "—") or "—"
+        except Exception:
+            _val = "—"
         _flag, _label = _exc_flag_label.get(_exc, ("", _exc.replace("CRYPTO_", "")))
         regimes_list.append({"flag": _flag, "label": _label, "val": _val})
 
