@@ -83,10 +83,9 @@ services:
         condition: service_healthy
     volumes:
       - ./app:/app/app
-      - ./scripts:/app/scripts
     networks:
       - vcpilot-net
-    command: sh -c "python -m scripts.init_db && python -m scripts.migrate_saas"
+    command: sh -c "python scripts/init_db.py && python scripts/migrate_saas.py"
 
   # ---------------------------------------------------------------------------
   # Worker Equities — Celery Worker
