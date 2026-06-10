@@ -3114,8 +3114,6 @@ async def webhook_whatsapp(request: Request, db: Session = Depends(get_db)):
     notifier = WhatsAppNotifier(organization_id=org_id)
     notifier.send(response, chat_id=from_jid)
 
-    return JSONResponse({"ok": True})
-
     return JSONResponse({"ok": True, "replied": response[:80]})
 
 
@@ -3190,6 +3188,7 @@ async def admin_comms(request: Request, db: Session = Depends(get_db)):
         "tg_bot_info":     tg_bot_info,
         "tg_chat_id":      tg_chat_id,
         "tg_webhook_url":  f"{str(request.base_url).rstrip('/')}/webhook/telegram",
+        "wa_webhook_url":  f"{str(request.base_url).rstrip('/')}/webhook/whatsapp",
         "recent_commands": [
             {"time":    _fmt_dt(str(l.created_at), ctx.get("display_tz", "UTC")),
              "message": (l.detail or {}).get("message", ""),

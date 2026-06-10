@@ -111,7 +111,7 @@
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
       <div>
         <p class="field-label">Admin Phone</p>
-        <p style="font-size:.875rem;font-weight:600">{% if wa_admin_number %}+{{ wa_admin_number }}{% else %}—{% endif %}</p>
+        <p style="font-size:.875rem;font-weight:600">{% if wa_admin_number %}+{{ wa_admin_number }}{% else %}<span style="color:var(--warn)">Not set — configure in Admin Config</span>{% endif %}</p>
       </div>
       <div>
         <p class="field-label">Session</p>
@@ -121,20 +121,49 @@
 
     <div class="divider mb-4"></div>
 
+    {# Webhook URL — key piece for WAHA configuration #}
+    <div style="margin-bottom:1rem">
+      <p class="field-label">Inbound Webhook URL</p>
+      <div style="display:flex;align-items:center;gap:.5rem;margin-top:.25rem">
+        <code id="wa-webhook-url" style="font-size:.7rem;background:var(--surface-alt);padding:.3rem .6rem;border-radius:.375rem;border:1px solid var(--border);flex:1;word-break:break-all">{{ wa_webhook_url }}</code>
+        <button onclick="copyWaWebhook()" title="Copy" style="flex-shrink:0;padding:.3rem .5rem;border-radius:.375rem;border:1px solid var(--border);background:var(--surface-alt);cursor:pointer;font-size:.7rem;color:var(--text-muted)" id="wa-copy-btn">📋</button>
+      </div>
+      <p style="font-size:.65rem;color:var(--text-subtle);margin-top:.3rem">
+        Set this as <code>WHATSAPP_HOOK_URL</code> in your WAHA container (already pre-configured via docker-compose).
+      </p>
+    </div>
+
+    {% if wa_status != 'WORKING' %}
+    <div style="background:var(--surface-alt);border:1px solid var(--border);border-radius:.5rem;padding:.75rem;margin-bottom:1rem;font-size:.75rem">
+      <p style="font-weight:600;color:var(--text-muted);margin-bottom:.5rem">⚙️ Setup Checklist</p>
+      <ol style="margin:0;padding-left:1.25rem;color:var(--text-muted);line-height:1.8">
+        <li>WAHA container running on port <strong>3000</strong> — check <a href="http://localhost:3000/dashboard" target="_blank" style="color:var(--t-accent)">WAHA Dashboard</a></li>
+        <li>Set <strong>Admin Phone</strong> in <a href="/admin/config" style="color:var(--t-accent)">Admin Config</a> (key: <code>whatsapp_admin_number</code>)</li>
+        <li>Click <strong>Restart Session</strong> below to initialise the session</li>
+        <li>Scan the QR code in WhatsApp → <em>Linked Devices → Link a Device</em></li>
+        <li>Send <strong>HELP</strong> from your phone to verify two-way comms</li>
+      </ol>
+    </div>
+    {% endif %}
+
     <div style="display:flex;flex-wrap:wrap;gap:.5rem">
       <form method="post" action="/admin/whatsapp/start-session">
-        <button class="btn-ghost text-xs py-1.5">↺ Restart Session</button>
+        <button class="btn-primary text-xs py-1.5">↺ Restart Session</button>
       </form>
       <form method="post" action="/admin/comms/send-test">
         <button class="btn-ghost text-xs py-1.5">📩 Test Notify</button>
       </form>
+      <a href="http://localhost:3000/dashboard" target="_blank" class="btn-ghost text-xs py-1.5">🔧 WAHA Dashboard</a>
     </div>
 
     {% if wa_status in ('SCAN_QR_CODE', 'STARTING') and wa_qr_b64 %}
       <div style="margin-top:1rem;padding:.75rem;background:var(--surface-alt);border-radius:.5rem;text-align:center">
-        <img src="data:image/png;base64,{{ wa_qr_b64 }}" style="width:140px;height:140px;margin:0 auto;border:2px solid var(--border)"/>
-        <p style="font-size:.65rem;color:var(--text-muted);margin-top:.5rem">Scan from WhatsApp → Linked Devices</p>
+        <p style="font-size:.75rem;font-weight:600;color:var(--text-muted);margin-bottom:.5rem">Scan with WhatsApp → Linked Devices → Link a Device</p>
+        <img src="data:image/png;base64,{{ wa_qr_b64 }}" style="width:160px;height:160px;margin:0 auto;border:2px solid var(--border)"/>
+        <p style="font-size:.65rem;color:var(--text-subtle);margin-top:.5rem">QR expires in ~60 seconds — restart session if it expires</p>
       </div>
+    {% elif wa_status == 'WORKING' %}
+      <p style="font-size:.7rem;color:var(--pos);margin-top:.75rem">✅ Two-way comms active — send HELP from your phone to verify.</p>
     {% endif %}
   </div>
   {% else %}
@@ -210,6 +239,15 @@
 
 {% block extra_scripts %}
 <script>
+function copyWaWebhook() {
+  const url = document.getElementById('wa-webhook-url').textContent.trim();
+  navigator.clipboard.writeText(url).then(() => {
+    const btn = document.getElementById('wa-copy-btn');
+    btn.textContent = '✅';
+    setTimeout(() => { btn.textContent = '📋'; }, 1500);
+  });
+}
+
 function formatMarkdown(text) {
   if (!text) return "";
   let escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");

@@ -8,7 +8,7 @@ Beat command: celery -A app.tasks.celery_app beat --loglevel=info
               --max-interval=30
 """
 from celery import Celery
-from celery.schedules import crontab
+from celery.schedules import crontab, timedelta
 from app.config import settings
 
 app = Celery(
@@ -133,6 +133,17 @@ app.conf.update(
             "task": "app.tasks.reporting.health_check",
             "schedule": crontab(minute="*/10"),
             "options": {"queue": "default"},
+        },
+
+        # =================================================================
+        # Telegram polling — fetches incoming messages for all orgs
+        # that have telegram_enabled=true. No HTTPS required.
+        # Runs every 10 seconds via timedelta schedule.
+        # =================================================================
+        "poll-telegram": {
+            "task": "app.tasks.reporting.poll_telegram_updates",
+            "schedule": timedelta(seconds=10),
+            "options": {"queue": "reporting"},
         },
 
         # =================================================================
