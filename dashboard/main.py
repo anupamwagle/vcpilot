@@ -2387,7 +2387,7 @@ async def action_refresh_universe(request: Request, scope: str = Form(None)):
     """Refresh ASX universe with configurable scope (ASX200 / ASX300 / ALL_LISTED)."""
     if not _auth(request):
         return RedirectResponse("/login", 302)
-    org_id = request.session.get("org_id")
+    org_id = request.session.get("organization_id")
     from app.tasks.screening import refresh_universe
     try:
         refresh_universe.delay(scope=scope or None, organization_id=org_id)
@@ -2401,7 +2401,7 @@ async def action_recategorise_labels(request: Request, force: str = Form("0")):
     """Bulk-assign sector labels to all unlabelled watchlist items."""
     if not _auth(request):
         return RedirectResponse("/login", 302)
-    org_id = request.session.get("org_id")
+    org_id = request.session.get("organization_id")
     from app.tasks.screening import recategorise_watchlist_labels
     try:
         recategorise_watchlist_labels.delay(organization_id=org_id, force=(force == "1"))
