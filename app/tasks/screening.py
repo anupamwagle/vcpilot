@@ -562,21 +562,40 @@ def evaluate_market_regime_task(self, exchange_key: str = "ASX"):
             orgs = db.query(Organization).filter(Organization.is_active == True).all()
 
         for org in orgs:
-            # Update per-exchange regime key for this org
+            # Build list of config keys to update for this org.
+            # When exchange_key="CRYPTO" (generic alias from manual trigger), also write
+            # to each specific CRYPTO_* key the org has active, so the health page reads it.
             with get_db() as db:
-                cfg_key = f"last_market_regime_{exchange_key}"
-                cfg = db.query(SystemConfig).filter(
-                    SystemConfig.key == cfg_key,
+                ae_row = db.query(SystemConfig).filter(
+                    SystemConfig.key == "active_exchanges",
                     SystemConfig.organization_id == org.id
                 ).first()
-                if cfg:
-                    cfg.value = regime.value
-                else:
-                    db.add(SystemConfig(
-                        key=cfg_key, value=regime.value,
-                        label=f"{exchange_key} Market Regime",
-                        organization_id=org.id, group="system"
-                    ))
+                ae_str = (ae_row.value if ae_row else "") or ""
+                active_exc = [e.strip() for e in ae_str.split(",") if e.strip()]
+
+            cfg_keys_to_write = [f"last_market_regime_{exchange_key}"]
+            if exchange_key == "CRYPTO":
+                # Also write to each specific CRYPTO_* key the org has enabled
+                for aek in active_exc:
+                    if aek.startswith("CRYPTO_"):
+                        specific_key = f"last_market_regime_{aek}"
+                        if specific_key not in cfg_keys_to_write:
+                            cfg_keys_to_write.append(specific_key)
+
+            with get_db() as db:
+                for cfg_key in cfg_keys_to_write:
+                    cfg = db.query(SystemConfig).filter(
+                        SystemConfig.key == cfg_key,
+                        SystemConfig.organization_id == org.id
+                    ).first()
+                    if cfg:
+                        cfg.value = regime.value
+                    else:
+                        db.add(SystemConfig(
+                            key=cfg_key, value=regime.value,
+                            label=f"{cfg_key.replace('last_market_regime_', '')} Market Regime",
+                            organization_id=org.id, group="system"
+                        ))
 
             # Notification
             try:

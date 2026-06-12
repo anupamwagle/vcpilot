@@ -738,6 +738,24 @@ async def home(
     # Labels from Redis cache — includes sort_order for exchange-aware filtering in template
     wl_labels_data = get_cached_wl_labels(org_id, db)
 
+    # Label counts: one GROUP BY query → {label_id: count} for badge display
+    _wl_cnt_rows = (
+        db.query(Watchlist.label_id, func.count(Watchlist.id))
+        .filter(
+            Watchlist.organization_id == org_id,
+            Watchlist.status == WatchlistStatus.WATCHING,
+            Watchlist.label_id.isnot(None),
+        )
+        .group_by(Watchlist.label_id)
+        .all()
+    )
+    wl_label_counts = {row[0]: row[1] for row in _wl_cnt_rows}
+    wl_total_watching = (
+        db.query(func.count(Watchlist.id))
+        .filter(Watchlist.organization_id == org_id, Watchlist.status == WatchlistStatus.WATCHING)
+        .scalar() or 0
+    )
+
     active_label = request.query_params.get("label")
     active_label_id = int(active_label) if (active_label and active_label.isdigit()) else None
     only_custom = request.query_params.get("custom") == "true"
@@ -862,6 +880,8 @@ async def home(
         "checks": checks,
         "watchlist_rows": watchlist_rows,
         "wl_labels": wl_labels_data,
+        "wl_label_counts": wl_label_counts,
+        "wl_total_watching": wl_total_watching,
         "wl_active_label": active_label_id,
         "wl_only_custom": only_custom,
         "wl_exchange_filters": _get_exchange_filters(org_id, db),
@@ -1608,6 +1628,25 @@ async def watchlist(
         return labels
     ctx["labels"] = _exchange_labels(all_labels, af)
     ctx["active_label"] = label  # currently selected filter (None = all)
+
+    # Label counts: one GROUP BY query → {label_id: count} for badge display on chips
+    from sqlalchemy import func as _sqf
+    _cnt_rows = (
+        db.query(Watchlist.label_id, _sqf.count(Watchlist.id))
+        .filter(
+            Watchlist.organization_id == org_id,
+            Watchlist.status == WatchlistStatus.WATCHING,
+            Watchlist.label_id.isnot(None),
+        )
+        .group_by(Watchlist.label_id)
+        .all()
+    )
+    ctx["label_counts"] = {row[0]: row[1] for row in _cnt_rows}
+    ctx["total_watching"] = (
+        db.query(_sqf.count(Watchlist.id))
+        .filter(Watchlist.organization_id == org_id, Watchlist.status == WatchlistStatus.WATCHING)
+        .scalar() or 0
+    )
 
     from sqlalchemy.orm import joinedload
     q = db.query(Watchlist).options(joinedload(Watchlist.label)).filter(
@@ -2478,20 +2517,20 @@ async def action_force_screen(request: Request, exchange: str = Form("ASX")):
 
 
 @app.post("/action/force-breakout-check")
-async def action_force_breakout_check(request: Request):
+async def action_force_breakout_check(request: Request, exchange: str = Form("ASX")):
     if not _auth(request):
         return RedirectResponse("/login", 302)
     from app.tasks.trading import check_entry_triggers
-    check_entry_triggers.delay()
+    check_entry_triggers.delay(exchange_key=exchange or "ASX")
     return RedirectResponse("/admin/tasks?msg=breakout", 302)
 
 
 @app.post("/action/force-exit-check")
-async def action_force_exit_check(request: Request):
+async def action_force_exit_check(request: Request, exchange: str = Form("ASX")):
     if not _auth(request):
         return RedirectResponse("/login", 302)
     from app.tasks.trading import check_exit_rules_task
-    check_exit_rules_task.delay()
+    check_exit_rules_task.delay(exchange_key=exchange or "ASX")
     return RedirectResponse("/admin/tasks?msg=exit_check", 302)
 
 
@@ -4882,6 +4921,191 @@ async def superadmin_exchange_update(request: Request, exchange_key: str, displa
             db.commit()
     except Exception: db.rollback()
     return RedirectResponse("/superadmin/exchanges?msg=saved", 302)
+
+
+# ===========================================================================
+# SUPER ADMIN — CENTRAL OPERATIONS
+# ===========================================================================
+
+@app.get("/superadmin/operations", response_class=HTMLResponse)
+async def superadmin_operations(request: Request, db: Session = Depends(get_db)):
+    """Central operations hub — global tasks that run on shared price/universe data."""
+    if not _auth(request): return RedirectResponse("/login", 302)
+    if not _is_superadmin(request): return RedirectResponse("/?error=access_denied", 302)
+
+    from app.models.market import Stock, PriceBar
+    from app.models.audit import AuditLog, AuditAction
+    from app.models.exchange import MarketRegimeRecord
+    from app.models.config import SystemConfig
+    from app.models.account import Organization
+    from sqlalchemy import func, or_
+
+    ctx = _global(request, db)
+    msg = request.query_params.get("msg", "")
+
+    # ── Universe & price stats ────────────────────────────────────────────────
+    asx_count    = db.query(func.count(Stock.id)).filter(Stock.exchange_key == "ASX",    Stock.is_active == True).scalar() or 0
+    us_count     = db.query(func.count(Stock.id)).filter(Stock.exchange_key.in_(["NYSE","NASDAQ"]), Stock.is_active == True).scalar() or 0
+    crypto_count = db.query(func.count(Stock.id)).filter(Stock.asset_type == "CRYPTO",   Stock.is_active == True).scalar() or 0
+    total_bars   = db.query(func.count(PriceBar.id)).scalar() or 0
+    latest_bar   = db.query(func.max(PriceBar.date)).scalar()
+    today_bars   = db.query(func.count(PriceBar.id)).filter(PriceBar.date == get_current_date()).scalar() or 0
+
+    # Custom stocks: any org has added manually and NOT in ASX200/300 index
+    custom_count = db.query(func.count(Stock.id)).filter(
+        Stock.is_active == True,
+        Stock.exchange_key == "ASX",
+        Stock.in_index == False,
+    ).scalar() or 0
+
+    # Active exchanges across all orgs (union — so we know what exchanges need refreshing)
+    all_ae_rows = db.query(SystemConfig).filter(SystemConfig.key == "active_exchanges").all()
+    all_exchanges: set[str] = set()
+    for row in all_ae_rows:
+        for e in (row.value or "").split(","):
+            e = e.strip().upper()
+            if e:
+                all_exchanges.add(e)
+
+    has_asx    = "ASX" in all_exchanges
+    has_us     = bool(all_exchanges & {"NYSE", "NASDAQ", "US"})
+    has_crypto = any(e.startswith("CRYPTO") for e in all_exchanges)
+    crypto_keys = sorted(e for e in all_exchanges if e.startswith("CRYPTO_"))
+
+    # ── Latest regime per exchange (from MarketRegimeRecord) ─────────────────
+    regimes: dict[str, dict] = {}
+    try:
+        for ek in (["ASX"] if has_asx else []) + (["NYSE"] if has_us else []) + crypto_keys:
+            rec = db.query(MarketRegimeRecord).filter(
+                MarketRegimeRecord.exchange_key == ek
+            ).order_by(desc(MarketRegimeRecord.evaluated_at)).first()
+            regimes[ek] = {
+                "regime": rec.regime if rec else "Not evaluated",
+                "time":   _fmt_dt(str(rec.evaluated_at), "Australia/Sydney") if rec else "—",
+                "index_close": float(rec.index_close or 0) if rec else 0,
+                "breadth_pct": float(rec.breadth_pct or 0) if rec else 0,
+            }
+    except Exception:
+        pass
+
+    # ── Last-run times (global AuditLog — no org filter) ─────────────────────
+    def _glr(kws: list[str], exch: str = None, actions=None):
+        """Most recent global audit entry matching keywords + optional exchange prefix."""
+        try:
+            if actions is None:
+                actions = [AuditAction.TASK_RUN]
+            q = db.query(AuditLog).filter(
+                AuditLog.action.in_(actions),
+                or_(*[AuditLog.message.ilike(f"%{kw}%") for kw in kws]),
+            )
+            if exch:
+                q = q.filter(AuditLog.message.ilike(f"%{exch}%"))
+            log = q.order_by(desc(AuditLog.id)).first()
+            if log:
+                return {"time": _fmt_dt(str(log.created_at), "Australia/Sydney"), "msg": (log.message or "")[:120]}
+        except Exception:
+            pass
+        return None
+
+    task_runs = {
+        "universe":      _glr(["Universe refresh", "universe refresh"], actions=[AuditAction.TASK_RUN, AuditAction.SYSTEM_STARTED]),
+        "price_asx":     _glr(["Price data", "price data"], "ASX"),
+        "price_us":      _glr(["Price data", "price data"], "NYSE") if has_us else None,
+        "price_crypto":  _glr(["Price data", "price data"], "CRYPTO") if has_crypto else None,
+        "regime_asx":    _glr(["Market regime"], "ASX",   actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_asx else None,
+        "regime_us":     _glr(["Market regime"], "NYSE",  actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_us else None,
+        "regime_crypto": _glr(["Market regime"], "CRYPTO",actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_crypto else None,
+        "heartbeat":     _glr(["Heartbeat"], actions=[AuditAction.HEALTH_CHECK]),
+    }
+
+    # Active orgs count (for context banner)
+    active_org_count = db.query(func.count(Organization.id)).filter(Organization.is_active == True).scalar() or 0
+
+    ctx.update({
+        "msg": msg,
+        "asx_count": asx_count, "us_count": us_count, "crypto_count": crypto_count,
+        "custom_count": custom_count, "total_bars": total_bars,
+        "latest_bar": str(latest_bar) if latest_bar else "—", "today_bars": today_bars,
+        "has_asx": has_asx, "has_us": has_us, "has_crypto": has_crypto,
+        "crypto_keys": crypto_keys, "all_exchanges": sorted(all_exchanges),
+        "regimes": regimes, "task_runs": task_runs,
+        "active_org_count": active_org_count,
+    })
+    return templates.TemplateResponse("superadmin/operations.html", ctx)
+
+
+# ── Super admin global action routes ─────────────────────────────────────────
+
+@app.post("/superadmin/action/refresh-data")
+async def sa_action_refresh_data(request: Request, exchange: str = Form(None)):
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.screening import refresh_price_data, refresh_crypto_universe
+    try:
+        is_crypto = exchange and (exchange == "CRYPTO" or exchange.startswith("CRYPTO_"))
+        if is_crypto:
+            from celery import chain as _chain
+            effective = exchange if exchange != "CRYPTO" else "CRYPTO_INDEPENDENTRESERVE"
+            _chain(
+                refresh_crypto_universe.si(exchange_key=effective),
+                refresh_price_data.si(exchange_key=effective),
+            ).delay()
+        else:
+            refresh_price_data.delay(exchange_key=exchange or None)
+    except Exception:
+        refresh_price_data.delay(exchange_key=exchange or None)
+    return RedirectResponse("/superadmin/operations?msg=data", 302)
+
+
+@app.post("/superadmin/action/refresh-universe")
+async def sa_action_refresh_universe(request: Request, scope: str = Form(None)):
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.screening import refresh_universe
+    try:
+        refresh_universe.delay(scope=scope or None, organization_id=None)
+    except Exception:
+        pass
+    return RedirectResponse("/superadmin/operations?msg=universe", 302)
+
+
+@app.post("/superadmin/action/evaluate-regime")
+async def sa_action_evaluate_regime(request: Request, exchange: str = Form("ASX")):
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.screening import evaluate_market_regime_task
+    evaluate_market_regime_task.delay(exchange_key=exchange or "ASX")
+    return RedirectResponse("/superadmin/operations?msg=regime", 302)
+
+
+@app.post("/superadmin/action/seed-crypto")
+async def sa_action_seed_crypto(request: Request, exchange: str = Form("CRYPTO_INDEPENDENTRESERVE")):
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.screening import refresh_crypto_universe
+    try:
+        refresh_crypto_universe.delay(exchange_key=exchange)
+    except Exception:
+        pass
+    return RedirectResponse("/superadmin/operations?msg=crypto_seed", 302)
+
+
+@app.post("/superadmin/action/full-setup")
+async def sa_action_full_setup(request: Request):
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.screening import run_full_setup
+    run_full_setup.delay()
+    return RedirectResponse("/superadmin/operations?msg=setup", 302)
+
+
+@app.post("/superadmin/action/ping-worker")
+async def sa_action_ping_worker(request: Request):
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.reporting import health_check
+    health_check.delay()
+    return RedirectResponse("/superadmin/operations?msg=ping", 302)
 
 
 # ===========================================================================

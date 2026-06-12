@@ -24,13 +24,8 @@
 {% endif %}
 
 {% if msg == 'ping' %}<div class="alert-success mb-4">Worker ping queued — refresh in ~10 seconds.</div>
-{% elif msg == 'regime' %}<div class="alert-info mb-4">Market regime evaluation queued — refresh in ~1 minute.</div>
-{% elif msg == 'setup' %}<div class="alert-info mb-4"><strong>Full setup queued.</strong> Universe → price data → regime → screen. Takes 5–15 min.</div>
-{% elif msg == 'data' %}<div class="alert-info mb-4">Price data refresh queued — crypto exchange will auto-seed universe if not yet initialised. Check Task Log for progress.</div>
 {% elif msg == 'screen' %}<div class="alert-info mb-4">Screener queued — results appear in Signals within minutes.</div>
 {% elif msg == 'report' %}<div class="alert-info mb-4">Daily report queued — {% if notification_channel == 'telegram' %}Telegram{% else %}WhatsApp{% endif %} message incoming.</div>
-{% elif msg == 'crypto_seed' %}<div class="alert-success mb-4">Crypto universe seeding queued — top 50 tokens will be added. Then run Refresh Data to fetch prices.</div>
-{% elif msg == 'universe' %}<div class="alert-success mb-4">ASX universe refresh queued — stocks will be added/updated per the selected scope. Check Task Log for progress.</div>
 {% elif msg == 'recategorise' %}<div class="alert-success mb-4">Watchlist label re-categorisation queued — sector labels will be assigned to unlabelled items. Check Task Log.</div>
 {% endif %}
 
@@ -40,8 +35,8 @@
     <svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
     <strong>First-time setup required.</strong>
   </div>
-  <p style="font-size:.8125rem">No stock or crypto universe found. Click <strong>Run Full Setup</strong> to initialise everything.</p>
-  <form method="post" action="/action/full-setup"><button type="submit" class="btn-primary">&#x1F680; Run Full Setup Now</button></form>
+  <p style="font-size:.8125rem">No stock or crypto universe found. A super admin must run <strong>Full Setup</strong> from
+    <a href="/superadmin/operations" style="text-decoration:underline">Central Operations</a> to initialise price data.</p>
 </div>
 {% endif %}
 
@@ -121,8 +116,15 @@
 <!-- 2. Market Regime per Exchange -->
 {% if exchange_regimes %}
 <div class="card p-4 mb-6">
-  <p class="text-xs font-semibold uppercase tracking-wider mb-3" style="color:var(--text-subtle)">Market Regime by Exchange</p>
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.75rem">
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem;margin-bottom:.75rem">
+    <p class="text-xs font-semibold uppercase tracking-wider" style="color:var(--text-subtle)">Market Regime by Exchange</p>
+    {% if user_role == 'superadmin' %}
+    <a href="/superadmin/operations" class="text-xs" style="color:var(--a-accent);text-decoration:underline">⚙️ Re-evaluate in Central Ops</a>
+    {% else %}
+    <span class="text-xs" style="color:var(--text-subtle)">Updated centrally after market close</span>
+    {% endif %}
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.75rem">
     {% for exc_key, regime_val in exchange_regimes.items() %}
     <div style="padding:.875rem;background:var(--surface-alt);border-radius:.5rem;border:1px solid var(--border)">
       <p class="text-xs font-semibold mb-1.5" style="color:var(--text-muted)">
@@ -135,10 +137,6 @@
       {% elif regime_val == 'CAUTION' %}<p class="text-sm font-bold" style="color:var(--warn)">&#x1F7E1; CAUTION</p>
       {% elif regime_val == 'BEAR' %}<p class="text-sm font-bold" style="color:var(--neg)">&#x1F534; BEAR</p>
       {% else %}<p class="text-sm" style="color:var(--text-muted)">Not evaluated</p>{% endif %}
-      <form method="post" action="/action/evaluate-regime" class="mt-2">
-        <input type="hidden" name="exchange" value="{{ exc_key }}">
-        <button type="submit" style="font-size:.7rem;padding:.2rem .5rem;border-radius:.3rem;font-weight:600;background:transparent;color:var(--text-muted);border:1px solid var(--border);cursor:pointer">Re-evaluate</button>
-      </form>
     </div>
     {% endfor %}
   </div>
@@ -198,85 +196,53 @@
 
   </div>
   {% if stock_count == 0 and crypto_count == 0 %}
-  <p style="font-size:.75rem;color:var(--warn);margin-top:.75rem">&#9888; No universe data — click <strong>Full Setup</strong> below.</p>
+  <p style="font-size:.75rem;color:var(--warn);margin-top:.75rem">&#9888; No universe data — a super admin must run
+    {% if user_role == 'superadmin' %}<a href="/superadmin/operations" style="text-decoration:underline;color:var(--warn)">Full Setup</a>{% else %}<strong>Full Setup</strong> from Central Operations{% endif %}.</p>
   {% elif price_bar_count == 0 %}
-  <p style="font-size:.75rem;color:var(--warn);margin-top:.75rem">&#9888; No price bars — run <strong>Refresh Price Data</strong>.</p>
+  <p style="font-size:.75rem;color:var(--warn);margin-top:.75rem">&#9888; No price bars — a super admin must run
+    {% if user_role == 'superadmin' %}<a href="/superadmin/operations" style="text-decoration:underline;color:var(--warn)">Refresh Price Data</a>{% else %}<strong>Refresh Price Data</strong> from Central Operations{% endif %}.</p>
   {% else %}
-  <p style="font-size:.75rem;color:var(--text-subtle);margin-top:.75rem">&#10003; Data looks good.</p>
+  <p style="font-size:.75rem;color:var(--text-subtle);margin-top:.75rem">&#10003; Data looks good. Refreshed centrally after market close.</p>
   {% endif %}
 </div>
 
-<!-- 4. Manual Triggers -->
+<!-- 4. Manual Triggers (org-scoped) -->
 <div class="card p-4 mb-6">
-  <p class="text-xs font-semibold uppercase tracking-wider mb-3" style="color:var(--text-subtle)">Manual Triggers</p>
-  <div style="display:flex;flex-direction:column;gap:.75rem">
-    <div style="display:flex;flex-wrap:wrap;gap:.5rem;padding-bottom:.75rem;border-bottom:1px solid var(--border)">
-      <form method="post" action="/action/full-setup"><button type="submit" class="btn-primary text-xs py-1.5">&#x1F680; Full Setup (All Markets)</button></form>
-      <form method="post" action="/action/ping-worker"><button type="submit" class="btn-ghost text-xs py-1.5">&#x26A1; Ping Worker</button></form>
-      <form method="post" action="/action/send-report"><button type="submit" class="btn-ghost text-xs py-1.5">&#x1F4E8; Send Daily Report</button></form>
-    </div>
-    <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
-      <span class="text-xs font-semibold" style="color:var(--text-subtle);white-space:nowrap">Per Exchange:</span>
-
-      <form method="post" action="/action/refresh-data" style="display:inline-flex;align-items:center;gap:.35rem">
-        <select name="exchange" class="input py-1 text-xs" style="width:auto">
-          {% if has_asx %}<option value="ASX">ASX</option>{% endif %}
-          {% if has_us %}<option value="NYSE">NYSE</option><option value="NASDAQ">NASDAQ</option>{% endif %}
-          {% if has_crypto %}{% for exc in active_exchanges %}{% if exc.startswith('CRYPTO') %}<option value="{{ exc }}">{{ exc | replace('CRYPTO_','') }}</option>{% endif %}{% endfor %}{% endif %}
-        </select>
-        <button type="submit" class="btn-ghost text-xs py-1.5">&#x1F504; Refresh Data</button>
-      </form>
-
-      <form method="post" action="/action/evaluate-regime" style="display:inline-flex;align-items:center;gap:.35rem">
-        <select name="exchange" class="input py-1 text-xs" style="width:auto">
-          {% if has_asx %}<option value="ASX">ASX</option>{% endif %}
-          {% if has_us %}<option value="NYSE">NYSE</option>{% endif %}
-          {% if has_crypto %}{% for exc in active_exchanges %}{% if exc.startswith('CRYPTO') %}<option value="{{ exc }}">{{ exc | replace('CRYPTO_','') }}</option>{% endif %}{% endfor %}{% endif %}
-        </select>
-        <button type="submit" class="btn-ghost text-xs py-1.5">&#x1F321; Evaluate Regime</button>
-      </form>
-
-      <form method="post" action="/action/force-screen" style="display:inline-flex;align-items:center;gap:.35rem">
-        <select name="exchange" class="input py-1 text-xs" style="width:auto">
-          {% if has_asx %}<option value="ASX">ASX</option>{% endif %}
-          {% if has_us %}<option value="NYSE">NYSE</option>{% endif %}
-          {% if has_crypto %}{% for exc in active_exchanges %}{% if exc.startswith('CRYPTO') %}<option value="{{ exc }}">{{ exc | replace('CRYPTO_','') }}</option>{% endif %}{% endfor %}{% endif %}
-        </select>
-        <button type="submit" class="btn-ghost text-xs py-1.5">&#x1F50D; Force Screen</button>
-      </form>
-
-      {% if has_crypto %}
-      <form method="post" action="/action/seed-crypto" style="display:inline-flex;align-items:center;gap:.35rem">
-        <select name="exchange" class="input py-1 text-xs" style="width:auto">
-          {% for exc in active_exchanges %}{% if exc.startswith('CRYPTO') %}<option value="{{ exc }}">{{ exc | replace('CRYPTO_','') }}</option>{% endif %}{% endfor %}
-        </select>
-        <button type="submit" class="btn-ghost text-xs py-1.5" style="color:var(--t-accent)">&#x1FA99; Seed Crypto Universe</button>
-      </form>
-      {% endif %}
-    </div>
-
-    {% if has_asx %}
-    <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;padding-top:.75rem;border-top:1px solid var(--border)">
-      <span class="text-xs font-semibold" style="color:var(--text-subtle);white-space:nowrap">ASX Universe:</span>
-
-      <form method="post" action="/action/refresh-universe" style="display:inline-flex;align-items:center;gap:.35rem">
-        <select name="scope" class="input py-1 text-xs" style="width:auto">
-          <option value="ASX200">ASX200 (200 stocks)</option>
-          <option value="ASX300">ASX300 (300 stocks)</option>
-          <option value="ALL_LISTED">All Listed (~2,200+)</option>
-        </select>
-        <button type="submit" class="btn-ghost text-xs py-1.5">&#x1F30F; Refresh ASX Universe</button>
-      </form>
-
-      <form method="post" action="/action/recategorise-labels" style="display:inline-flex;align-items:center;gap:.35rem">
-        <select name="force" class="input py-1 text-xs" style="width:auto">
-          <option value="0">Unlabelled only</option>
-          <option value="1">Force (overwrite all)</option>
-        </select>
-        <button type="submit" class="btn-ghost text-xs py-1.5">&#x1F3F7; Re-categorise Labels</button>
-      </form>
-    </div>
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem;margin-bottom:.75rem">
+    <p class="text-xs font-semibold uppercase tracking-wider" style="color:var(--text-subtle)">Manual Triggers</p>
+    {% if user_role == 'superadmin' %}
+    <a href="/superadmin/operations" class="text-xs" style="color:var(--a-accent);text-decoration:underline">⚙️ Global triggers (price, universe, regime) → Central Ops</a>
+    {% else %}
+    <span class="text-xs" style="color:var(--text-subtle)">Price data &amp; universe managed centrally — see your administrator</span>
     {% endif %}
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
+
+    <form method="post" action="/action/ping-worker">
+      <button type="submit" class="btn-ghost text-xs py-1.5">&#x26A1; Ping Worker</button>
+    </form>
+
+    <form method="post" action="/action/send-report">
+      <button type="submit" class="btn-ghost text-xs py-1.5">&#x1F4E8; Send Daily Report</button>
+    </form>
+
+    <form method="post" action="/action/force-screen" style="display:inline-flex;align-items:center;gap:.35rem">
+      <select name="exchange" class="input py-1 text-xs" style="width:auto">
+        {% if has_asx %}<option value="ASX">&#x1F1E6;&#x1F1FA; ASX</option>{% endif %}
+        {% if has_us %}<option value="NYSE">&#x1F1FA;&#x1F1F8; NYSE</option>{% endif %}
+        {% if has_crypto %}{% for exc in active_exchanges %}{% if exc.startswith('CRYPTO') %}<option value="{{ exc }}">&#x20BF; {{ exc | replace('CRYPTO_','') }}</option>{% endif %}{% endfor %}{% endif %}
+      </select>
+      <button type="submit" class="btn-primary text-xs py-1.5">&#x1F50D; Run Screen</button>
+    </form>
+
+    <form method="post" action="/action/recategorise-labels" style="display:inline-flex;align-items:center;gap:.35rem">
+      <select name="force" class="input py-1 text-xs" style="width:auto">
+        <option value="0">Unlabelled only</option>
+        <option value="1">Force (overwrite all)</option>
+      </select>
+      <button type="submit" class="btn-ghost text-xs py-1.5">&#x1F3F7; Re-categorise Labels</button>
+    </form>
+
   </div>
 </div>
 

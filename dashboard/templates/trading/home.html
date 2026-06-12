@@ -462,20 +462,24 @@
     <span style="font-size:.65rem;font-weight:600;color:var(--text-subtle);text-transform:uppercase;letter-spacing:.05em;min-width:3.5rem">Label</span>
     <!-- All label -->
     <a href="javascript:void(0)" onclick="wlFilter('{% if wl_only_custom %}custom=true{% endif %}{% if wl_active_exchange and wl_active_exchange != "ALL" %}{% if wl_only_custom %}&{% endif %}exchange={{ wl_active_exchange }}{% endif %}')"
-       style="padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
+       style="display:inline-flex;align-items:center;gap:.3rem;padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
        {% if wl_active_label is none %}background:var(--t-accent);color:white;border-color:var(--t-accent)
        {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
-      All
+      All <span style="background:rgba(255,255,255,.22);border-radius:999px;padding:0 .4rem;font-size:.65rem">{{ wl_total_watching }}</span>
     </a>
     {# Filter labels based on active exchange: hide crypto labels for ASX, hide ASX sector labels for Crypto #}
     {% for lbl in wl_labels %}
     {% if not (wl_active_exchange == 'ASX' and lbl.sort_order >= 10 and lbl.sort_order <= 19)
        and not (wl_active_exchange in ('CRYPTO', 'US') and lbl.sort_order >= 20 and lbl.sort_order <= 38) %}
     <a href="javascript:void(0)" onclick="wlFilter('label={{ lbl.id }}{% if wl_only_custom %}&custom=true{% endif %}{% if wl_active_exchange and wl_active_exchange != "ALL" %}&exchange={{ wl_active_exchange }}{% endif %}')"
-       style="padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
+       style="display:inline-flex;align-items:center;gap:.3rem;padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
        {% if wl_active_label == lbl.id %}background:{{ lbl.color }};color:white;border-color:{{ lbl.color }}
        {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
+      <span style="width:.45rem;height:.45rem;border-radius:50%;background:{{ lbl.color }};display:inline-block;flex-shrink:0"></span>
       {{ lbl.name }}
+      {% if wl_label_counts.get(lbl.id, 0) > 0 %}
+      <span style="background:rgba(255,255,255,.22);border-radius:999px;padding:0 .4rem;font-size:.65rem">{{ wl_label_counts.get(lbl.id) }}</span>
+      {% endif %}
     </a>
     {% endif %}
     {% endfor %}

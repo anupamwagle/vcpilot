@@ -134,9 +134,19 @@
 
 <!-- Open Positions -->
 <div class="card overflow-hidden mb-6">
-  <div class="section-head">
-    <p class="section-title">Open Positions ({{ positions|length }})</p>
-    <p class="text-xs" style="color:var(--text-subtle)">Close = mark as closed, record trade, notify {% if notification_channel == 'telegram' %}Telegram{% else %}WhatsApp{% endif %}</p>
+  <div class="section-head" style="flex-wrap:wrap;gap:.5rem">
+    <div>
+      <p class="section-title">Open Positions ({{ positions|length }})</p>
+      <p class="text-xs" style="color:var(--text-subtle)">Close = mark as closed, record trade, notify {% if notification_channel == 'telegram' %}Telegram{% else %}WhatsApp{% endif %}</p>
+    </div>
+    {% if positions %}
+    <div style="position:relative;flex-shrink:0">
+      <svg style="position:absolute;left:.5rem;top:50%;transform:translateY(-50%);width:.75rem;height:.75rem;color:var(--text-subtle);pointer-events:none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input type="text" id="pos-search" placeholder="Search…" autocomplete="off"
+             style="padding:.3rem .5rem .3rem 1.7rem;border:1px solid var(--border);border-radius:.375rem;background:var(--surface-alt);color:var(--text);font-size:.75rem;width:150px;outline:none"
+             oninput="posSearch(this.value)" onkeydown="if(event.key==='Escape'){this.value='';posSearch('')}">
+    </div>
+    {% endif %}
   </div>
   {% if positions %}
   <div class="tbl-wrap">
@@ -159,7 +169,7 @@
       </tr></thead>
       <tbody>
         {% for p in positions %}
-        <tr class="hover-row">
+        <tr class="hover-row pos-row" data-search="{{ p.ticker }} {{ p.company_name or '' }}">
           <td class="tbl-cell">
             <span class="mono font-bold" style="color:var(--text);display:inline-flex;align-items:center;gap:.35rem">
               <form method="post" action="/watchlist/toggle-favourite" style="display:inline">
@@ -348,9 +358,19 @@
 
 <!-- Closed Trades -->
 <div class="card overflow-hidden">
-  <div class="section-head">
-    <p class="section-title">Closed Trades</p>
-    {% if trades %}<span class="tag">{{ trade_count }} total</span>{% endif %}
+  <div class="section-head" style="flex-wrap:wrap;gap:.5rem">
+    <div style="display:flex;align-items:center;gap:.75rem">
+      <p class="section-title">Closed Trades</p>
+      {% if trades %}<span class="tag">{{ trade_count }} total</span>{% endif %}
+    </div>
+    {% if trades %}
+    <div style="position:relative;flex-shrink:0">
+      <svg style="position:absolute;left:.5rem;top:50%;transform:translateY(-50%);width:.75rem;height:.75rem;color:var(--text-subtle);pointer-events:none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input type="text" id="trade-search" placeholder="Search…" autocomplete="off"
+             style="padding:.3rem .5rem .3rem 1.7rem;border:1px solid var(--border);border-radius:.375rem;background:var(--surface-alt);color:var(--text);font-size:.75rem;width:150px;outline:none"
+             oninput="tradeSearch(this.value)" onkeydown="if(event.key==='Escape'){this.value='';tradeSearch('')}">
+    </div>
+    {% endif %}
   </div>
   {% if trades %}
   <div class="tbl-wrap">
@@ -369,7 +389,7 @@
       </tr></thead>
       <tbody>
         {% for t in trades %}
-        <tr class="hover-row">
+        <tr class="hover-row trade-row" data-search="{{ t.ticker }} {{ t.company_name or '' }}">
           <td class="tbl-cell">
             <span class="mono font-bold" style="color:var(--text);display:inline-flex;align-items:center;gap:.3rem">
               <form method="post" action="/watchlist/toggle-favourite" style="display:inline">
@@ -411,4 +431,20 @@
   <div class="empty"><p class="empty-title">No closed trades yet</p><p class="empty-sub">P&L history appears here after positions close</p></div>
   {% endif %}
 </div>
+
+<script>
+// ── Positions search ──────────────────────────────────────────────────────
+function posSearch(q) {
+  const term = q.trim().toLowerCase();
+  document.querySelectorAll('.pos-row').forEach(function(row) {
+    row.style.display = (!term || row.getAttribute('data-search').toLowerCase().includes(term)) ? '' : 'none';
+  });
+}
+function tradeSearch(q) {
+  const term = q.trim().toLowerCase();
+  document.querySelectorAll('.trade-row').forEach(function(row) {
+    row.style.display = (!term || row.getAttribute('data-search').toLowerCase().includes(term)) ? '' : 'none';
+  });
+}
+</script>
 {% endblock %}

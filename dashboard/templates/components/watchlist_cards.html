@@ -1,7 +1,7 @@
 {# Partial: watchlist card list. Rendered by both /watchlist (full page) and /watchlist/rows (fragment). #}
 {# Required context: watchlist, labels, favourited_tickers, path, has_more, page, active_label #}
 {% for w in watchlist %}
-<div class="card overflow-hidden card-lift card-enter">
+<div class="card overflow-hidden card-lift card-enter" data-search="{{ w.ticker }} {{ w.company_name or '' }}">
   <!-- Card header -->
   <div class="section-head-r">
     <div style="display:flex;align-items:center;gap:.625rem;flex-wrap:wrap">

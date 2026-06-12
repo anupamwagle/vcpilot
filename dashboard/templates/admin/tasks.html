@@ -74,63 +74,29 @@
 
 {# ── Quick triggers ────────────────────────────────────────────────── #}
 <div class="card p-3 mb-4" style="display:flex;flex-wrap:wrap;gap:1rem;align-items:center">
-  <div style="display:flex;align-items:center;gap:.5rem">
-    <span style="font-size:.75rem;font-weight:600;color:var(--text-muted)">Global:</span>
-    <form method="post" action="/action/full-setup"><button class="btn-primary text-xs py-1">🚀 Full Setup (All)</button></form>
-    <form method="post" action="/action/ping-worker"><button class="btn-ghost text-xs py-1">⚡ Ping Worker</button></form>
-  </div>
-  
-  <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;border-left:1px solid var(--border);padding-left:1rem">
-    <span style="font-size:.75rem;font-weight:600;color:var(--text-muted)">Exchange Tasks:</span>
-    
-    <form method="post" action="/action/evaluate-regime" style="display:inline-flex;align-items:center;gap:.25rem">
-      {% if has_asx or has_us or has_crypto %}
-      <select name="exchange" class="input py-0.5 text-xs" style="width: auto; padding-top: 0.15rem; padding-bottom: 0.15rem;">
-        {% if has_asx %}<option value="ASX">🇦🇺 ASX</option>{% endif %}
-        {% if has_us %}<option value="US">🇺🇸 US</option>{% endif %}
-        {% if has_crypto %}<option value="CRYPTO">₿ Crypto</option>{% endif %}
-      </select>
-      {% endif %}
-      <button class="btn-ghost text-xs py-1">🌡 Evaluate Regime</button>
-    </form>
 
-    <form method="post" action="/action/refresh-data" style="display:inline-flex;align-items:center;gap:.25rem">
-      {% if has_asx or has_us or has_crypto %}
-      <select name="exchange" class="input py-0.5 text-xs" style="width: auto; padding-top: 0.15rem; padding-bottom: 0.15rem;">
-        {% if has_asx %}<option value="ASX">🇦🇺 ASX</option>{% endif %}
-        {% if has_us %}<option value="US">🇺🇸 US</option>{% endif %}
-        {% if has_crypto %}<option value="CRYPTO">₿ Crypto</option>{% endif %}
-      </select>
-      {% endif %}
-      <button class="btn-ghost text-xs py-1">🔄 Refresh Data</button>
-    </form>
-
+  {# Org-scoped: screener #}
+  <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+    <span style="font-size:.75rem;font-weight:600;color:var(--text-muted)">Screen:</span>
     <form method="post" action="/action/force-screen" style="display:inline-flex;align-items:center;gap:.25rem">
       {% if has_asx or has_us or has_crypto %}
-      <select name="exchange" class="input py-0.5 text-xs" style="width: auto; padding-top: 0.15rem; padding-bottom: 0.15rem;">
+      <select name="exchange" class="input py-0.5 text-xs" style="width:auto;padding-top:.15rem;padding-bottom:.15rem">
         {% if has_asx %}<option value="ASX">🇦🇺 ASX</option>{% endif %}
         {% if has_us %}<option value="US">🇺🇸 US</option>{% endif %}
         {% if has_crypto %}<option value="CRYPTO">₿ Crypto</option>{% endif %}
       </select>
       {% endif %}
-      <button class="btn-ghost text-xs py-1">🔍 Force Screen</button>
+      <button class="btn-primary text-xs py-1">🔍 Force Screen</button>
     </form>
   </div>
-</div>
 
-<div class="card p-3 mb-5" style="display:flex;flex-wrap:wrap;gap:1rem;align-items:center">
-  <div style="display:flex;align-items:center;gap:.5rem">
-    <span style="font-size:.75rem;font-weight:600;color:var(--text-muted)">Global Syncs:</span>
-    <form method="post" action="/action/force-position-sync"><button class="btn-ghost text-xs py-1">⚖️ Position Sync</button></form>
-    <form method="post" action="/action/force-stop-sync"><button class="btn-ghost text-xs py-1">⚙️ Stop Sync</button></form>
-  </div>
+  {# Org-scoped: intraday #}
+  <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;border-left:1px solid var(--border);padding-left:1rem">
+    <span style="font-size:.75rem;font-weight:600;color:var(--text-muted)">Intraday:</span>
 
-  <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;border-left:1px solid var(--border);padding-left:1rem">
-    <span style="font-size:.75rem;font-weight:600;color:var(--text-muted)">Intraday Scopes:</span>
-    
     <form method="post" action="/action/force-breakout-check" style="display:inline-flex;align-items:center;gap:.25rem">
       {% if has_asx or has_us or has_crypto %}
-      <select name="exchange" class="input py-0.5 text-xs" style="width: auto; padding-top: 0.15rem; padding-bottom: 0.15rem;">
+      <select name="exchange" class="input py-0.5 text-xs" style="width:auto;padding-top:.15rem;padding-bottom:.15rem">
         {% if has_asx %}<option value="ASX">🇦🇺 ASX</option>{% endif %}
         {% if has_us %}<option value="US">🇺🇸 US</option>{% endif %}
         {% if has_crypto %}<option value="CRYPTO">₿ Crypto</option>{% endif %}
@@ -141,7 +107,7 @@
 
     <form method="post" action="/action/force-exit-check" style="display:inline-flex;align-items:center;gap:.25rem">
       {% if has_asx or has_us or has_crypto %}
-      <select name="exchange" class="input py-0.5 text-xs" style="width: auto; padding-top: 0.15rem; padding-bottom: 0.15rem;">
+      <select name="exchange" class="input py-0.5 text-xs" style="width:auto;padding-top:.15rem;padding-bottom:.15rem">
         {% if has_asx %}<option value="ASX">🇦🇺 ASX</option>{% endif %}
         {% if has_us %}<option value="US">🇺🇸 US</option>{% endif %}
         {% if has_crypto %}<option value="CRYPTO">₿ Crypto</option>{% endif %}
@@ -150,6 +116,18 @@
       <button class="btn-ghost text-xs py-1">🛑 Exit Check</button>
     </form>
   </div>
+
+  {# Syncs + worker #}
+  <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;border-left:1px solid var(--border);padding-left:1rem">
+    <span style="font-size:.75rem;font-weight:600;color:var(--text-muted)">Syncs:</span>
+    <form method="post" action="/action/force-position-sync"><button class="btn-ghost text-xs py-1">⚖️ Position Sync</button></form>
+    <form method="post" action="/action/force-stop-sync"><button class="btn-ghost text-xs py-1">⚙️ Stop Sync</button></form>
+    <form method="post" action="/action/ping-worker"><button class="btn-ghost text-xs py-1">⚡ Ping Worker</button></form>
+  </div>
+
+  {% if user_role == 'superadmin' %}
+  <a href="/superadmin/operations" class="text-xs" style="color:var(--a-accent);text-decoration:underline;margin-left:auto">⚙️ Price / Universe / Regime → Central Ops</a>
+  {% endif %}
 </div>
 
 {# ── Live feed ─────────────────────────────────────────────────────── #}

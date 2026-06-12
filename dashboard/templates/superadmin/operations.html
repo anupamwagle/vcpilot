@@ -1,0 +1,280 @@
+{% extends "base.html" %}
+{% block title %}Central Operations — SaaS Management{% endblock %}
+
+{% block content %}
+<style>
+  .ops-card   { background:var(--surface);border:1px solid var(--border);border-radius:.6rem;padding:1.1rem 1.25rem;margin-bottom:1rem; }
+  .ops-title  { font-size:.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-subtle);margin-bottom:.75rem; }
+  .last-run   { font-size:.72rem;color:var(--text-muted);margin-top:.35rem; }
+  .regime-pill{ display:inline-flex;align-items:center;gap:.3rem;padding:.15rem .65rem;border-radius:999px;font-size:.72rem;font-weight:700; }
+  .regime-bull{ background:rgba(16,185,129,.15);color:#10b981; }
+  .regime-caut{ background:rgba(245,158,11,.15);color:#f59e0b; }
+  .regime-bear{ background:rgba(239,68,68,.15);color:#ef4444; }
+  .regime-none{ background:var(--surface-alt);color:var(--text-muted); }
+</style>
+
+<!-- Header -->
+<div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:.75rem;margin-bottom:1.25rem">
+  <div>
+    <h1 class="text-xl font-bold" style="color:var(--text)">⚙️ Central Operations</h1>
+    <p class="text-sm mt-0.5" style="color:var(--text-muted)">Global data tasks — shared across all {{ active_org_count }} organisation{{ 's' if active_org_count != 1 else '' }}</p>
+  </div>
+</div>
+
+{% if msg %}
+<div class="alert-success mb-4">
+  {% if msg == 'data' %}Price data refresh queued — check Task Log for progress.
+  {% elif msg == 'universe' %}Universe refresh queued — stocks will be added/updated.
+  {% elif msg == 'regime' %}Market regime evaluation queued.
+  {% elif msg == 'crypto_seed' %}Crypto universe seeding queued.
+  {% elif msg == 'setup' %}Full setup chain queued — universe → data → regime → screen for all exchanges.
+  {% elif msg == 'ping' %}Worker ping sent — heartbeat will update within ~10 seconds.
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- Stats bar -->
+<div class="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-5">
+  <div class="stat-card">
+    <p class="text-xs font-semibold uppercase tracking-wider mb-1" style="color:var(--text-subtle)">🇦🇺 ASX</p>
+    <p class="text-2xl font-bold" style="color:var(--text)">{{ asx_count }}</p>
+    <p class="text-xs mt-0.5" style="color:var(--text-muted)">stocks</p>
+  </div>
+  <div class="stat-card">
+    <p class="text-xs font-semibold uppercase tracking-wider mb-1" style="color:var(--text-subtle)">🇺🇸 US</p>
+    <p class="text-2xl font-bold" style="color:var(--text)">{{ us_count }}</p>
+    <p class="text-xs mt-0.5" style="color:var(--text-muted)">NYSE / NASDAQ</p>
+  </div>
+  <div class="stat-card">
+    <p class="text-xs font-semibold uppercase tracking-wider mb-1" style="color:var(--text-subtle)">₿ Crypto</p>
+    <p class="text-2xl font-bold" style="color:var(--text)">{{ crypto_count }}</p>
+    <p class="text-xs mt-0.5" style="color:var(--text-muted)">tokens</p>
+  </div>
+  <div class="stat-card">
+    <p class="text-xs font-semibold uppercase tracking-wider mb-1" style="color:var(--text-subtle)">⭐ Custom</p>
+    <p class="text-2xl font-bold" style="color:var(--text)">{{ custom_count }}</p>
+    <p class="text-xs mt-0.5" style="color:var(--text-muted)">org-added stocks</p>
+  </div>
+  <div class="stat-card">
+    <p class="text-xs font-semibold uppercase tracking-wider mb-1" style="color:var(--text-subtle)">Price Bars</p>
+    <p class="text-2xl font-bold" style="color:var(--text)">{{ "{:,}".format(total_bars) }}</p>
+    <p class="text-xs mt-0.5" style="color:var(--text-muted)">latest: {{ latest_bar }}</p>
+  </div>
+</div>
+
+<!-- ── Regime status (read-only) ───────────────────────────────────────── -->
+{% if regimes %}
+<div class="ops-card">
+  <p class="ops-title">📊 Market Regime — current state</p>
+  <div style="display:flex;flex-wrap:wrap;gap:1rem">
+    {% for ek, r in regimes.items() %}
+    <div style="min-width:160px">
+      <p class="text-xs font-semibold" style="color:var(--text-muted);margin-bottom:.3rem">{{ ek }}</p>
+      <span class="regime-pill
+        {% if r.regime == 'BULL' %}regime-bull
+        {% elif r.regime == 'CAUTION' %}regime-caut
+        {% elif r.regime == 'BEAR' %}regime-bear
+        {% else %}regime-none{% endif %}">
+        {% if r.regime == 'BULL' %}🟢
+        {% elif r.regime == 'CAUTION' %}🟡
+        {% elif r.regime == 'BEAR' %}🔴
+        {% else %}⚪{% endif %}
+        {{ r.regime }}
+      </span>
+      {% if r.index_close %}
+      <p class="last-run">Index: {{ "{:,.2f}".format(r.index_close) }}{% if r.breadth_pct %} · Breadth: {{ "{:.0f}".format(r.breadth_pct) }}%{% endif %}</p>
+      {% endif %}
+      <p class="last-run">Evaluated: {{ r.time }}</p>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Price Data Refresh ─────────────────────────────────────────────────── -->
+<div class="ops-card">
+  <p class="ops-title">🔄 Price Data Refresh</p>
+  <p class="text-xs mb-3" style="color:var(--text-muted)">
+    Fetches 2-year OHLCV history from yfinance for all active stocks — including custom org-added stocks.
+    Runs automatically after market close via Celery Beat.
+  </p>
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
+    {% if has_asx %}
+    <form method="post" action="/superadmin/action/refresh-data" style="display:inline-flex;align-items:center;gap:.35rem">
+      <input type="hidden" name="exchange" value="ASX">
+      <button type="submit" class="btn-primary text-xs py-1.5">🇦🇺 Refresh ASX Data</button>
+    </form>
+    {% if task_runs.price_asx %}
+    <span class="last-run" style="align-self:center">Last: {{ task_runs.price_asx.time }}</span>
+    {% endif %}
+    {% endif %}
+
+    {% if has_us %}
+    <form method="post" action="/superadmin/action/refresh-data" style="display:inline-flex;align-items:center;gap:.35rem">
+      <input type="hidden" name="exchange" value="NYSE">
+      <button type="submit" class="btn-ghost text-xs py-1.5">🇺🇸 Refresh US Data</button>
+    </form>
+    {% if task_runs.price_us %}
+    <span class="last-run" style="align-self:center">Last: {{ task_runs.price_us.time }}</span>
+    {% endif %}
+    {% endif %}
+
+    {% if has_crypto %}
+    <form method="post" action="/superadmin/action/refresh-data" style="display:inline-flex;align-items:center;gap:.35rem">
+      <select name="exchange" class="input py-1 text-xs" style="width:auto">
+        {% for ck in crypto_keys %}
+        <option value="{{ ck }}">{{ ck | replace('CRYPTO_','') }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn-ghost text-xs py-1.5">₿ Refresh Crypto Data</button>
+    </form>
+    {% if task_runs.price_crypto %}
+    <span class="last-run" style="align-self:center">Last: {{ task_runs.price_crypto.time }}</span>
+    {% endif %}
+    {% endif %}
+  </div>
+  <p class="text-xs mt-2" style="color:var(--text-subtle)">
+    ℹ️ Custom stocks added by any org are automatically included — price data is never per-organisation.
+  </p>
+</div>
+
+<!-- ── ASX Universe Refresh ───────────────────────────────────────────────── -->
+{% if has_asx %}
+<div class="ops-card">
+  <p class="ops-title">🌏 ASX Universe Refresh</p>
+  <p class="text-xs mb-3" style="color:var(--text-muted)">
+    Updates the ASX stock universe from Wikipedia / ASX website. Sets index membership flags on all stocks.
+    Runs automatically every Sunday at 8pm AEST via Celery Beat.
+  </p>
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
+    <form method="post" action="/superadmin/action/refresh-universe" style="display:inline-flex;align-items:center;gap:.35rem">
+      <select name="scope" class="input py-1 text-xs" style="width:auto">
+        <option value="ASX200">ASX200 (~200 stocks, ~5 min)</option>
+        <option value="ASX300">ASX300 (~300 stocks, ~8 min)</option>
+        <option value="ALL_LISTED">All Listed (~2,200+ stocks, ~15–45 min)</option>
+      </select>
+      <button type="submit" class="btn-primary text-xs py-1.5">🌏 Refresh Universe</button>
+    </form>
+    {% if task_runs.universe %}
+    <span class="last-run" style="align-self:center">Last: {{ task_runs.universe.time }}</span>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Regime Evaluation ──────────────────────────────────────────────────── -->
+<div class="ops-card">
+  <p class="ops-title">🌡️ Market Regime Evaluation</p>
+  <p class="text-xs mb-3" style="color:var(--text-muted)">
+    Evaluates BULL / CAUTION / BEAR using index MA, breadth, and distribution days.
+    Updates <em>last_market_regime_{exchange}</em> for every organisation.
+    Runs automatically at 5:15pm AEST (ASX) and 7:15am AEST Tue–Sat (NYSE) via Celery Beat.
+  </p>
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
+    <form method="post" action="/superadmin/action/evaluate-regime" style="display:inline-flex;align-items:center;gap:.35rem">
+      <select name="exchange" class="input py-1 text-xs" style="width:auto">
+        {% if has_asx %}<option value="ASX">🇦🇺 ASX</option>{% endif %}
+        {% if has_us %}<option value="NYSE">🇺🇸 NYSE</option>{% endif %}
+        {% for ck in crypto_keys %}<option value="{{ ck }}">₿ {{ ck | replace('CRYPTO_','') }}</option>{% endfor %}
+      </select>
+      <button type="submit" class="btn-ghost text-xs py-1.5">🌡 Evaluate Now</button>
+    </form>
+    {% if task_runs.regime_asx %}
+    <span class="last-run" style="align-self:center">ASX last: {{ task_runs.regime_asx.time }}</span>
+    {% endif %}
+    {% if task_runs.regime_crypto %}
+    <span class="last-run" style="align-self:center">Crypto last: {{ task_runs.regime_crypto.time }}</span>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ── Crypto Universe Seeding ────────────────────────────────────────────── -->
+{% if has_crypto %}
+<div class="ops-card">
+  <p class="ops-title">🪙 Crypto Universe Seeding</p>
+  <p class="text-xs mb-3" style="color:var(--text-muted)">
+    Seeds top-100 crypto tokens into the stock universe for an exchange.
+    Only needed on first run — price refresh auto-bootstraps if the universe is empty.
+  </p>
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
+    <form method="post" action="/superadmin/action/seed-crypto" style="display:inline-flex;align-items:center;gap:.35rem">
+      <select name="exchange" class="input py-1 text-xs" style="width:auto">
+        {% for ck in crypto_keys %}<option value="{{ ck }}">{{ ck | replace('CRYPTO_','') }}</option>{% endfor %}
+      </select>
+      <button type="submit" class="btn-ghost text-xs py-1.5">🪙 Seed Crypto Universe</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Full Setup ─────────────────────────────────────────────────────────── -->
+<div class="ops-card">
+  <p class="ops-title">🚀 Full Setup</p>
+  <p class="text-xs mb-3" style="color:var(--text-muted)">
+    Chains: universe refresh → price data → regime evaluation → screener for all active exchanges.
+    Use on first deployment or after a long downtime.
+  </p>
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
+    <form method="post" action="/superadmin/action/full-setup">
+      <button type="submit" class="btn-primary text-xs py-1.5">🚀 Run Full Setup (All Markets)</button>
+    </form>
+  </div>
+</div>
+
+<!-- ── Worker Health ──────────────────────────────────────────────────────── -->
+<div class="ops-card">
+  <p class="ops-title">⚡ Worker Health</p>
+  <div style="display:flex;flex-wrap:wrap;gap:.75rem;align-items:center">
+    <div>
+      <p class="text-sm font-semibold" style="color:var(--text)">
+        {% if worker_status == 'online' %}
+          <span style="color:var(--pos)">● Online</span>
+        {% elif worker_status == 'starting' %}
+          <span style="color:var(--warn)">● Starting</span>
+        {% elif worker_status == 'busy' %}
+          <span style="color:var(--warn)">● Busy</span>
+        {% else %}
+          <span style="color:var(--neg)">● Offline</span>
+        {% endif %}
+      </p>
+      {% if task_runs.heartbeat %}
+      <p class="last-run">Last heartbeat: {{ task_runs.heartbeat.time }}</p>
+      {% endif %}
+    </div>
+    <form method="post" action="/superadmin/action/ping-worker">
+      <button type="submit" class="btn-ghost text-xs py-1.5">⚡ Ping Worker</button>
+    </form>
+  </div>
+</div>
+
+<!-- ── Celery Beat schedule reference ────────────────────────────────────── -->
+<div class="ops-card">
+  <p class="ops-title">🗓️ Automatic Schedule (AEST)</p>
+  <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:.75rem">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border)">
+          <th style="text-align:left;padding:.4rem .5rem;color:var(--text-subtle);font-weight:600">Time</th>
+          <th style="text-align:left;padding:.4rem .5rem;color:var(--text-subtle);font-weight:600">Task</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for time, task in [
+          ('Sun 8:00pm',         '🌏 Refresh ASX Universe (ASX200 constituents)'),
+          ('Mon–Fri 5:00pm',     '🔄 Refresh ASX Price Data'),
+          ('Mon–Fri 5:15pm',     '🌡 Evaluate ASX Market Regime'),
+          ('Tue–Sat 7:00am',     '🔄 Refresh US Price Data'),
+          ('Tue–Sat 7:15am',     '🌡 Evaluate NYSE Regime'),
+          ('Every 6hrs (24/7)',  '₿ Refresh Crypto Price Data (12:30am/6:30am/12:30pm/6:30pm)'),
+        ] %}
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:.4rem .5rem;color:var(--text-muted);white-space:nowrap">{{ time }}</td>
+          <td style="padding:.4rem .5rem;color:var(--text)">{{ task }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}

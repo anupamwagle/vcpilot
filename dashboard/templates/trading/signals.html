@@ -41,19 +41,30 @@
 {% else %}
 
 <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap">
-  {% if pending_count > 0 %}
-  <span class="tag-blue" style="font-weight:700">{{ pending_count }} pending signal{% if pending_count != 1 %}s{% endif %}</span>
-  {% else %}
-  <span class="tag" style="color:var(--text-subtle)">No pending signals</span>
-  {% endif %}
-  {% if triggered_count > 0 %}
-  <span class="tag-pos" style="font-size:.7rem">✓ {{ triggered_count }} triggered</span>
-  {% endif %}
-  {% if skipped_count > 0 %}
-  <span class="tag" style="font-size:.7rem;color:var(--text-subtle)">{{ skipped_count }} skipped</span>
-  {% endif %}
-  <span class="tag" style="color:var(--text-subtle)">{{ signal_date }}</span>
-  <span style="font-size:.7rem;color:var(--text-subtle)">· Entry checks every 5 min during market hours</span>
+  <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;flex:1">
+    {% if pending_count > 0 %}
+    <span class="tag-blue" style="font-weight:700">{{ pending_count }} pending signal{% if pending_count != 1 %}s{% endif %}</span>
+    {% else %}
+    <span class="tag" style="color:var(--text-subtle)">No pending signals</span>
+    {% endif %}
+    {% if triggered_count > 0 %}
+    <span class="tag-pos" style="font-size:.7rem">✓ {{ triggered_count }} triggered</span>
+    {% endif %}
+    {% if skipped_count > 0 %}
+    <span class="tag" style="font-size:.7rem;color:var(--text-subtle)">{{ skipped_count }} skipped</span>
+    {% endif %}
+    <span class="tag" style="color:var(--text-subtle)">{{ signal_date }}</span>
+    <span style="font-size:.7rem;color:var(--text-subtle)">· Entry checks every 5 min during market hours</span>
+  </div>
+  <div style="position:relative;flex-shrink:0">
+    <svg style="position:absolute;left:.5rem;top:50%;transform:translateY(-50%);width:.75rem;height:.75rem;color:var(--text-subtle);pointer-events:none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+    <input type="text" id="sig-search" placeholder="Search…" autocomplete="off"
+           style="padding:.3rem .5rem .3rem 1.7rem;border:1px solid var(--border);border-radius:.375rem;background:var(--surface-alt);color:var(--text);font-size:.75rem;width:160px;outline:none"
+           oninput="sigSearch(this.value)" onkeydown="if(event.key==='Escape'){this.value='';sigSearch('')}">
+  </div>
+</div>
+<div id="sig-no-results" style="display:none" class="card p-6 text-center">
+  <p style="color:var(--text-muted);font-size:.85rem">No matching signals</p>
 </div>
 
 {% set ns = namespace(shown_triggered_divider=false) %}
@@ -68,6 +79,7 @@
 </div>
 {% endif %}
 <div class="card overflow-hidden card-lift card-enter" id="sig-{{ s.id }}"
+     data-search="{{ s.ticker }} {{ s.company_name or '' }}"
      style="{% if s.status == 'TRIGGERED' %}opacity:.65;border-color:var(--bull-border){% elif s.status == 'SKIPPED' %}opacity:.45{% endif %}">
 
   {# ── Header ───────────────────────────────────────────────────────── #}
@@ -457,5 +469,19 @@ function togglePassingRules(sigId) {
   setInterval(tick, 1000);
   if (timerEl) timerEl.textContent = 'Refreshing in ' + fmtCountdown(countdown);
 })();
+
+// ── Signals search ────────────────────────────────────────────────────────
+function sigSearch(q) {
+  const term = q.trim().toLowerCase();
+  const cards = document.querySelectorAll('[data-search]');
+  let visible = 0;
+  cards.forEach(function(card) {
+    const match = !term || card.getAttribute('data-search').toLowerCase().includes(term);
+    card.style.display = match ? '' : 'none';
+    if (match) visible++;
+  });
+  const noRes = document.getElementById('sig-no-results');
+  if (noRes) noRes.style.display = (term && visible === 0) ? '' : 'none';
+}
 </script>
 {% endblock %}
