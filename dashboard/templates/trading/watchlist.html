@@ -199,7 +199,7 @@
 {% endif %}
 
 <!-- ── Label filter chips ─────────────────────────────────────────────── -->
-<div class="h-scroll" style="margin-bottom:1.25rem;padding:.125rem 0">
+<div style="display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin-bottom:1.25rem;padding:.125rem 0">
   <!-- All labels -->
   {% set exc_param = ("&exchange=" ~ active_exchange_filter) if active_exchange_filter and active_exchange_filter != 'ALL' else "" %}
   <a href="/watchlist{{ exc_param.replace('&','?') }}"

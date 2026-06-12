@@ -73,22 +73,15 @@
 ══════════════════════════════════════════════════════════════════ #}
 {% if tab in ('universe', 'us') %}
 
-<div class="card p-3 mb-4">
-  <form method="get" action="/superadmin/data" class="flex flex-wrap items-end gap-3">
+<div class="card p-3 mb-3">
+  <!-- Row 1: search + sort controls -->
+  <form method="get" action="/superadmin/data" class="flex flex-wrap items-end gap-3" id="data-filter-form">
     <input type="hidden" name="tab" value="{{ tab }}">
+    <input type="hidden" name="sector" value="{{ sector }}" id="sector-hidden">
     <div class="flex flex-col gap-1">
       <label class="text-xs font-semibold" style="color:var(--text-muted)">Search</label>
       <input type="text" name="search" value="{{ search }}" placeholder="Ticker or name…" class="input py-1.5 px-3 text-sm" style="min-width:160px">
     </div>
-    {% if sectors %}
-    <div class="flex flex-col gap-1">
-      <label class="text-xs font-semibold" style="color:var(--text-muted)">Sector</label>
-      <select name="sector" class="input py-1.5 px-2 text-sm" style="min-width:150px">
-        <option value="">All sectors</option>
-        {% for s in sectors %}<option value="{{ s }}" {% if sector == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
-      </select>
-    </div>
-    {% endif %}
     <div class="flex flex-col gap-1">
       <label class="text-xs font-semibold" style="color:var(--text-muted)">Sort by</label>
       <select name="sort_by" class="input py-1.5 px-2 text-sm">
@@ -107,6 +100,25 @@
     <button type="submit" class="btn-primary py-1.5 px-3 text-xs mt-4">Apply</button>
     <a href="/superadmin/data?tab={{ tab }}" class="btn-ghost py-1.5 px-3 text-xs mt-4">Reset</a>
   </form>
+
+  {% if sectors %}
+  <!-- Row 2: Sector label chips -->
+  <div style="display:flex;align-items:center;flex-wrap:wrap;gap:.35rem;margin-top:.75rem;padding-top:.6rem;border-top:1px solid var(--border)">
+    <span style="font-size:.65rem;font-weight:600;color:var(--text-subtle);text-transform:uppercase;letter-spacing:.05em;min-width:3.5rem">Sector</span>
+    <a href="/superadmin/data?tab={{ tab }}&search={{ search }}&sort_by={{ sort_by }}&sort_dir={{ sort_dir }}"
+       style="padding:.2rem .65rem;border-radius:999px;font-size:.72rem;font-weight:600;border:1.5px solid;text-decoration:none;
+       {% if not sector %}background:var(--t-accent);color:#fff;border-color:var(--t-accent){% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
+      All
+    </a>
+    {% for s in sectors %}
+    <a href="/superadmin/data?tab={{ tab }}&search={{ search }}&sector={{ s | urlencode }}&sort_by={{ sort_by }}&sort_dir={{ sort_dir }}"
+       style="padding:.2rem .65rem;border-radius:999px;font-size:.72rem;font-weight:600;border:1.5px solid;text-decoration:none;
+       {% if sector == s %}background:var(--a-accent);color:#fff;border-color:var(--a-accent){% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
+      {{ s }}
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
 </div>
 
 <div class="flex items-center justify-between mb-3 flex-wrap gap-2">

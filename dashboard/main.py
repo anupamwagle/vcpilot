@@ -107,6 +107,27 @@ def get_cached_stock_names(db: Session) -> dict[str, str]:
     cache.set("stock_names_map", stock_names, expire_seconds=3600)
     return stock_names
 
+
+def get_cached_wl_labels(org_id: int, db: Session) -> list[dict]:
+    """Retrieve watchlist labels for an org from Redis cache (expires in 5 min).
+    Returns list of dicts with id, name, color, is_default, sort_order.
+    sort_order is used to infer label asset-type: 10-13 = crypto, 20-38 = ASX sector, 0-3 = default.
+    """
+    from app.models.signal import WatchlistLabel
+    cache_key = f"wl_labels:{org_id}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    labels = db.query(WatchlistLabel).filter(
+        WatchlistLabel.organization_id == org_id
+    ).order_by(WatchlistLabel.sort_order).all()
+    result = [
+        {"id": l.id, "name": l.name, "color": l.color, "is_default": l.is_default, "sort_order": l.sort_order}
+        for l in labels
+    ]
+    cache.set(cache_key, result, expire_seconds=300)
+    return result
+
 templates = Jinja2Templates(directory="/app/dashboard/templates")
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "changeme")
 
@@ -714,8 +735,8 @@ async def home(
     from sqlalchemy import func, and_
     from sqlalchemy.orm import joinedload
 
-    all_labels = db.query(WatchlistLabel).filter(WatchlistLabel.organization_id == org_id).order_by(WatchlistLabel.sort_order).all()
-    wl_labels_data = [{"id": l.id, "name": l.name, "color": l.color} for l in all_labels]
+    # Labels from Redis cache — includes sort_order for exchange-aware filtering in template
+    wl_labels_data = get_cached_wl_labels(org_id, db)
 
     active_label = request.query_params.get("label")
     active_label_id = int(active_label) if (active_label and active_label.isdigit()) else None
@@ -1574,15 +1595,21 @@ async def watchlist(
     from app.models.market import PriceBar, Stock
     ctx = _global(request, db)
 
-    # Load all labels for this org (for filter chips)
-    all_labels = db.query(WatchlistLabel).filter(
-        WatchlistLabel.organization_id == org_id
-    ).order_by(WatchlistLabel.sort_order).all()
-    ctx["labels"] = [{"id": l.id, "name": l.name, "color": l.color, "is_default": l.is_default} for l in all_labels]
+    af = (exchange or "ALL").upper()
+
+    # Load labels from Redis cache — invalidated by label create/edit routes
+    all_labels = get_cached_wl_labels(org_id, db)
+    # Filter labels based on active exchange so irrelevant groups are hidden
+    def _exchange_labels(labels, exf):
+        if exf == "ASX":
+            return [l for l in labels if not (10 <= l["sort_order"] <= 19)]
+        if exf in ("CRYPTO", "US"):
+            return [l for l in labels if not (20 <= l["sort_order"] <= 38)]
+        return labels
+    ctx["labels"] = _exchange_labels(all_labels, af)
     ctx["active_label"] = label  # currently selected filter (None = all)
 
     from sqlalchemy.orm import joinedload
-    af = (exchange or "ALL").upper()
     q = db.query(Watchlist).options(joinedload(Watchlist.label)).filter(
         Watchlist.status == WatchlistStatus.WATCHING,
         Watchlist.organization_id == org_id
@@ -1785,11 +1812,8 @@ async def watchlist_rows(
     from app.models.market import PriceBar, Stock
     from sqlalchemy.orm import joinedload
 
-    # Labels (needed by card template for label picker)
-    all_labels = db.query(WatchlistLabel).filter(
-        WatchlistLabel.organization_id == org_id
-    ).order_by(WatchlistLabel.sort_order).all()
-    labels = [{"id": l.id, "name": l.name, "color": l.color, "is_default": l.is_default} for l in all_labels]
+    # Labels from Redis cache (card template needs them for label picker)
+    labels = get_cached_wl_labels(org_id, db)
 
     # Same paginated query as the main route
     _WL_PER_PAGE = 20
@@ -1926,6 +1950,7 @@ async def watchlist_label_create(
             sort_order=existing_count,
         ))
         db.commit()
+        cache.delete(f"wl_labels:{org_id}")
     return RedirectResponse("/watchlist?msg=label_created", 302)
 
 
