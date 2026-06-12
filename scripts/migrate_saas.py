@@ -461,7 +461,7 @@ def migrate():
 
             # Seed asx_universe_scope config key if not present
             conn.execute(text("""
-                INSERT INTO system_configs (key, value, value_type, label, group_name, description, organization_id)
+                INSERT INTO system_configs (key, value, value_type, label, "group", description, organization_id)
                 VALUES ('asx_universe_scope', 'ASX200', 'STRING', 'ASX Universe Scope', 'trading',
                         'ASX200 = top 200 | ASX300 = top 300 | ALL_LISTED = all ~2200+ companies', :org_id)
                 ON CONFLICT DO NOTHING;
