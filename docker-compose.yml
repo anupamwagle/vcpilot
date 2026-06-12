@@ -157,11 +157,12 @@ services:
     networks:
       - vcpilot-net
     command: >
+      sh -c "rm -f /tmp/celerybeat.pid &&
       celery -A app.tasks.celery_app beat
       --loglevel=info
       --schedule=/tmp/celerybeat-schedule
       --pidfile=/tmp/celerybeat.pid
-      --max-interval=30
+      --max-interval=30"
 
   # ---------------------------------------------------------------------------
   # API — FastAPI & Streamlit Admin/Client UI
