@@ -468,6 +468,13 @@ def migrate():
             """), {"org_id": org_id})
             conn.commit()
 
+            # Resolve active_exchanges for this org (needed for both ASX and crypto label seeding)
+            active_exc_row = conn.execute(text("""
+                SELECT value FROM system_configs
+                WHERE key = 'active_exchanges' AND organization_id = :org_id LIMIT 1;
+            """), {"org_id": org_id}).fetchone()
+            active_exc_val = (active_exc_row[0] if active_exc_row else "") or ""
+
             # Seed ASX sector watchlist labels if org has ASX active
             has_asx_active = "ASX" in active_exc_val.split(",")
             asx_sector_labels = [
@@ -505,11 +512,6 @@ def migrate():
                 conn.commit()
 
             # Seed crypto-specific watchlist labels if org has a CRYPTO exchange active
-            active_exc_row = conn.execute(text("""
-                SELECT value FROM system_configs
-                WHERE key = 'active_exchanges' AND organization_id = :org_id LIMIT 1;
-            """), {"org_id": org_id}).fetchone()
-            active_exc_val = (active_exc_row[0] if active_exc_row else "") or ""
             has_crypto_active = any(k.strip().startswith("CRYPTO_") for k in active_exc_val.split(",") if k.strip())
             if has_crypto_active:
                 crypto_labels = [
