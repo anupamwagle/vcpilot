@@ -17,6 +17,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ ./app/
 COPY scripts/ ./scripts/
 COPY migrations/ ./migrations/
+COPY tests/ ./tests/
+COPY pytest.ini ./pytest.ini
 COPY .env.example .env.example
 
 # Create non-root user
