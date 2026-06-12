@@ -63,6 +63,18 @@ app.conf.update(
         },
 
         # =================================================================
+        # Morning ASX data safety-net refresh (8am Mon-Fri)
+        # Ensures watchlist/signals reflect the latest EOD bars even if the
+        # primary 5pm refresh failed or the worker was down overnight.
+        # Skips gracefully on non-trading days (calendar gate inside task).
+        # =================================================================
+        "refresh-price-data-morning": {
+            "task": "app.tasks.screening.refresh_price_data",
+            "schedule": crontab(hour=8, minute=0, day_of_week="mon-fri"),
+            "options": {"queue": "screening_equities"},
+        },
+
+        # =================================================================
         # AstraTrade screener (runs after data refresh at 5:30pm)
         # =================================================================
         "run-screener": {

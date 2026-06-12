@@ -40,16 +40,35 @@
 </div>
 {% else %}
 
-<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:1rem">
-  <span class="tag">{{ signals|length }} signal{% if signals|length != 1 %}s{% endif %} today</span>
+<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap">
+  {% if pending_count > 0 %}
+  <span class="tag-blue" style="font-weight:700">{{ pending_count }} pending signal{% if pending_count != 1 %}s{% endif %}</span>
+  {% else %}
+  <span class="tag" style="color:var(--text-subtle)">No pending signals</span>
+  {% endif %}
+  {% if triggered_count > 0 %}
+  <span class="tag-pos" style="font-size:.7rem">✓ {{ triggered_count }} triggered</span>
+  {% endif %}
+  {% if skipped_count > 0 %}
+  <span class="tag" style="font-size:.7rem;color:var(--text-subtle)">{{ skipped_count }} skipped</span>
+  {% endif %}
   <span class="tag" style="color:var(--text-subtle)">{{ signal_date }}</span>
   <span style="font-size:.7rem;color:var(--text-subtle)">· Entry checks every 5 min during market hours</span>
 </div>
 
+{% set ns = namespace(shown_triggered_divider=false) %}
 <div style="display:flex;flex-direction:column;gap:1.25rem">
 {% for s in signals %}
+{% if not ns.shown_triggered_divider and s.status in ('TRIGGERED', 'SKIPPED') and loop.index > 1 %}
+{% set ns.shown_triggered_divider = true %}
+<div style="display:flex;align-items:center;gap:.75rem;margin-top:.25rem;margin-bottom:-.25rem">
+  <div style="flex:1;height:1px;background:var(--border)"></div>
+  <span style="font-size:.7rem;color:var(--text-subtle);font-weight:600;white-space:nowrap">Already actioned</span>
+  <div style="flex:1;height:1px;background:var(--border)"></div>
+</div>
+{% endif %}
 <div class="card overflow-hidden" id="sig-{{ s.id }}"
-     style="{% if s.status == 'TRIGGERED' %}border-color:var(--bull-border){% elif s.status == 'SKIPPED' %}opacity:.6{% endif %}">
+     style="{% if s.status == 'TRIGGERED' %}opacity:.65;border-color:var(--bull-border){% elif s.status == 'SKIPPED' %}opacity:.45{% endif %}">
 
   {# ── Header ───────────────────────────────────────────────────────── #}
   <div class="section-head">

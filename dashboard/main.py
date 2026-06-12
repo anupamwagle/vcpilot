@@ -1369,10 +1369,21 @@ async def signals(request: Request, db: Session = Depends(get_db),
             "is_promoted_vcp": bool(is_promoted_vcp),
             "last_check": last_check,
         })
+    # Sort: PENDING first (actionable), then TRIGGERED, then SKIPPED
+    _status_order = {"PENDING": 0, "TRIGGERED": 1, "SKIPPED": 2}
+    sig_data.sort(key=lambda x: _status_order.get(x["status"], 9))
+
+    pending_count   = sum(1 for s in sig_data if s["status"] == "PENDING")
+    triggered_count = sum(1 for s in sig_data if s["status"] == "TRIGGERED")
+    skipped_count   = sum(1 for s in sig_data if s["status"] == "SKIPPED")
+
     ef = _get_exchange_filters(org_id, db)
     ctx.update({
         "signals": sig_data,
         "signal_date": str(get_current_date()),
+        "pending_count":   pending_count,
+        "triggered_count": triggered_count,
+        "skipped_count":   skipped_count,
         "exchange_filters":       ef,
         "active_exchange_filter": af,
         "base_url":               "/signals",
@@ -1539,6 +1550,28 @@ async def watchlist(
 
     stock_names = get_cached_stock_names(db)
 
+    # ── Bulk-fetch latest PriceBar for all watchlist tickers in one query ──
+    # Avoids N individual DB hits inside the loop below (major perf win for
+    # large watchlists). Uses a DISTINCT ON subquery via raw SQL-friendly approach:
+    # select the max date per ticker, then join back to get full rows.
+    _wl_tickers = list({w.ticker for w in items})
+    _bar_lookup: dict[str, object] = {}  # ticker → latest PriceBar row
+    if _wl_tickers:
+        from sqlalchemy import func as _func
+        _sub = (
+            db.query(PriceBar.ticker, _func.max(PriceBar.date).label("max_date"))
+            .filter(PriceBar.ticker.in_(_wl_tickers))
+            .group_by(PriceBar.ticker)
+            .subquery()
+        )
+        _latest_bars = (
+            db.query(PriceBar)
+            .join(_sub, (PriceBar.ticker == _sub.c.ticker) & (PriceBar.date == _sub.c.max_date))
+            .all()
+        )
+        for _bar in _latest_bars:
+            _bar_lookup[_bar.ticker] = _bar
+
     watchlist_data = []
     for w in items:
         company_name = stock_names.get(w.ticker, "")
@@ -1582,8 +1615,8 @@ async def watchlist(
                     from app.data.fetcher import get_intraday_price
                     price_result = get_intraday_price(w.ticker, org_id, asset_type="CRYPTO")
                     if price_result.get("ok") and price_result.get("price"):
-                        # Merge live price into bar_data; keep MA/RS from PriceBar
-                        bar = db.query(PriceBar).filter(PriceBar.ticker == w.ticker).order_by(desc(PriceBar.date)).first()
+                        # Merge live price into bar_data; keep MA/RS from pre-fetched PriceBar
+                        bar = _bar_lookup.get(w.ticker)
                         bar_data = {
                             "close":     float(price_result["price"]),
                             "ma_50":     float(bar.ma_50  or 0) if bar else 0,
@@ -1613,7 +1646,8 @@ async def watchlist(
             cache_key = f"latest_price_bar:{w.ticker}"
             bar_data = cache.get(cache_key)
             if bar_data is None:
-                bar = db.query(PriceBar).filter(PriceBar.ticker == w.ticker).order_by(desc(PriceBar.date)).first()
+                # Use pre-fetched bar from bulk lookup — no per-item DB hit
+                bar = _bar_lookup.get(w.ticker)
                 if bar:
                     bar_data = {
                         "close":     float(bar.close or 0),
