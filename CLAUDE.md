@@ -219,6 +219,33 @@ docker compose --profile trading up ibkr -d
 ```
 It does NOT start with `docker compose up`. This is intentional — prevents accidental live connections. The broker falls back to `_simulate_order()` when IBKR is not connected. Always start paper mode first: `IBKR_PAPER_MODE=true`, `IBKR_PORT=4002`.
 
+### 32. ASX Universe Scope — Small Cap Coverage
+`asx_universe_scope` is a `SystemConfig` key (per org, default `"ASX200"`) controlling which stocks are loaded by `refresh_universe` and screened by `run_daily_screen`/`_run_screen_force`.
+
+| Value | Stocks | Source | Screener runtime |
+|---|---|---|---|
+| `ASX200` | ~200 | Wikipedia ASX200 | ~5 min |
+| `ASX300` | ~300 | Wikipedia ASX300 | ~8 min |
+| `ALL_LISTED` | ~2,200+ | ASX website CSV | ~15–45 min |
+
+`refresh_universe(scope, organization_id)` — accepts an explicit scope or reads from SystemConfig. Sets `in_asx200`, `in_asx300`, `in_index`, `index_name`, `market_cap` on Stock rows. For `ALL_LISTED` it chains `get_asx300_metadata()` (for index flags) then `get_asx_all_listed()` (for the full list).
+
+Config seeded in `seed_config.py` and `migrate_saas.py`. Admin Config shows a smart select dropdown. Health page has "🌏 Refresh ASX Universe" button with scope selector.
+
+### 33. Watchlist Sector Label Auto-Categorisation
+`infer_sector_label(sector, industry) -> str | None` in `app/data/fetcher.py` maps GICS sector/industry strings to 24 label categories using priority-ordered keyword matching.
+
+**Auto-assignment flow:**
+- `_upsert_watchlist()` — calls `_auto_assign_sector_label()` on every screener add/update (only fills unlabelled items)
+- `screen_single_ticker()` — calls `_auto_assign_sector_label()` when no explicit `label_id` provided by user
+- `recategorise_watchlist_labels(organization_id, force)` Celery task — bulk-assigns labels to existing watchlist (force=True overwrites all)
+
+**Label priority:** Only fills blank `label_id`. User-set labels (Favourites, High Priority, VCP Forming, Under Review) are preserved unless `force=True`.
+
+`_get_or_create_sector_label(name, org_id, db)` — looks up label by name, creates with preset colour if missing (sort_order=100).
+
+19 ASX sector labels seeded per org in `migrate_saas.py` at sort_order 20–38. Health page has "🏷 Re-categorise Labels" button.
+
 ### 29. Crypto Universe Bootstrap
 There is no scheduled `refresh_universe` equivalent for crypto — unlike ASX which scrapes Wikipedia weekly. Instead:
 - `get_top_crypto_tickers(exchange_key)` in `fetcher.py` returns the top-100 crypto tickers (hardcoded by market cap) in yfinance format. `TOP_CRYPTO_SYMBOLS` is the base list.
@@ -565,7 +592,7 @@ The WAHA webhook routes incoming messages to `http://api:8501/webhook/whatsapp`.
 
 ---
 
-## Session Handoff — Where We Are (8 Jun 2026)
+## Session Handoff — Where We Are (12 Jun 2026)
 
 **Current operational state (pick up here in next session):**
 

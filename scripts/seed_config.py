@@ -98,6 +98,15 @@ SYSTEM_CONFIGS = [
          label="Mock Market Regime", group="system",
          description="Simulated market regime shown when Mock Time is enabled (BULL / CAUTION / BEAR). Never overwrites the evaluated last_market_regime."),
 
+    # --- ASX Universe scope ---
+    dict(key="asx_universe_scope", value="ASX200", value_type="STRING",
+         label="ASX Universe Scope", group="trading",
+         description="Which ASX stocks to include in the screener universe. "
+                     "ASX200 = top 200 by market cap (default). "
+                     "ASX300 = top 300 (adds ~100 mid-caps). "
+                     "ALL_LISTED = all ~2,200+ ASX-listed companies (includes small caps). "
+                     "Larger scope = longer screener runtime."),
+
     # --- Multi-market / Exchange config ---
     dict(key="active_exchanges", value="ASX,CRYPTO_INDEPENDENTRESERVE", value_type="STRING",
          label="Active Exchanges", group="trading",

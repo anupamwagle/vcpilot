@@ -63,7 +63,7 @@
       <p class="section-title">💳 Accounts Associated</p>
     </div>
     {% if accounts %}
-    <table class="w-full text-left border-collapse">
+    <div class="tbl-wrap"><table class="w-full text-left border-collapse">
       <thead>
         <tr style="background:var(--surface-alt);border-bottom:1px solid var(--border)">
           <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Account Name</th>
@@ -88,7 +88,7 @@
         </tr>
         {% endfor %}
       </tbody>
-    </table>
+    </table></div>
     {% else %}
     <div class="p-6 text-center text-xs" style="color:var(--text-subtle)">No accounts found for this organisation.</div>
     {% endif %}
@@ -100,7 +100,7 @@
       <p class="section-title">👤 Organisation Users</p>
     </div>
     {% if users %}
-    <table class="w-full text-left border-collapse">
+    <div class="tbl-wrap"><table class="w-full text-left border-collapse">
       <thead>
         <tr style="background:var(--surface-alt);border-bottom:1px solid var(--border)">
           <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Name</th>
@@ -131,7 +131,7 @@
         </tr>
         {% endfor %}
       </tbody>
-    </table>
+    </table></div>
     {% else %}
     <div class="p-6 text-center text-xs" style="color:var(--text-subtle)">No users found for this organisation.</div>
     {% endif %}

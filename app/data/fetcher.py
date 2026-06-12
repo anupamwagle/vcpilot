@@ -22,6 +22,8 @@ from loguru import logger
 # ---------------------------------------------------------------------------
 
 ASX200_WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/S%26P/ASX_200"
+ASX300_WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/S%26P/ASX_300"
+ASX_ALL_LISTED_URL   = "https://www.asx.com.au/asx/research/listedCompanies.do?ajax=true"
 
 # ---------------------------------------------------------------------------
 # Ticker normalisation — convert user input to yfinance canonical format
@@ -302,6 +304,240 @@ def get_asx200_tickers() -> list[str]:
         "GMG.AX", "TCL.AX", "WDS.AX", "STO.AX", "QBE.AX", "IAG.AX",
         "AMP.AX", "SUN.AX",
     ]
+
+
+def get_asx300_tickers() -> list[str]:
+    """
+    Fetch current ASX300 constituents from Wikipedia.
+    Returns list in yfinance format: ["BHP.AX", "CBA.AX", ...]
+    Falls back to ASX200 if the ASX300 page is unavailable.
+    """
+    import io, requests as _req
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; AstraTrade/1.0; +https://github.com/anupamwagle/vcpilot)"}
+        resp = _req.get(ASX300_WIKIPEDIA_URL, headers=headers, timeout=20)
+        resp.raise_for_status()
+        tables = pd.read_html(io.StringIO(resp.text))
+        for tbl in tables:
+            cols_lower = [str(c).lower() for c in tbl.columns]
+            if "code" in cols_lower:
+                col = next(c for c in tbl.columns if str(c).lower() == "code")
+                codes = tbl[col].dropna().tolist()
+                tickers = [f"{str(c).strip().upper()}.AX" for c in codes if isinstance(c, str) and len(c.strip()) >= 2]
+                if len(tickers) > 150:
+                    logger.info(f"Fetched {len(tickers)} ASX300 tickers from Wikipedia")
+                    return tickers
+    except Exception as e:
+        logger.warning(f"Wikipedia ASX300 fetch failed: {e}. Falling back to ASX200.")
+    return get_asx200_tickers()
+
+
+def get_asx300_metadata() -> dict[str, dict]:
+    """
+    Fetch current ASX300 constituents with names and sectors from Wikipedia.
+    Returns dict of ticker -> {"name": str, "sector": str, "in_asx200": bool}
+    """
+    import io, requests as _req
+    results = {}
+    # First get ASX200 metadata so we can flag membership
+    asx200_meta = get_asx200_metadata()
+    asx200_tickers = set(asx200_meta.keys())
+
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; AstraTrade/1.0; +https://github.com/anupamwagle/vcpilot)"}
+        resp = _req.get(ASX300_WIKIPEDIA_URL, headers=headers, timeout=20)
+        resp.raise_for_status()
+        tables = pd.read_html(io.StringIO(resp.text))
+        for tbl in tables:
+            cols_lower = [str(c).lower() for c in tbl.columns]
+            if "code" in cols_lower:
+                code_col = next(c for c in tbl.columns if str(c).lower() == "code")
+                comp_col = next((c for c in tbl.columns if str(c).lower() == "company"), None)
+                sect_col = next((c for c in tbl.columns if str(c).lower() == "sector"), None)
+
+                for _, row in tbl.iterrows():
+                    code = row[code_col]
+                    if not isinstance(code, str) or len(code.strip()) < 2:
+                        continue
+                    ticker = f"{code.strip().upper()}.AX"
+                    name = str(row[comp_col]).strip() if comp_col is not None and pd.notna(row[comp_col]) else ""
+                    sector = str(row[sect_col]).strip() if sect_col is not None and pd.notna(row[sect_col]) else ""
+                    results[ticker] = {
+                        "name": name,
+                        "sector": sector,
+                        "in_asx200": ticker in asx200_tickers,
+                        "in_asx300": True,
+                    }
+
+                if len(results) > 150:
+                    logger.info(f"Fetched metadata for {len(results)} ASX300 tickers from Wikipedia")
+                    # Merge any ASX200 tickers not in ASX300 table (some Wikipedia pages differ)
+                    for t, m in asx200_meta.items():
+                        if t not in results:
+                            results[t] = {**m, "in_asx200": True, "in_asx300": True}
+                    return results
+    except Exception as e:
+        logger.warning(f"Wikipedia ASX300 metadata fetch failed: {e}")
+    # Fall back to ASX200 metadata
+    return {t: {**m, "in_asx200": True, "in_asx300": True} for t, m in asx200_meta.items()}
+
+
+def get_asx_all_listed() -> list[dict]:
+    """
+    Fetch ALL listed companies on the ASX from the ASX research endpoint.
+    Returns a list of dicts: [{"ticker": "BHP.AX", "name": str, "sector": str}, ...]
+
+    Uses the ASX's own CSV export. Falls back to ASX300 if unavailable.
+    Free, no auth, updates daily.
+    """
+    import io, requests as _req
+    url = ASX_ALL_LISTED_URL
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; AstraTrade/1.0)",
+            "Accept": "text/html,application/xhtml+xml,*/*",
+            "Referer": "https://www.asx.com.au/",
+        }
+        resp = _req.get(url, headers=headers, timeout=30)
+        resp.raise_for_status()
+        text = resp.text
+
+        # The ASX endpoint returns a CSV with a header preamble line
+        # Format: "ASX listed companies as at DD-Mon-YYYY\nASX code,Company name,Listing date,GICs industry group,Market Cap"
+        lines = text.strip().splitlines()
+        # Skip preamble lines until we hit the CSV header
+        csv_start = 0
+        for i, line in enumerate(lines):
+            if "asx code" in line.lower() or "code" in line.lower():
+                csv_start = i
+                break
+
+        csv_text = "\n".join(lines[csv_start:])
+        df = pd.read_csv(io.StringIO(csv_text), dtype=str)
+        df.columns = [c.strip().lower() for c in df.columns]
+
+        # Find the ticker and name columns (ASX uses varied column names)
+        code_col  = next((c for c in df.columns if "code" in c), None)
+        name_col  = next((c for c in df.columns if "company" in c or "name" in c), None)
+        gics_col  = next((c for c in df.columns if "gics" in c or "industry" in c), None)
+        mcap_col  = next((c for c in df.columns if "market" in c and "cap" in c), None)
+
+        if code_col is None:
+            logger.warning("ASX all-listed CSV: could not find code column")
+            return []
+
+        results = []
+        for _, row in df.iterrows():
+            code = str(row[code_col]).strip().upper() if code_col else ""
+            if not code or len(code) < 2 or code == "NAN":
+                continue
+            # Skip warrants, options, ETOs (codes longer than 3 chars are usually not equities)
+            # Keep up to 5-char codes (some legitimate small caps have 4-5 chars)
+            if len(code) > 5:
+                continue
+            name    = str(row[name_col]).strip()    if name_col  and pd.notna(row[name_col])  else ""
+            gics    = str(row[gics_col]).strip()    if gics_col  and pd.notna(row[gics_col])  else ""
+            mcap_str = str(row[mcap_col]).strip()   if mcap_col  and pd.notna(row[mcap_col])  else ""
+            try:
+                mcap = int(float(mcap_str.replace(",", "").replace("$", ""))) if mcap_str else None
+            except (ValueError, TypeError):
+                mcap = None
+
+            results.append({
+                "ticker": f"{code}.AX",
+                "name":   name,
+                "sector": gics,
+                "industry": gics,
+                "market_cap": mcap,
+            })
+
+        logger.info(f"Fetched {len(results)} ASX listed companies from ASX website")
+        return results
+
+    except Exception as e:
+        logger.warning(f"ASX all-listed fetch failed: {e}")
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Sector label inference — maps GICS sector/industry to human-readable labels
+# ---------------------------------------------------------------------------
+
+# Priority-ordered rules: most specific first. Each entry is (keywords_any, sector, label_name).
+# keywords_any: list of substrings — match if ANY appear in combined sector+industry string.
+# sector:       GICS sector string to match (None = match any sector).
+_SECTOR_LABEL_RULES: list[tuple[list[str], str | None, str]] = [
+    # ── Materials / Mining sub-sectors (most specific first) ────────────────
+    (["gold"],                          None,           "Gold"),
+    (["lithium"],                       None,           "Lithium"),
+    (["rare earth", "rare-earth"],      None,           "Rare Earth"),
+    (["uranium"],                       None,           "Uranium"),
+    (["silver"],                        None,           "Silver"),
+    (["copper"],                        None,           "Copper"),
+    (["nickel", "cobalt"],              None,           "Nickel & Cobalt"),
+    (["iron", "steel"],                 None,           "Iron & Steel"),
+    (["coal", "thermal"],               None,           "Coal"),
+    (["oil", "petroleum", "lng", "lpg"],None,           "Oil & Gas"),
+    (["gas", "natural gas"],            "Energy",       "Oil & Gas"),
+    (["mining", "mineral"],             "Basic Materials","Mining (General)"),
+    (["mining", "mineral"],             "Materials",    "Mining (General)"),
+    # ── Energy ──────────────────────────────────────────────────────────────
+    (["energy", "renewable", "solar", "wind"], "Energy","Energy"),
+    (["energy"],                        None,           "Energy"),
+    # ── Healthcare ──────────────────────────────────────────────────────────
+    (["biotechnology", "biotech"],      None,           "Biotech"),
+    (["pharmaceutical", "pharma"],      None,           "Healthcare / Pharma"),
+    (["medical", "hospital", "health"], None,           "Healthcare / Pharma"),
+    # ── Technology ──────────────────────────────────────────────────────────
+    (["fintech", "payment", "neobank"], None,           "FinTech"),
+    (["software", "saas", "cloud"],     None,           "Technology"),
+    (["semiconductor", "chip"],         None,           "Technology"),
+    (["technology", "tech", "data"],    None,           "Technology"),
+    # ── Financials ──────────────────────────────────────────────────────────
+    (["bank", "banking"],               None,           "Banks"),
+    (["insurance"],                     None,           "Insurance"),
+    (["asset management", "fund management"], None,     "Financials"),
+    (["financial"],                     None,           "Financials"),
+    # ── Real Estate ─────────────────────────────────────────────────────────
+    (["reit", "real estate"],           None,           "Real Estate (REIT)"),
+    # ── Consumer ────────────────────────────────────────────────────────────
+    (["retail", "consumer", "food", "beverage"], None,  "Consumer"),
+    # ── Industrials ─────────────────────────────────────────────────────────
+    (["industrial", "transport", "logistics"], None,    "Industrials"),
+    (["construction", "engineering"],   None,           "Industrials"),
+    # ── Telecoms / Media ────────────────────────────────────────────────────
+    (["telecom", "telco", "communication", "media"], None, "Telco / Media"),
+    # ── Utilities ───────────────────────────────────────────────────────────
+    (["utility", "utilities", "water", "electricity"], None, "Utilities"),
+    # ── Crypto ──────────────────────────────────────────────────────────────
+    (["crypto", "digital asset", "defi"], None,         "Crypto Core"),
+]
+
+
+def infer_sector_label(sector: str, industry: str) -> str | None:
+    """
+    Map a GICS sector + industry string to a human-readable watchlist label name.
+
+    Args:
+        sector:   e.g. "Basic Materials", "Information Technology"
+        industry: e.g. "Gold", "Software—Application", "Biotechnology"
+
+    Returns:
+        Label name string (e.g. "Gold", "FinTech") or None if no match.
+    """
+    s = (sector or "").lower().strip()
+    i = (industry or "").lower().strip()
+    combined = f"{s} {i}"
+
+    for keywords, req_sector, label_name in _SECTOR_LABEL_RULES:
+        # Check sector filter if specified
+        if req_sector and req_sector.lower() not in s:
+            continue
+        # Check if any keyword matches
+        if any(kw in combined for kw in keywords):
+            return label_name
+
+    return None
 
 
 def get_asx200_metadata() -> dict[str, dict]:

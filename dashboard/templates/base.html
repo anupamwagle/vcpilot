@@ -394,6 +394,114 @@
       font-size:.65rem;font-family:'SF Mono',Monaco,monospace;font-weight:700;
       padding:.08rem .35rem;border-radius:.2rem;
     }
+
+    /* ── Badge small variant ── */
+    .badge-sm { display:inline-flex;align-items:center;font-size:.65rem;font-weight:700;padding:.12rem .4rem;border-radius:9999px;border-width:1px; }
+
+    /* =============================================================
+       ANIMATIONS & INTERACTIONS
+    ============================================================= */
+
+    /* Card entrance — used by infinite scroll & page load */
+    @keyframes fadeInUp {
+      from { opacity:0; transform:translateY(10px); }
+      to   { opacity:1; transform:translateY(0); }
+    }
+    .card-enter { animation:fadeInUp .22s ease both; }
+
+    /* Card hover lift — opt-in with .card-lift */
+    .card-lift { transition:box-shadow .15s ease, transform .15s ease; }
+    .card-lift:hover { box-shadow:var(--shadow-md); transform:translateY(-1px); }
+
+    /* Metric cell hover — subtle highlight on individual metric cells */
+    .metric-cell { transition:background .12s ease; }
+    .metric-cell:hover { background:var(--surface-alt); }
+
+    /* =============================================================
+       MOBILE LAYOUT UTILITIES
+    ============================================================= */
+
+    /* Horizontal scroll strip — for filter chips, label pills */
+    .h-scroll {
+      display:flex; gap:.5rem; align-items:center;
+      overflow-x:auto; -webkit-overflow-scrolling:touch;
+      scrollbar-width:none; flex-wrap:nowrap; padding-bottom:2px;
+    }
+    .h-scroll::-webkit-scrollbar { display:none; }
+    .h-scroll > * { flex-shrink:0; }
+
+    /* Sticky filter bar — sticks below navbar on scroll */
+    .sticky-filters {
+      position:sticky; top:0; z-index:15;
+      background:var(--bg); padding:.4rem 0 .5rem;
+      margin-bottom:.25rem;
+    }
+
+    /* Responsive metrics grid — 2 cols on mobile, auto-fit on larger screens */
+    .metrics-grid {
+      display:grid;
+      grid-template-columns:repeat(2,1fr);
+      border-bottom:1px solid var(--border);
+    }
+    @media (min-width:640px) {
+      .metrics-grid { grid-template-columns:repeat(auto-fit,minmax(85px,1fr)); }
+    }
+
+    /* Section head — stacks on mobile, row on desktop */
+    .section-head-r {
+      display:flex; flex-direction:column; gap:.5rem;
+      padding:.75rem 1rem; border-bottom:1px solid var(--border);
+    }
+    @media (min-width:640px) {
+      .section-head-r { flex-direction:row; align-items:center; justify-content:space-between; }
+    }
+
+    /* Action row — button group that wraps on mobile */
+    .action-row { display:flex; flex-wrap:wrap; gap:.375rem; align-items:center; }
+
+    /* Table responsive wrapper */
+    .tbl-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+
+    /* =============================================================
+       COLLAPSIBLE RULE BADGES (uses <details> — zero JS)
+    ============================================================= */
+    details.rule-toggle > summary {
+      list-style:none; cursor:pointer;
+      display:flex; align-items:center; gap:.4rem;
+      padding:.45rem 1rem;
+      font-size:.7rem; font-weight:600; color:var(--text-muted);
+      border-top:1px solid var(--border);
+      user-select:none; transition:background .1s;
+    }
+    details.rule-toggle > summary:hover { background:var(--surface-alt); }
+    details.rule-toggle > summary::-webkit-details-marker { display:none; }
+    details.rule-toggle > summary::after {
+      content:'▸'; margin-left:auto; font-size:.6rem;
+      transition:transform .15s ease;
+    }
+    details.rule-toggle[open] > summary::after { transform:rotate(90deg); }
+    details.rule-toggle .rule-badge-list {
+      padding:.6rem 1rem .75rem;
+      display:flex; flex-wrap:wrap; gap:.35rem;
+    }
+
+    /* =============================================================
+       MOBILE OVERRIDES FOR SECTION-HEAD (existing component)
+    ============================================================= */
+    @media (max-width:639px) {
+      .section-head { flex-direction:column; align-items:flex-start; gap:.5rem; }
+      .section-head > div:last-child { width:100%; }
+      /* Make action buttons fill row on mobile */
+      .section-head > div:last-child { display:flex; flex-wrap:wrap; gap:.375rem; }
+    }
+
+    /* =============================================================
+       MOBILE TABLE: min-width so numeric columns don't collapse
+    ============================================================= */
+    @media (max-width:767px) {
+      .tbl-dense th, .tbl-dense td { padding:.38rem .5rem; font-size:.72rem; }
+      .tbl-dense { min-width:600px; }
+    }
   </style>
 </head>
 

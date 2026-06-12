@@ -139,7 +139,7 @@
     <p class="text-xs" style="color:var(--text-subtle)">Close = mark as closed, record trade, notify {% if notification_channel == 'telegram' %}Telegram{% else %}WhatsApp{% endif %}</p>
   </div>
   {% if positions %}
-  <div class="table-responsive">
+  <div class="tbl-wrap">
     <table class="tbl tbl-dense">
       <thead><tr>
         <th class="tl">Ticker</th>
@@ -353,7 +353,7 @@
     {% if trades %}<span class="tag">{{ trade_count }} total</span>{% endif %}
   </div>
   {% if trades %}
-  <div class="table-responsive">
+  <div class="tbl-wrap">
     <table class="tbl tbl-dense">
       <thead><tr>
         <th class="tl">Ticker</th>

@@ -459,6 +459,51 @@ def migrate():
                            "is_default": lis_default, "sort_order": lorder})
                 conn.commit()
 
+            # Seed asx_universe_scope config key if not present
+            conn.execute(text("""
+                INSERT INTO system_configs (key, value, value_type, label, group_name, description, organization_id)
+                VALUES ('asx_universe_scope', 'ASX200', 'STRING', 'ASX Universe Scope', 'trading',
+                        'ASX200 = top 200 | ASX300 = top 300 | ALL_LISTED = all ~2200+ companies', :org_id)
+                ON CONFLICT DO NOTHING;
+            """), {"org_id": org_id})
+            conn.commit()
+
+            # Seed ASX sector watchlist labels if org has ASX active
+            has_asx_active = "ASX" in active_exc_val.split(",")
+            asx_sector_labels = [
+                ("Gold",               "#f59e0b", 20),
+                ("Lithium",            "#10b981", 21),
+                ("Rare Earth",         "#8b5cf6", 22),
+                ("Uranium",            "#f97316", 23),
+                ("Silver",             "#94a3b8", 24),
+                ("Iron & Steel",       "#64748b", 25),
+                ("Oil & Gas",          "#dc2626", 26),
+                ("Biotech",            "#ec4899", 27),
+                ("Healthcare / Pharma","#06b6d4", 28),
+                ("FinTech",            "#6366f1", 29),
+                ("Technology",         "#3b82f6", 30),
+                ("Banks",              "#1e40af", 31),
+                ("Financials",         "#1d4ed8", 32),
+                ("Real Estate (REIT)", "#7c3aed", 33),
+                ("Energy",             "#f97316", 34),
+                ("Mining (General)",   "#92400e", 35),
+                ("Consumer",           "#16a34a", 36),
+                ("Industrials",        "#78716c", 37),
+                ("Telco / Media",      "#0891b2", 38),
+            ]
+            if has_asx_active:
+                for lname, lcolor, lorder in asx_sector_labels:
+                    exists = conn.execute(text("""
+                        SELECT 1 FROM watchlist_labels
+                        WHERE organization_id = :org_id AND name = :name LIMIT 1;
+                    """), {"org_id": org_id, "name": lname}).fetchone()
+                    if not exists:
+                        conn.execute(text("""
+                            INSERT INTO watchlist_labels (organization_id, name, color, is_default, sort_order)
+                            VALUES (:org_id, :name, :color, false, :sort_order);
+                        """), {"org_id": org_id, "name": lname, "color": lcolor, "sort_order": lorder})
+                conn.commit()
+
             # Seed crypto-specific watchlist labels if org has a CRYPTO exchange active
             active_exc_row = conn.execute(text("""
                 SELECT value FROM system_configs

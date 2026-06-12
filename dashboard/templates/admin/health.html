@@ -30,6 +30,8 @@
 {% elif msg == 'screen' %}<div class="alert-info mb-4">Screener queued — results appear in Signals within minutes.</div>
 {% elif msg == 'report' %}<div class="alert-info mb-4">Daily report queued — {% if notification_channel == 'telegram' %}Telegram{% else %}WhatsApp{% endif %} message incoming.</div>
 {% elif msg == 'crypto_seed' %}<div class="alert-success mb-4">Crypto universe seeding queued — top 50 tokens will be added. Then run Refresh Data to fetch prices.</div>
+{% elif msg == 'universe' %}<div class="alert-success mb-4">ASX universe refresh queued — stocks will be added/updated per the selected scope. Check Task Log for progress.</div>
+{% elif msg == 'recategorise' %}<div class="alert-success mb-4">Watchlist label re-categorisation queued — sector labels will be assigned to unlabelled items. Check Task Log.</div>
 {% endif %}
 
 {% if is_first_run %}
@@ -252,6 +254,29 @@
       </form>
       {% endif %}
     </div>
+
+    {% if has_asx %}
+    <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;padding-top:.75rem;border-top:1px solid var(--border)">
+      <span class="text-xs font-semibold" style="color:var(--text-subtle);white-space:nowrap">ASX Universe:</span>
+
+      <form method="post" action="/action/refresh-universe" style="display:inline-flex;align-items:center;gap:.35rem">
+        <select name="scope" class="input py-1 text-xs" style="width:auto">
+          <option value="ASX200">ASX200 (200 stocks)</option>
+          <option value="ASX300">ASX300 (300 stocks)</option>
+          <option value="ALL_LISTED">All Listed (~2,200+)</option>
+        </select>
+        <button type="submit" class="btn-ghost text-xs py-1.5">&#x1F30F; Refresh ASX Universe</button>
+      </form>
+
+      <form method="post" action="/action/recategorise-labels" style="display:inline-flex;align-items:center;gap:.35rem">
+        <select name="force" class="input py-1 text-xs" style="width:auto">
+          <option value="0">Unlabelled only</option>
+          <option value="1">Force (overwrite all)</option>
+        </select>
+        <button type="submit" class="btn-ghost text-xs py-1.5">&#x1F3F7; Re-categorise Labels</button>
+      </form>
+    </div>
+    {% endif %}
   </div>
 </div>
 

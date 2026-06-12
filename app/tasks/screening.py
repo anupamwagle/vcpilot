@@ -14,7 +14,10 @@ from app.models.market import Stock, PriceBar
 from app.models.audit import AuditLog, AuditAction
 from app.models.config import SystemConfig
 from app.data.fetcher import (
-    get_asx200_tickers, get_asx200_metadata, get_price_history, get_batch_prices,
+    get_asx200_tickers, get_asx200_metadata,
+    get_asx300_tickers, get_asx300_metadata,
+    get_asx_all_listed, infer_sector_label,
+    get_price_history, get_batch_prices,
     get_fundamentals, compute_rs_ratings, get_top_crypto_tickers, normalize_ticker,
 )
 from app.data.calendar import today_is_trading_day
@@ -142,14 +145,72 @@ def refresh_crypto_universe(self, exchange_key: str = "CRYPTO_INDEPENDENTRESERVE
 
 
 @app.task(name="app.tasks.screening.refresh_universe", bind=True, max_retries=3)
-def refresh_universe(self):
-    """Update ASX200 stock universe in the database, including names and sectors."""
-    logger.info("Refreshing ASX universe...")
+def refresh_universe(self, scope: str = None, organization_id: int = None):
+    """
+    Update ASX stock universe in the database, including names and sectors.
+
+    Args:
+        scope: Universe scope — "ASX200" (default), "ASX300", "ALL_LISTED".
+               If None, reads 'asx_universe_scope' from the org's SystemConfig.
+        organization_id: Org to read config from (uses first active org if None).
+    """
+    # Resolve scope from config if not passed
+    if scope is None:
+        try:
+            with get_db() as db:
+                cfg_query = db.query(SystemConfig).filter(SystemConfig.key == "asx_universe_scope")
+                if organization_id:
+                    cfg_query = cfg_query.filter(SystemConfig.organization_id == organization_id)
+                cfg = cfg_query.first()
+                scope = (cfg.value or "ASX200") if cfg else "ASX200"
+        except Exception:
+            scope = "ASX200"
+
+    scope = (scope or "ASX200").upper().strip()
+    logger.info(f"Refreshing ASX universe (scope={scope})...")
+
     try:
         with get_db() as db:
-            db.add(AuditLog(action=AuditAction.TASK_RUN, message="[ASX] Universe refresh started — fetching ASX200 constituents..."))
-        metadata = get_asx200_metadata()
-        tickers = get_asx200_tickers()
+            db.add(AuditLog(
+                action=AuditAction.TASK_RUN,
+                message=f"[ASX] Universe refresh started — scope={scope}",
+                organization_id=organization_id,
+            ))
+
+        # ── Fetch data based on scope ──────────────────────────────────────
+        if scope == "ASX300":
+            metadata = get_asx300_metadata()   # includes in_asx200/in_asx300 flags
+            tickers  = get_asx300_tickers()
+        elif scope == "ALL_LISTED":
+            # Full ASX listing — includes small caps
+            all_rows = get_asx_all_listed()
+            if not all_rows:
+                logger.warning("ASX all-listed fetch returned nothing — falling back to ASX300")
+                metadata = get_asx300_metadata()
+                tickers  = get_asx300_tickers()
+            else:
+                # Build metadata dict from all-listed response
+                asx300_meta = get_asx300_metadata()  # for in_asx200/in_asx300 flags
+                metadata = {}
+                for row in all_rows:
+                    t = row["ticker"]
+                    asx300_info = asx300_meta.get(t, {})
+                    metadata[t] = {
+                        "name":      row.get("name", ""),
+                        "sector":    row.get("sector", ""),
+                        "industry":  row.get("industry", ""),
+                        "market_cap": row.get("market_cap"),
+                        "in_asx200": asx300_info.get("in_asx200", False),
+                        "in_asx300": asx300_info.get("in_asx300", False),
+                    }
+                tickers = list(metadata.keys())
+        else:
+            # Default: ASX200
+            metadata = get_asx200_metadata()
+            tickers  = get_asx200_tickers()
+
+        seeded = 0
+        updated = 0
         with get_db() as db:
             for ticker in tickers:
                 asx_code = ticker.replace(".AX", "")
@@ -157,6 +218,10 @@ def refresh_universe(self):
                 meta = metadata.get(ticker, {})
                 name = meta.get("name", "")
                 sector = meta.get("sector", "")
+                industry = meta.get("industry", "")
+                market_cap = meta.get("market_cap")
+                in_asx200 = meta.get("in_asx200", scope == "ASX200")
+                in_asx300 = meta.get("in_asx300", scope in ("ASX200", "ASX300"))
 
                 if not stock:
                     stock = Stock(
@@ -166,28 +231,47 @@ def refresh_universe(self):
                         exchange_key="ASX",
                         asset_type="EQUITY",
                         currency="AUD",
-                        in_asx200=True,
+                        in_asx200=in_asx200,
+                        in_asx300=in_asx300,
+                        in_index=in_asx200,
+                        index_name="ASX200" if in_asx200 else ("ASX300" if in_asx300 else ""),
                         name=name,
                         sector=sector,
+                        industry=industry,
+                        market_cap=market_cap,
                         is_active=True,
                     )
                     db.add(stock)
+                    seeded += 1
                 else:
-                    stock.in_asx200 = True
+                    if in_asx200:
+                        stock.in_asx200 = True
+                        stock.in_index  = True
+                        stock.index_name = "ASX200"
+                    if in_asx300:
+                        stock.in_asx300 = True
                     if not stock.exchange_code:
                         stock.exchange_code = asx_code
                     if not stock.exchange_key:
                         stock.exchange_key = "ASX"
-                    if name and not stock.name:
+                    if name and (not stock.name or stock.name == asx_code):
                         stock.name = name
                     if sector and not stock.sector:
                         stock.sector = sector
+                    if industry and not stock.industry:
+                        stock.industry = industry
+                    if market_cap and not stock.market_cap:
+                        stock.market_cap = market_cap
+                    updated += 1
 
             db.add(AuditLog(
                 action=AuditAction.SYSTEM_STARTED,
-                message=f"Universe refreshed: {len(tickers)} stocks",
+                organization_id=organization_id,
+                message=f"[ASX] Universe refreshed ({scope}): {seeded} new + {updated} updated = {len(tickers)} total stocks",
             ))
-        logger.info(f"Universe updated: {len(tickers)} ASX200 tickers")
+
+        logger.info(f"Universe updated: {len(tickers)} tickers (scope={scope}, {seeded} new, {updated} updated)")
+
     except Exception as exc:
         logger.error(f"Universe refresh failed: {exc}")
         raise self.retry(exc=exc, countdown=300)
@@ -1175,6 +1259,106 @@ def _run_screen_force(self, organization_id: int = None, exchange_key: str = "AS
         logger.error(f"Force screen failed: {exc}")
 
 
+def _get_or_create_sector_label(label_name: str, organization_id: int, db) -> int | None:
+    """
+    Look up a WatchlistLabel by name for the given org.
+    Creates it if it doesn't exist.
+    Returns the label id or None on error.
+
+    Sector labels use a consistent colour map defined below.
+    """
+    from app.models.signal import WatchlistLabel
+
+    _SECTOR_COLOURS = {
+        "Gold":               "#f59e0b",   # amber
+        "Lithium":            "#10b981",   # emerald
+        "Rare Earth":         "#8b5cf6",   # violet
+        "Uranium":            "#f97316",   # orange
+        "Silver":             "#94a3b8",   # slate
+        "Copper":             "#d97706",   # amber-dark
+        "Nickel & Cobalt":    "#0ea5e9",   # sky
+        "Iron & Steel":       "#64748b",   # slate-500
+        "Coal":               "#374151",   # gray-dark
+        "Oil & Gas":          "#dc2626",   # red
+        "Energy":             "#f97316",   # orange
+        "Mining (General)":   "#92400e",   # brown
+        "Biotech":            "#ec4899",   # pink
+        "Healthcare / Pharma":"#06b6d4",   # cyan
+        "FinTech":            "#6366f1",   # indigo
+        "Technology":         "#3b82f6",   # blue
+        "Banks":              "#1e40af",   # blue-dark
+        "Insurance":          "#0f766e",   # teal
+        "Financials":         "#1d4ed8",   # blue
+        "Real Estate (REIT)": "#7c3aed",   # violet
+        "Consumer":           "#16a34a",   # green
+        "Industrials":        "#78716c",   # stone
+        "Telco / Media":      "#0891b2",   # cyan-dark
+        "Utilities":          "#65a30d",   # lime
+        "Crypto Core":        "#06b6d4",   # cyan
+    }
+
+    try:
+        existing = db.query(WatchlistLabel).filter(
+            WatchlistLabel.organization_id == organization_id,
+            WatchlistLabel.name == label_name,
+        ).first()
+        if existing:
+            return existing.id
+
+        # Create new sector label
+        colour = _SECTOR_COLOURS.get(label_name, "#6b7280")  # default gray
+        new_label = WatchlistLabel(
+            organization_id=organization_id,
+            name=label_name,
+            color=colour,
+            is_default=False,
+            sort_order=100,  # sector labels after default labels (0–13)
+        )
+        db.add(new_label)
+        db.flush()  # get the id without full commit
+        return new_label.id
+    except Exception as e:
+        logger.warning(f"Could not get/create sector label '{label_name}' for org {organization_id}: {e}")
+        return None
+
+
+def _auto_assign_sector_label(ticker: str, wl_item, organization_id: int, db, force: bool = False):
+    """
+    Auto-assign a sector WatchlistLabel to the watchlist item based on the stock's sector/industry.
+
+    Only assigns if:
+    - The item has no label yet (or force=True to override any non-default label)
+    - The stock has sector/industry data
+
+    Does NOT override Favourites, High Priority, VCP Forming, or Under Review unless force=True.
+    """
+    from app.models.market import Stock
+    from app.models.signal import WatchlistLabel
+
+    # Skip if already has a label and not forcing
+    if wl_item.label_id and not force:
+        return
+
+    stock = db.query(Stock).filter(Stock.ticker == ticker).first()
+    if not stock:
+        return
+
+    sector   = stock.sector   or ""
+    industry = stock.industry or ""
+
+    # If no sector data available yet, skip (will be filled on next screener run)
+    if not sector and not industry:
+        return
+
+    label_name = infer_sector_label(sector, industry)
+    if not label_name:
+        return
+
+    label_id = _get_or_create_sector_label(label_name, organization_id, db)
+    if label_id:
+        wl_item.label_id = label_id
+
+
 def _upsert_watchlist(ticker: str, rule_results: dict, db, organization_id: int):
     """Add or update a stock on the watchlist."""
     from app.models.signal import Watchlist, WatchlistStatus
@@ -1192,7 +1376,7 @@ def _upsert_watchlist(ticker: str, rule_results: dict, db, organization_id: int)
         Watchlist.status == WatchlistStatus.WATCHING
     ).first()
     if not existing:
-        db.add(Watchlist(
+        new_item = Watchlist(
             ticker=ticker,
             exchange_key=exchange_key,
             asset_type=asset_type,
@@ -1200,13 +1384,18 @@ def _upsert_watchlist(ticker: str, rule_results: dict, db, organization_id: int)
             organization_id=organization_id,
             rule_results=serialize_rule_results(rule_results),
             added_by="screener",
-        ))
+        )
+        db.add(new_item)
+        db.flush()  # so new_item.id is populated
+        _auto_assign_sector_label(ticker, new_item, organization_id, db)
     else:
         existing.rule_results = serialize_rule_results(rule_results)
         # Ensure metadata is updated if it was previously default
         existing.exchange_key = exchange_key
         existing.asset_type = asset_type
         existing.currency = currency
+        # Assign sector label if not already set
+        _auto_assign_sector_label(ticker, existing, organization_id, db)
 
 
 def _update_watchlist_if_exists(ticker: str, rule_results: dict, db, organization_id: int):
@@ -1361,11 +1550,16 @@ def screen_single_ticker(
             "eps_quarterly": [], "revenue_quarterly": [], "roe": None,
             "net_margin": None, "inst_ownership_pct": None, "next_earnings_date": None,
         }
-        if fundamentals.get("company_name"):
+        if fundamentals.get("company_name") or fundamentals.get("sector") or fundamentals.get("industry"):
             with get_db() as db:
                 stock_db = db.query(Stock).filter(Stock.ticker == ticker).first()
                 if stock_db:
-                    stock_db.name = fundamentals["company_name"]
+                    if fundamentals.get("company_name"):
+                        stock_db.name = fundamentals["company_name"]
+                    if fundamentals.get("sector") and not stock_db.sector:
+                        stock_db.sector = fundamentals["sector"]
+                    if fundamentals.get("industry") and not stock_db.industry:
+                        stock_db.industry = fundamentals["industry"]
                     db.add(stock_db)
                     db.commit()
 
@@ -1489,7 +1683,7 @@ def screen_single_ticker(
                 ).first()
 
                 if not existing_wl:
-                    db.add(Watchlist(
+                    new_wl = Watchlist(
                         ticker=ticker,
                         exchange_key=exchange_key,
                         asset_type=asset_type,
@@ -1501,7 +1695,12 @@ def screen_single_ticker(
                         notes=notes,
                         label_id=label_id,
                         rule_results=serialize_rule_results(all_rule_results)
-                    ))
+                    )
+                    db.add(new_wl)
+                    db.flush()
+                    # Auto-assign sector label only if no explicit label was provided
+                    if not label_id:
+                        _auto_assign_sector_label(ticker, new_wl, organization_id, db)
                     db.add(AuditLog(
                         action=AuditAction.SCREENER_TICKER,
                         organization_id=organization_id,
@@ -1520,6 +1719,8 @@ def screen_single_ticker(
                         existing_wl.notes = notes
                     if label_id is not None:
                         existing_wl.label_id = label_id
+                    elif not existing_wl.label_id:
+                        _auto_assign_sector_label(ticker, existing_wl, organization_id, db)
                     db.add(AuditLog(
                         action=AuditAction.SCREENER_TICKER,
                         organization_id=organization_id,
@@ -1541,4 +1742,51 @@ def screen_single_ticker(
                 detail={"result": "error"}
             ))
             db.commit()
+
+
+@app.task(name="app.tasks.screening.recategorise_watchlist_labels", bind=True)
+def recategorise_watchlist_labels(self, organization_id: int = None, force: bool = False):
+    """
+    Bulk-assign sector labels to all WATCHING watchlist items for the given org
+    based on each stock's sector/industry data.
+
+    Args:
+        organization_id: Org to process. Loops all active orgs if None.
+        force: If True, overwrites existing non-default labels too.
+               If False (default), only fills in unlabelled items.
+    """
+    from app.models.account import Organization
+    from app.models.signal import Watchlist, WatchlistStatus
+
+    try:
+        with get_db() as db:
+            if organization_id:
+                orgs = db.query(Organization).filter(Organization.id == organization_id).all()
+            else:
+                orgs = db.query(Organization).filter(Organization.is_active == True).all()
+
+        for org in orgs:
+            assigned = 0
+            with get_db() as db:
+                items = db.query(Watchlist).filter(
+                    Watchlist.organization_id == org.id,
+                    Watchlist.status == WatchlistStatus.WATCHING,
+                ).all()
+
+                for item in items:
+                    before = item.label_id
+                    _auto_assign_sector_label(item.ticker, item, org.id, db, force=force)
+                    if item.label_id != before:
+                        assigned += 1
+
+                db.add(AuditLog(
+                    action=AuditAction.TASK_RUN,
+                    organization_id=org.id,
+                    message=f"Watchlist re-categorised: {assigned}/{len(items)} items assigned sector labels (force={force})",
+                ))
+
+            logger.info(f"Org {org.name}: re-categorised {assigned}/{len(items)} watchlist items")
+
+    except Exception as exc:
+        logger.error(f"Watchlist re-categorisation failed: {exc}")
 

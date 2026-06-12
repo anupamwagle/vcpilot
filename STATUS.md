@@ -1,12 +1,16 @@
 # AstraTrade — Operational Status
 
-> Last updated: 8 June 2026 AEST. Update this file when major milestones are reached.
+> Last updated: 12 June 2026 AEST. Update this file when major milestones are reached.
 
 ---
 
 ## Current Phase: 3 — Multi-Market Support (ASX + US Equities + Crypto Foundation)
 
 ### ✅ Done
+
+- **Expanded ASX Universe & Sector Label Auto-Categorisation (12 Jun 2026):**
+  - **Expanded ASX universe beyond ASX200:** New `asx_universe_scope` SystemConfig key (default `ASX200`) controls which stocks the screener scans. Three options: `ASX200` (top 200, fast), `ASX300` (top 300, adds ~100 mid-caps), `ALL_LISTED` (full ~2,200+ ASX-listed companies from ASX website CSV, slow but covers all small caps). New fetchers added to `app/data/fetcher.py`: `get_asx300_tickers()` / `get_asx300_metadata()` from Wikipedia, `get_asx_all_listed()` from `asx.com.au` CSV export. `refresh_universe` task updated to accept `scope` param (reads from SystemConfig if not passed), flags `in_asx300=True` on ASX300 members, populates `index_name` / `market_cap` on new stocks. Health page has a new "🌏 Refresh ASX Universe" button with a scope selector. Admin Config shows a smart dropdown for `asx_universe_scope`.
+  - **Watchlist sector label auto-categorisation:** New `infer_sector_label(sector, industry)` function in `fetcher.py` maps GICS sector/industry strings to 24 human-readable label categories (Gold, Lithium, Rare Earth, Uranium, Silver, Copper, Iron & Steel, Oil & Gas, Energy, Biotech, Healthcare/Pharma, FinTech, Technology, Banks, Financials, Real Estate (REIT), Consumer, Industrials, Telco/Media, Utilities, Crypto Core). Sector labels are auto-assigned when stocks are added to the watchlist by the screener (`_upsert_watchlist`) or manually added (`screen_single_ticker`). Only fills in unlabelled items — never overrides explicit user-set labels (Favourites, High Priority, VCP Forming, Under Review). New `recategorise_watchlist_labels` Celery task bulk-assigns labels to all existing unlabelled items (supports `force=True` to overwrite all). `migrate_saas.py` seeds 19 ASX sector labels per org on startup (sort_order 20–38, after crypto labels). Health page has a "🏷 Re-categorise Labels" button with "Unlabelled only" / "Force (overwrite all)" options.
 
 - **Critical Bug Audit & Regression Test Suite (8 Jun 2026 — Session 4):**
   - **Trigger:** User manually promoted TRX-AUD from Watchlist → Signals to watch it closely and "nothing happened." Given the imminent move to live trading with real capital, this prompted a full audit of the watchlist→signal→position→trade lifecycle for similar silent-failure bugs — 5 critical bug clusters were found and fixed, and a pytest regression suite was built to lock them in.

@@ -2357,6 +2357,34 @@ async def action_refresh_data(request: Request, exchange: str = Form(None)):
     return RedirectResponse("/admin/health?msg=data", 302)
 
 
+@app.post("/action/refresh-universe")
+async def action_refresh_universe(request: Request, scope: str = Form(None)):
+    """Refresh ASX universe with configurable scope (ASX200 / ASX300 / ALL_LISTED)."""
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    org_id = request.session.get("org_id")
+    from app.tasks.screening import refresh_universe
+    try:
+        refresh_universe.delay(scope=scope or None, organization_id=org_id)
+    except Exception:
+        pass
+    return RedirectResponse("/admin/health?msg=universe", 302)
+
+
+@app.post("/action/recategorise-labels")
+async def action_recategorise_labels(request: Request, force: str = Form("0")):
+    """Bulk-assign sector labels to all unlabelled watchlist items."""
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    org_id = request.session.get("org_id")
+    from app.tasks.screening import recategorise_watchlist_labels
+    try:
+        recategorise_watchlist_labels.delay(organization_id=org_id, force=(force == "1"))
+    except Exception:
+        pass
+    return RedirectResponse("/admin/health?msg=recategorise", 302)
+
+
 @app.post("/action/seed-crypto")
 async def action_seed_crypto(request: Request, exchange: str = Form("CRYPTO_INDEPENDENTRESERVE")):
     """Seed (or refresh) the crypto stock universe for an exchange."""
@@ -2932,6 +2960,13 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
         "whatsapp_session_name": {"placeholder": "default",
                                   "hint_extra": "WAHA session name. Use 'default' for shared WAHA Core instance."},
         "whatsapp_enabled":      {},   # boolean
+        # ASX Universe
+        "asx_universe_scope":    {"control": "select", "options": [
+                                     ("ASX200",     "ASX200 — Top 200 by market cap (default, fast)"),
+                                     ("ASX300",     "ASX300 — Top 300 incl. mid-caps (~300 stocks)"),
+                                     ("ALL_LISTED", "All Listed — Full ASX universe ~2,200+ stocks (slow)"),
+                                 ],
+                                  "hint_extra": "Controls which ASX stocks the screener scans. Larger scope = longer screener runtime (~15–45 min for ALL_LISTED). Run 'Refresh ASX Universe' after changing."},
         # Data
         "fmp_api_key":           {"control": "password",
                                   "hint_extra": "Financial Modeling Prep API key (free tier: 250 calls/day)",

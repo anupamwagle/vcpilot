@@ -26,12 +26,14 @@
   </div>
 </div>
 
-<!-- ── Exchange filter bar ───────────────────────────────────────────── -->
-{% set base_url = "/watchlist" %}
-{% set extra_params = ("label=" ~ active_label) if active_label is not none else "" %}
-{% include "components/exchange_filter.html" %}
-<div style="display:flex;justify-content:flex-end;padding:.25rem 0 .25rem;margin-bottom:-.5rem">
-  <span id="wl-refresh-timer" style="font-size:.65rem;color:var(--text-subtle);font-family:'SF Mono',monospace">Auto-refreshes every 90s</span>
+<!-- ── Sticky filter bar (exchange + refresh timer) ─────────────────── -->
+<div class="sticky-filters">
+  {% set base_url = "/watchlist" %}
+  {% set extra_params = ("label=" ~ active_label) if active_label is not none else "" %}
+  {% include "components/exchange_filter.html" %}
+  <div style="display:flex;justify-content:flex-end;padding:.2rem 0 0;margin-top:-.25rem">
+    <span id="wl-refresh-timer" style="font-size:.62rem;color:var(--text-subtle);font-family:'SF Mono',monospace">Auto-refreshes every 90s</span>
+  </div>
 </div>
 
 {% if has_crypto and crypto_tickers %}
@@ -197,7 +199,7 @@
 {% endif %}
 
 <!-- ── Label filter chips ─────────────────────────────────────────────── -->
-<div style="display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin-bottom:1.25rem">
+<div class="h-scroll" style="margin-bottom:1.25rem;padding:.125rem 0">
   <!-- All labels -->
   {% set exc_param = ("&exchange=" ~ active_exchange_filter) if active_exchange_filter and active_exchange_filter != 'ALL' else "" %}
   <a href="/watchlist{{ exc_param.replace('&','?') }}"
@@ -435,10 +437,17 @@ if (checked) {
         // Remove old meta div before appending new content
         const oldMeta = container.querySelector('[data-wl-meta]');
         if (oldMeta) oldMeta.remove();
-        // Insert new cards HTML
+        // Insert new cards HTML with staggered entrance animation
         const tmp = document.createElement('div');
         tmp.innerHTML = html;
-        Array.from(tmp.childNodes).forEach(n => container.appendChild(n));
+        let delay = 0;
+        Array.from(tmp.childNodes).forEach(n => {
+          if (n.nodeType === 1 && n.classList && n.classList.contains('card')) {
+            n.style.animationDelay = delay + 'ms';
+            delay += 40;
+          }
+          container.appendChild(n);
+        });
         // Read updated state from new meta div
         state = readMeta();
         fetching = false;

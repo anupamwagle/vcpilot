@@ -1,9 +1,9 @@
 {# Partial: watchlist card list. Rendered by both /watchlist (full page) and /watchlist/rows (fragment). #}
 {# Required context: watchlist, labels, favourited_tickers, path, has_more, page, active_label #}
 {% for w in watchlist %}
-<div class="card overflow-hidden">
+<div class="card overflow-hidden card-lift card-enter">
   <!-- Card header -->
-  <div class="section-head">
+  <div class="section-head-r">
     <div style="display:flex;align-items:center;gap:.625rem;flex-wrap:wrap">
       <!-- Label colour dot + ticker -->
       <div style="display:flex;align-items:center;gap:.4rem">
@@ -45,21 +45,23 @@
       {% endif %}
     </div>
     <div style="display:flex;align-items:center;gap:.5rem">
-      <!-- Label picker -->
-      <form method="post" action="/watchlist/{{ w.id }}/set-label" style="display:inline">
-        <select name="label_id" onchange="this.form.submit()" class="input" style="height:1.8rem;font-size:.7rem;padding:.1rem .4rem;min-width:90px">
-          <option value="">No label</option>
-          {% for lbl in labels %}
-          <option value="{{ lbl.id }}" {% if w.label and w.label.id == lbl.id %}selected{% endif %}>{{ lbl.name }}</option>
-          {% endfor %}
-        </select>
-      </form>
-      <form method="post" action="/watchlist/{{ w.id }}/promote">
-        <button type="submit" class="btn-primary text-xs py-1 px-2.5" style="background:var(--pos);color:white">Promote</button>
-      </form>
-      <form method="post" action="/watchlist/{{ w.id }}/remove">
-        <button type="submit" class="btn-ghost text-xs py-1 px-2" style="color:var(--neg)">Remove</button>
-      </form>
+      <div class="action-row">
+        <!-- Label picker -->
+        <form method="post" action="/watchlist/{{ w.id }}/set-label" style="display:inline">
+          <select name="label_id" onchange="this.form.submit()" class="input" style="height:1.8rem;font-size:.7rem;padding:.1rem .4rem;min-width:90px;width:auto">
+            <option value="">No label</option>
+            {% for lbl in labels %}
+            <option value="{{ lbl.id }}" {% if w.label and w.label.id == lbl.id %}selected{% endif %}>{{ lbl.name }}</option>
+            {% endfor %}
+          </select>
+        </form>
+        <form method="post" action="/watchlist/{{ w.id }}/promote">
+          <button type="submit" class="btn-primary text-xs py-1 px-2.5" style="background:var(--pos);color:white">Promote</button>
+        </form>
+        <form method="post" action="/watchlist/{{ w.id }}/remove">
+          <button type="submit" class="btn-ghost text-xs py-1 px-2" style="color:var(--neg)">Remove</button>
+        </form>
+      </div>
     </div>
   </div>
 
@@ -76,44 +78,44 @@
   {% set pct200 = ((st.close - st.ma_200) / st.ma_200 * 100) if st.ma_200 and st.ma_200 > 0 else none %}
   {% set pct52 = ((st.close - st.high_52w) / st.high_52w * 100) if st.high_52w and st.high_52w > 0 else none %}
   {% set rs_v = st.rs_rating|int %}
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(85px,1fr));border-bottom:1px solid var(--border)">
-    <div style="padding:.6rem .75rem;border-right:1px solid var(--border)">
+  <div class="metrics-grid">
+    <div class="metric-cell" style="padding:.6rem .75rem;border-right:1px solid var(--border)">
       <p class="field-label" style="font-size:.6rem">Close</p>
       <p class="mono font-bold" style="font-size:.82rem;color:var(--text)">${{ "%.2f"|format(st.close) }}</p>
     </div>
-    <div style="padding:.6rem .75rem;border-right:1px solid var(--border)">
+    <div class="metric-cell" style="padding:.6rem .75rem;border-right:1px solid var(--border)">
       <p class="field-label" style="font-size:.6rem">vs 50d MA</p>
       {% if pct50 is not none %}
       <span class="chip chip-sm {% if pct50 >= 0 %}chip-pos{% else %}chip-neg{% endif %}">{{ "{:+.1f}".format(pct50) }}%</span>
       <p class="mono-dim" style="font-size:.62rem;margin-top:.18rem">${{ "%.2f"|format(st.ma_50) }}</p>
       {% else %}<p class="mono-dim" style="font-size:.78rem">—</p>{% endif %}
     </div>
-    <div style="padding:.6rem .75rem;border-right:1px solid var(--border)">
+    <div class="metric-cell" style="padding:.6rem .75rem;border-right:1px solid var(--border)">
       <p class="field-label" style="font-size:.6rem">vs 150d MA</p>
       {% if pct150 is not none %}
       <span class="chip chip-sm {% if pct150 >= 0 %}chip-pos{% else %}chip-neg{% endif %}">{{ "{:+.1f}".format(pct150) }}%</span>
       <p class="mono-dim" style="font-size:.62rem;margin-top:.18rem">${{ "%.2f"|format(st.ma_150) }}</p>
       {% else %}<p class="mono-dim" style="font-size:.78rem">—</p>{% endif %}
     </div>
-    <div style="padding:.6rem .75rem;border-right:1px solid var(--border)">
+    <div class="metric-cell" style="padding:.6rem .75rem;border-right:1px solid var(--border)">
       <p class="field-label" style="font-size:.6rem">vs 200d MA</p>
       {% if pct200 is not none %}
       <span class="chip chip-sm {% if pct200 >= 0 %}chip-pos{% else %}chip-neg{% endif %}">{{ "{:+.1f}".format(pct200) }}%</span>
       <p class="mono-dim" style="font-size:.62rem;margin-top:.18rem">${{ "%.2f"|format(st.ma_200) }}</p>
       {% else %}<p class="mono-dim" style="font-size:.78rem">—</p>{% endif %}
     </div>
-    <div style="padding:.6rem .75rem;border-right:1px solid var(--border)">
+    <div class="metric-cell" style="padding:.6rem .75rem;border-right:1px solid var(--border)">
       <p class="field-label" style="font-size:.6rem">52w High</p>
       {% if pct52 is not none %}
       <span class="chip chip-sm {% if pct52 >= -5 %}chip-pos{% elif pct52 >= -15 %}chip-warn{% else %}chip-neg{% endif %}">{{ "%.1f"|format(pct52) }}%</span>
       <p class="mono-dim" style="font-size:.62rem;margin-top:.18rem">${{ "%.2f"|format(st.high_52w) }}</p>
       {% else %}<p class="mono-dim" style="font-size:.78rem">—</p>{% endif %}
     </div>
-    <div style="padding:.6rem .75rem;border-right:1px solid var(--border)">
+    <div class="metric-cell" style="padding:.6rem .75rem;border-right:1px solid var(--border)">
       <p class="field-label" style="font-size:.6rem">52w Low</p>
       <p class="mono-dim" style="font-size:.8rem">${{ "%.2f"|format(st.low_52w) if st.low_52w else '—' }}</p>
     </div>
-    <div style="padding:.6rem .75rem">
+    <div class="metric-cell" style="padding:.6rem .75rem">
       <p class="field-label" style="font-size:.6rem">RS Rating</p>
       <span class="rs-pill {% if rs_v >= 80 %}rs-hi{% elif rs_v >= 60 %}rs-mid{% else %}rs-low{% endif %}" style="font-size:.8rem;padding:.18rem .5rem;margin-top:.15rem;display:inline-block">{{ rs_v }}</span>
     </div>
@@ -137,19 +139,35 @@
   {% endif %}
 
   {% if w.rule_results %}
-  <!-- Rule badges -->
-  <div style="padding:.75rem 1rem;display:flex;flex-wrap:wrap;gap:.375rem">
-    {% for r in w.rule_results %}
-    <span title="{{ r.detail }}" style="font-size:.65rem;font-family:'SF Mono',monospace;padding:.15rem .5rem;border-radius:.3rem;font-weight:600;
-      {% if r.passed %}background:var(--pos-bg);color:var(--pos);border:1px solid var(--bull-border)
-      {% else %}background:var(--neg-bg);color:var(--neg);border:1px solid var(--bear-border){% endif %}">
-      {{ '✓' if r.passed else '✗' }} {{ r.label }}{% if r.detail %}: <span style="font-weight:normal;color:inherit">{{ r.detail }}</span>{% endif %}
-    </span>
-    {% endfor %}
-  </div>
+  {% set passed_count = w.rule_results | selectattr('passed') | list | length %}
+  {% set total_count = w.rule_results | length %}
+  <!-- Rule badges — collapsible -->
+  <details class="rule-toggle">
+    <summary>
+      <span>Rules</span>
+      <span class="chip chip-sm {% if passed_count >= total_count * 0.75 %}chip-pos{% elif passed_count >= total_count * 0.5 %}chip-warn{% else %}chip-neg{% endif %}" style="margin-left:.25rem">
+        {{ passed_count }}/{{ total_count }} passed
+      </span>
+      <!-- mini dots -->
+      <span style="display:inline-flex;gap:2px;margin-left:.25rem">
+        {% for r in w.rule_results %}
+        <span style="width:.35rem;height:.35rem;border-radius:50%;background:{% if r.passed %}var(--pos){% else %}var(--neg){% endif %};display:inline-block"></span>
+        {% endfor %}
+      </span>
+    </summary>
+    <div class="rule-badge-list">
+      {% for r in w.rule_results %}
+      <span title="{{ r.detail }}" style="font-size:.65rem;font-family:'SF Mono',monospace;padding:.15rem .5rem;border-radius:.3rem;font-weight:600;
+        {% if r.passed %}background:var(--pos-bg);color:var(--pos);border:1px solid var(--bull-border)
+        {% else %}background:var(--neg-bg);color:var(--neg);border:1px solid var(--bear-border){% endif %}">
+        {{ '✓' if r.passed else '✗' }} {{ r.label }}{% if r.detail %}: <span style="font-weight:normal;color:inherit">{{ r.detail }}</span>{% endif %}
+      </span>
+      {% endfor %}
+    </div>
+  </details>
   {% else %}
   <div class="px-4 py-3 text-xs" style="color:var(--text-subtle)">
-    Added manually — rules details will populate after the next screener run.
+    Added manually — rules will populate after the next screener run.
   </div>
   {% endif %}
 </div>
