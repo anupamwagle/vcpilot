@@ -1036,44 +1036,62 @@ async def positions(request: Request, db: Session = Depends(get_db),
     return templates.TemplateResponse("trading/positions.html", ctx)
 
 
-def _enrich_rule_results(ticker: str, rule_results_dict: dict, db_session, target_date=None, overrides=None) -> list[dict]:
+def _enrich_rule_results(ticker: str, rule_results_dict: dict, db_session, target_date=None, overrides=None, _bar_data: dict | None = None) -> list[dict]:
     """
     Enrich rule results with actual values from the price bar on the given date (or latest).
+
+    Pass `_bar_data` (a plain dict with close/ma_50/ma_150/ma_200/high_52w/low_52w/rs_rating)
+    to skip all DB and Redis lookups — the caller already has the data.
     """
     from app.models.market import PriceBar
-    
-    # Query price bar for the given date, or latest
+
+    class _DictBar:
+        """Lightweight wrapper so the enrichment code can use attribute access."""
+        __slots__ = ("close","ma_50","ma_150","ma_200","high_52w","low_52w","rs_rating")
+        def __init__(self, data: dict):
+            for k in self.__slots__:
+                setattr(self, k, data.get(k, 0) or 0)
+
     bar = None
-    if target_date:
-        bar = db_session.query(PriceBar).filter(PriceBar.ticker == ticker).filter(PriceBar.date == target_date).first()
+
+    # Fast path: caller supplied bar data directly — no DB or cache hit needed.
+    if _bar_data:
+        bar = _DictBar(_bar_data)
+    elif target_date:
+        # Specific-date query (signals page, signal_date) — check cache first.
+        cache_key = f"price_bar:{ticker}:{target_date}"
+        cached = cache.get(cache_key)
+        if cached:
+            bar = _DictBar(cached)
+        else:
+            bar_obj = db_session.query(PriceBar).filter(
+                PriceBar.ticker == ticker, PriceBar.date == target_date
+            ).first()
+            if bar_obj:
+                d = {
+                    "close": float(bar_obj.close or 0), "ma_50": float(bar_obj.ma_50 or 0),
+                    "ma_150": float(bar_obj.ma_150 or 0), "ma_200": float(bar_obj.ma_200 or 0),
+                    "high_52w": float(bar_obj.high_52w or 0), "low_52w": float(bar_obj.low_52w or 0),
+                    "rs_rating": float(bar_obj.rs_rating or 0),
+                }
+                cache.set(cache_key, d, expire_seconds=86400)  # signal bars are immutable
+                bar = _DictBar(d)
     else:
         cache_key = f"latest_price_bar:{ticker}"
         cached = cache.get(cache_key)
-        if cached is not None:
-            if cached:
-                class DictObject:
-                    def __init__(self, data):
-                        for k, v in data.items():
-                            setattr(self, k, v)
-                bar = DictObject(cached)
+        if cached:
+            bar = _DictBar(cached)
         else:
             bar_obj = db_session.query(PriceBar).filter(PriceBar.ticker == ticker).order_by(desc(PriceBar.date)).first()
             if bar_obj:
-                bar_data = {
-                    "close": float(bar_obj.close or 0),
-                    "ma_50": float(bar_obj.ma_50 or 0),
-                    "ma_150": float(bar_obj.ma_150 or 0),
-                    "ma_200": float(bar_obj.ma_200 or 0),
-                    "high_52w": float(bar_obj.high_52w or 0),
-                    "low_52w": float(bar_obj.low_52w or 0),
+                d = {
+                    "close": float(bar_obj.close or 0), "ma_50": float(bar_obj.ma_50 or 0),
+                    "ma_150": float(bar_obj.ma_150 or 0), "ma_200": float(bar_obj.ma_200 or 0),
+                    "high_52w": float(bar_obj.high_52w or 0), "low_52w": float(bar_obj.low_52w or 0),
                     "rs_rating": float(bar_obj.rs_rating or 0),
                 }
-                cache.set(cache_key, bar_data, expire_seconds=300)
-                class DictObject:
-                    def __init__(self, data):
-                        for k, v in data.items():
-                            setattr(self, k, v)
-                bar = DictObject(bar_data)
+                cache.set(cache_key, d, expire_seconds=300)
+                bar = _DictBar(d)
             else:
                 cache.set(cache_key, {}, expire_seconds=3600)
     
@@ -1225,29 +1243,51 @@ async def signals(request: Request, db: Session = Depends(get_db),
     for _rc in _regime_rows:
         _regime_map[_rc.key] = _rc.value or "UNKNOWN"
 
+    # ── Bulk-fetch latest PriceBars for all signal tickers in one query ──────
+    # Eliminates per-signal DB query inside _enrich_rule_results (N+1 fix).
+    # We also seed the Redis cache so subsequent calls (e.g. repeated page loads)
+    # are served from cache rather than hitting the DB at all.
+    _sig_bar_lookup: dict[str, dict] = {}
+    if _sig_tickers:
+        from sqlalchemy import func as _sfunc
+        _ssub = (
+            db.query(PriceBar.ticker, _sfunc.max(PriceBar.date).label("max_date"))
+            .filter(PriceBar.ticker.in_(_sig_tickers))
+            .group_by(PriceBar.ticker)
+            .subquery()
+        )
+        _sbars = (
+            db.query(PriceBar)
+            .join(_ssub, (PriceBar.ticker == _ssub.c.ticker) & (PriceBar.date == _ssub.c.max_date))
+            .all()
+        )
+        for _sb in _sbars:
+            _bd = {
+                "close":     float(_sb.close or 0),
+                "ma_50":     float(_sb.ma_50 or 0),
+                "ma_150":    float(_sb.ma_150 or 0),
+                "ma_200":    float(_sb.ma_200 or 0),
+                "high_52w":  float(_sb.high_52w or 0),
+                "low_52w":   float(_sb.low_52w or 0),
+                "rs_rating": float(_sb.rs_rating or 0),
+            }
+            _sig_bar_lookup[_sb.ticker] = _bd
+            # Seed cache so future calls (within same request or repeated loads) skip DB
+            _ck = f"latest_price_bar:{_sb.ticker}"
+            if not cache.get(_ck):
+                cache.set(_ck, _bd, expire_seconds=300)
+
     sig_data = []
     for s in sigs:
         company_name = stock_names.get(s.ticker, "")
 
-        # Lazy backfill: fetch company name from yfinance if missing and not attempted recently
+        # NOTE: Inline yfinance name backfill removed — it blocks the request for 2-5s per
+        # unknown ticker. Missing names are filled in by the background screener task.
+        # The 24-hr marker below prevents re-attempting on every page load.
         if not company_name:
-            cache_key = f"missing_name_fetch:{s.ticker}"
-            if not cache.get(cache_key):
-                try:
-                    from app.data.fetcher import get_fundamentals
-                    fdata = get_fundamentals(s.ticker)
-                    if fdata.get("company_name"):
-                        stock_db = db.query(Stock).filter(Stock.ticker == s.ticker).first()
-                        if stock_db:
-                            stock_db.name     = fdata["company_name"]
-                            stock_db.sector   = fdata.get("sector") or stock_db.sector
-                            stock_db.industry = fdata.get("industry") or stock_db.industry
-                            db.commit()
-                            company_name = stock_db.name
-                            cache.delete("stock_names_map") # Clear cache
-                except Exception:
-                    pass
-                cache.set(cache_key, "attempted", expire_seconds=86400)  # 24 hours
+            _nck = f"missing_name_fetch:{s.ticker}"
+            if not cache.get(_nck):
+                cache.set(_nck, "attempted", expire_seconds=86400)
 
         rr = s.rule_results or {}
         passed = sum(1 for v in rr.values() if v.get("passed"))
@@ -1361,7 +1401,7 @@ async def signals(request: Request, db: Session = Depends(get_db),
             "status": s.status.value,
             "rules_passed": passed,
             "rules_total": len(rr),
-            "rule_results": _enrich_rule_results(s.ticker, rr, db, target_date=s.signal_date, overrides=overrides),
+            "rule_results": _enrich_rule_results(s.ticker, rr, db, target_date=s.signal_date, overrides=overrides, _bar_data=_sig_bar_lookup.get(s.ticker)),
             "override_rules_failed": override_rules_failed,
             "override_rules_passed": override_rules_passed,
             "has_overrides": has_overrides,
@@ -1540,12 +1580,20 @@ async def watchlist(
     ctx["active_label"] = label  # currently selected filter (None = all)
 
     from sqlalchemy.orm import joinedload
+    af = (exchange or "ALL").upper()
     q = db.query(Watchlist).options(joinedload(Watchlist.label)).filter(
         Watchlist.status == WatchlistStatus.WATCHING,
         Watchlist.organization_id == org_id
     )
     if label is not None:
         q = q.filter(Watchlist.label_id == label)
+    # Apply exchange filter at DB level — avoids fetching + processing all items then discarding
+    if af == "ASX":
+        q = q.filter(Watchlist.exchange_key == "ASX")
+    elif af == "US":
+        q = q.filter(Watchlist.exchange_key.in_(["NYSE", "NASDAQ"]))
+    elif af == "CRYPTO":
+        q = q.filter(Watchlist.asset_type == "CRYPTO")
     items = q.order_by(desc(Watchlist.created_at)).all()
 
     stock_names = get_cached_stock_names(db)
@@ -1572,27 +1620,36 @@ async def watchlist(
         for _bar in _latest_bars:
             _bar_lookup[_bar.ticker] = _bar
 
+    # ── Pre-seed Redis cache from bulk lookup so _enrich_rule_results never hits DB ──
+    # This covers both equity and crypto tickers. Without this, crypto tickers miss
+    # latest_price_bar: (they set live_price: instead) and cause per-item DB queries.
+    # Also build _bar_lookup_dict (plain dicts) for passing as _bar_data to _enrich_rule_results.
+    _bar_lookup_dict: dict[str, dict] = {}
+    for _tk, _bar in _bar_lookup.items():
+        _bd = {
+            "close":     float(_bar.close or 0),
+            "ma_50":     float(_bar.ma_50 or 0),
+            "ma_150":    float(_bar.ma_150 or 0),
+            "ma_200":    float(_bar.ma_200 or 0),
+            "high_52w":  float(_bar.high_52w or 0),
+            "low_52w":   float(_bar.low_52w or 0),
+            "rs_rating": float(_bar.rs_rating or 0),
+        }
+        _bar_lookup_dict[_tk] = _bd
+        _ck = f"latest_price_bar:{_tk}"
+        if not cache.get(_ck):
+            cache.set(_ck, _bd, expire_seconds=300)
+
     watchlist_data = []
     for w in items:
         company_name = stock_names.get(w.ticker, "")
+        # NOTE: Inline yfinance name backfill removed — it blocks for 2-5s per unknown ticker.
+        # Missing names are filled in by the background screener. The marker below prevents
+        # re-attempting on every page load.
         if not company_name:
-            cache_key = f"missing_name_fetch:{w.ticker}"
-            if not cache.get(cache_key):
-                try:
-                    from app.data.fetcher import get_fundamentals
-                    fdata = get_fundamentals(w.ticker)
-                    if fdata.get("company_name"):
-                        stock_db = db.query(Stock).filter(Stock.ticker == w.ticker).first()
-                        if stock_db:
-                            stock_db.name     = fdata["company_name"]
-                            stock_db.sector   = fdata.get("sector") or stock_db.sector
-                            stock_db.industry = fdata.get("industry") or stock_db.industry
-                            db.commit()
-                            company_name = stock_db.name
-                            cache.delete("stock_names_map") # Clear cache
-                except Exception:
-                    pass
-                cache.set(cache_key, "attempted", expire_seconds=86400)  # 24 hours
+            _nck = f"missing_name_fetch:{w.ticker}"
+            if not cache.get(_nck):
+                cache.set(_nck, "attempted", expire_seconds=86400)
 
         # ── Price data ───────────────────────────────────────────────────────
         # For crypto: try live IR API first (cached 5 min), fall back to PriceBar.
@@ -1687,16 +1744,11 @@ async def watchlist(
             "stats": stats_data,
             "rules_passed": passed,
             "rules_total": len(rr),
-            "rule_results": _enrich_rule_results(w.ticker, rr, db),
+            "rule_results": _enrich_rule_results(w.ticker, rr, db, _bar_data=_bar_lookup_dict.get(w.ticker)),
             "label": lbl,
         })
 
-    af = (exchange or "ALL").upper()
-    if af not in ("","ALL"):
-        watchlist_data = [w for w in watchlist_data if
-            (af=="ASX" and w.get("exchange_key","ASX")=="ASX") or
-            (af=="US"  and w.get("exchange_key","ASX") in ("NYSE","NASDAQ")) or
-            (af=="CRYPTO" and w.get("asset_type","EQUITY")=="CRYPTO")]
+    # Exchange filter already applied at DB level above — no Python-level re-filter needed.
     ef = _get_exchange_filters(org_id, db)
     ee = []
     try:

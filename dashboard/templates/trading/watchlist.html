@@ -340,23 +340,55 @@
         Added {{ w.added }}{% if w.notes %} · <strong>Note:</strong> {{ w.notes }}{% endif %}
       </div>
 
-      <!-- Key metrics -->
+      <!-- Key metrics — Bloomberg-style with % deltas -->
       {% if w.stats %}
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));border-bottom:1px solid var(--border)">
-        {% for label, val, color in [
-          ('Close',    '$'~"%.2f"|format(w.stats.close),  'var(--text)'),
-          ('50MA',     '$'~"%.2f"|format(w.stats.ma_50),   'var(--pos)' if w.stats.close > w.stats.ma_50 else 'var(--neg)'),
-          ('150MA',    '$'~"%.2f"|format(w.stats.ma_150),  'var(--text)'),
-          ('200MA',    '$'~"%.2f"|format(w.stats.ma_200),  'var(--text)'),
-          ('52w High', '$'~"%.2f"|format(w.stats.high_52w), 'var(--text)'),
-          ('52w Low',  '$'~"%.2f"|format(w.stats.low_52w),  'var(--text)'),
-          ('RS Rating',w.stats.rs_rating|int|string,       'var(--t-accent)'),
-        ] %}
-        <div style="padding:.5rem .75rem;border-right:1px solid var(--border)">
-          <p class="field-label" style="font-size:.65rem">{{ label }}</p>
-          <p style="font-family:'SF Mono',monospace;font-size:.8rem;font-weight:700;color:{{ color }}">{{ val }}</p>
+      {% set st = w.stats %}
+      {% set pct50 = ((st.close - st.ma_50) / st.ma_50 * 100) if st.ma_50 and st.ma_50 > 0 else none %}
+      {% set pct150 = ((st.close - st.ma_150) / st.ma_150 * 100) if st.ma_150 and st.ma_150 > 0 else none %}
+      {% set pct200 = ((st.close - st.ma_200) / st.ma_200 * 100) if st.ma_200 and st.ma_200 > 0 else none %}
+      {% set pct52 = ((st.close - st.high_52w) / st.high_52w * 100) if st.high_52w and st.high_52w > 0 else none %}
+      {% set rs_v = st.rs_rating|int %}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(85px,1fr));border-bottom:1px solid var(--border)">
+        <div style="padding:.6rem .75rem;border-right:1px solid var(--border)">
+          <p class="field-label" style="font-size:.6rem">Close</p>
+          <p class="mono font-bold" style="font-size:.82rem;color:var(--text)">${{ "%.2f"|format(st.close) }}</p>
         </div>
-        {% endfor %}
+        <div style="padding:.6rem .75rem;border-right:1px solid var(--border)">
+          <p class="field-label" style="font-size:.6rem">vs 50d MA</p>
+          {% if pct50 is not none %}
+          <span class="chip chip-sm {% if pct50 >= 0 %}chip-pos{% else %}chip-neg{% endif %}">{{ "{:+.1f}".format(pct50) }}%</span>
+          <p class="mono-dim" style="font-size:.62rem;margin-top:.18rem">${{ "%.2f"|format(st.ma_50) }}</p>
+          {% else %}<p class="mono-dim" style="font-size:.78rem">—</p>{% endif %}
+        </div>
+        <div style="padding:.6rem .75rem;border-right:1px solid var(--border)">
+          <p class="field-label" style="font-size:.6rem">vs 150d MA</p>
+          {% if pct150 is not none %}
+          <span class="chip chip-sm {% if pct150 >= 0 %}chip-pos{% else %}chip-neg{% endif %}">{{ "{:+.1f}".format(pct150) }}%</span>
+          <p class="mono-dim" style="font-size:.62rem;margin-top:.18rem">${{ "%.2f"|format(st.ma_150) }}</p>
+          {% else %}<p class="mono-dim" style="font-size:.78rem">—</p>{% endif %}
+        </div>
+        <div style="padding:.6rem .75rem;border-right:1px solid var(--border)">
+          <p class="field-label" style="font-size:.6rem">vs 200d MA</p>
+          {% if pct200 is not none %}
+          <span class="chip chip-sm {% if pct200 >= 0 %}chip-pos{% else %}chip-neg{% endif %}">{{ "{:+.1f}".format(pct200) }}%</span>
+          <p class="mono-dim" style="font-size:.62rem;margin-top:.18rem">${{ "%.2f"|format(st.ma_200) }}</p>
+          {% else %}<p class="mono-dim" style="font-size:.78rem">—</p>{% endif %}
+        </div>
+        <div style="padding:.6rem .75rem;border-right:1px solid var(--border)">
+          <p class="field-label" style="font-size:.6rem">52w High</p>
+          {% if pct52 is not none %}
+          <span class="chip chip-sm {% if pct52 >= -5 %}chip-pos{% elif pct52 >= -15 %}chip-warn{% else %}chip-neg{% endif %}">{{ "%.1f"|format(pct52) }}%</span>
+          <p class="mono-dim" style="font-size:.62rem;margin-top:.18rem">${{ "%.2f"|format(st.high_52w) }}</p>
+          {% else %}<p class="mono-dim" style="font-size:.78rem">—</p>{% endif %}
+        </div>
+        <div style="padding:.6rem .75rem;border-right:1px solid var(--border)">
+          <p class="field-label" style="font-size:.6rem">52w Low</p>
+          <p class="mono-dim" style="font-size:.8rem">${{ "%.2f"|format(st.low_52w) if st.low_52w else '—' }}</p>
+        </div>
+        <div style="padding:.6rem .75rem">
+          <p class="field-label" style="font-size:.6rem">RS Rating</p>
+          <span class="rs-pill {% if rs_v >= 80 %}rs-hi{% elif rs_v >= 60 %}rs-mid{% else %}rs-low{% endif %}" style="font-size:.8rem;padding:.18rem .5rem;margin-top:.15rem;display:inline-block">{{ rs_v }}</span>
+        </div>
       </div>
       {% if w.stats.bar_date or w.stats.live_price %}
       <div style="padding:.3rem .75rem;border-bottom:1px solid var(--border)">

@@ -167,23 +167,21 @@
   </div>
 
   <!-- Portfolio Heat Card -->
-  <div class="stat-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md border-t-2" 
-       style="border-top-color: {% if portfolio_heat > 15 %}var(--neg){% elif portfolio_heat > 10 %}var(--warn){% else %}var(--pos){% endif %}; 
+  <div class="stat-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md border-t-2"
+       style="border-top-color: {% if portfolio_heat > 15 %}var(--neg){% elif portfolio_heat > 10 %}var(--warn){% else %}var(--pos){% endif %};
               background-image: linear-gradient(to bottom right, var(--surface), {% if portfolio_heat > 15 %}rgba(220, 38, 38, 0.04){% elif portfolio_heat > 10 %}rgba(217, 119, 6, 0.04){% else %}rgba(5, 150, 105, 0.04){% endif %});
               position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; min-height: 80px; padding: 0.85rem 1rem;">
-    <div style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
-      <div>
-        <p class="field-label mb-0.5" style="font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;">Portfolio Heat</p>
-        <p class="text-base font-bold {% if portfolio_heat > 15 %}pnl-neg{% elif portfolio_heat > 10 %}text-warning{% else %}pnl-pos{% endif %}"
-           style="{% if portfolio_heat > 10 and portfolio_heat <= 15 %}color:var(--warn){% endif %}">
-          {{ portfolio_heat }}%
-        </p>
+    <div>
+      <p class="field-label mb-0.5" style="font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;">Portfolio Heat</p>
+      <p class="text-base font-bold" style="{% if portfolio_heat > 15 %}color:var(--neg){% elif portfolio_heat > 10 %}color:var(--warn){% else %}color:var(--pos){% endif %}">
+        {{ portfolio_heat }}%
+      </p>
+      <div class="heat-gauge-track" style="width:100%;margin-top:.35rem">
+        <div class="heat-gauge-fill {% if portfolio_heat > 15 %}fill-neg{% elif portfolio_heat > 10 %}fill-warn{% else %}fill-pos{% endif %}"
+             style="width:{{ [portfolio_heat / 20 * 100, 100]|min }}%"></div>
       </div>
-      <span class="text-gray-400 dark:text-gray-600 opacity-60">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
-      </span>
     </div>
-    <span style="font-size:0.58rem;font-weight:600;color:var(--text-subtle);display:block;margin-top:0.15rem">MAX SIZES AT RISK</span>
+    <span style="font-size:0.58rem;font-weight:600;color:var(--text-subtle);display:block;margin-top:0.35rem">MAX SIZES AT RISK · LIMIT 20%</span>
   </div>
 
   <!-- Today's P&L Card -->
@@ -272,9 +270,9 @@
     </div>
     {% if signals %}
     {% for s in signals %}
-    <div class="tbl-row" style="display:flex;align-items:center;gap:.75rem;padding:.75rem 1rem">
+    <div class="tbl-row" style="display:flex;align-items:center;gap:.75rem;padding:.65rem 1rem">
       <div style="flex:1;min-width:0">
-        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
           <span class="mono font-bold" style="font-size:.875rem;color:var(--text);display:inline-flex;align-items:center;gap:.25rem">
             <form method="post" action="/watchlist/toggle-favourite" style="display:inline">
               <input type="hidden" name="ticker" value="{{ s.ticker }}">
@@ -285,19 +283,28 @@
             </form>
             {{ s.ticker }}
           </span>
-          {% if s.company_name %}<span style="font-size:.7rem;color:var(--text-subtle)">{{ s.company_name }}</span>{% endif %}
-          <span style="font-size:.7rem;color:var(--text-muted)">{{ s.vcp }}</span>
-          {% if s.status == 'TRIGGERED' %}<span class="tag-pos" style="font-size:.65rem">Triggered</span>
-          {% elif s.status == 'SKIPPED' %}<span class="tag" style="font-size:.65rem">Skipped</span>
-          {% else %}<span class="tag-blue" style="font-size:.65rem">Pending</span>{% endif %}
+          {% if s.company_name %}<span style="font-size:.68rem;color:var(--text-subtle)">{{ s.company_name }}</span>{% endif %}
+          <span style="font-size:.65rem;color:var(--text-muted)">{{ s.vcp }}</span>
+          {% set rs_v = s.rs|int %}
+          <span class="rs-pill {% if rs_v >= 80 %}rs-hi{% elif rs_v >= 60 %}rs-mid{% else %}rs-low{% endif %}">RS{{ rs_v }}</span>
+          {% if s.status == 'TRIGGERED' %}<span class="chip chip-pos chip-sm">✓ Triggered</span>
+          {% elif s.status == 'SKIPPED' %}<span class="chip chip-dim chip-sm">Skipped</span>
+          {% else %}<span class="chip chip-blue chip-sm">⬤ Pending</span>{% endif %}
         </div>
-        <p style="font-size:.75rem;color:var(--text-muted);margin-top:.2rem">
-          Pivot ${{ "%.3f"|format(s.pivot) }} · Stop ${{ "%.3f"|format(s.stop) }} · RS {{ s.rs|int }}
-        </p>
+        <div style="display:flex;align-items:center;gap:.5rem;margin-top:.25rem;flex-wrap:wrap">
+          <span class="mono-dim" style="font-size:.72rem">Pivot <span class="mono" style="color:var(--text)">${{ "%.3f"|format(s.pivot) }}</span></span>
+          <span style="font-size:.65rem;color:var(--border)">·</span>
+          <span class="mono-dim" style="font-size:.72rem">Stop <span class="mono-neg" style="font-size:.72rem">${{ "%.3f"|format(s.stop) }}</span></span>
+          {% if s.pivot and s.stop %}
+          {% set rr = ((s.pivot * 1.2 - s.pivot) / (s.pivot - s.stop)) if (s.pivot - s.stop) > 0 else 0 %}
+          <span style="font-size:.65rem;color:var(--border)">·</span>
+          <span class="mono-dim" style="font-size:.72rem">R:R <span class="mono-blue" style="font-size:.72rem">{{ "%.1f"|format(rr) }}×</span></span>
+          {% endif %}
+        </div>
       </div>
       <div style="text-align:right;flex-shrink:0">
-        <p style="font-size:.75rem;font-weight:600;color:var(--text)">{{ s.size }} shares</p>
-        <p style="font-size:.7rem;color:var(--text-muted)">Risk ${{ s.risk_aud|int }}</p>
+        <p style="font-size:.75rem;font-weight:600;color:var(--text)" class="mono">{{ s.size }} sh</p>
+        <p class="mono-warn" style="font-size:.68rem">R ${{ s.risk_aud|int }}</p>
       </div>
     </div>
     {% endfor %}
@@ -320,9 +327,9 @@
     </div>
     {% if positions %}
     {% for p in positions %}
-    <div class="tbl-row" style="display:flex;align-items:center;gap:.75rem;padding:.75rem 1rem">
+    <div class="tbl-row" style="display:flex;align-items:center;gap:.75rem;padding:.65rem 1rem">
       <div style="flex:1;min-width:0">
-        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
           <span class="mono font-bold" style="font-size:.875rem;color:var(--text);display:inline-flex;align-items:center;gap:.25rem">
             <form method="post" action="/watchlist/toggle-favourite" style="display:inline">
               <input type="hidden" name="ticker" value="{{ p.ticker }}">
@@ -333,20 +340,27 @@
             </form>
             {{ p.ticker }}
           </span>
-          {% if p.company_name %}<span style="font-size:.7rem;color:var(--text-subtle)">{{ p.company_name }}</span>{% endif %}
-          {% if p.is_paper %}<span class="badge badge-paper" style="font-size:.65rem">PAPER</span>{% endif %}
+          {% if p.company_name %}<span style="font-size:.68rem;color:var(--text-subtle)">{{ p.company_name }}</span>{% endif %}
+          {% if p.is_paper %}<span class="chip chip-dim chip-sm">PAPER</span>{% endif %}
+          {% if p.days >= 20 %}<span class="chip chip-warn chip-sm">{{ p.days }}d</span>
+          {% elif p.days >= 10 %}<span class="chip chip-dim chip-sm">{{ p.days }}d</span>
+          {% else %}<span style="font-size:.65rem;color:var(--text-subtle)">{{ p.days }}d</span>{% endif %}
         </div>
-        <p style="font-size:.75rem;color:var(--text-muted);margin-top:.2rem">
-          {{ p.qty }} sh · Entry ${{ "%.3f"|format(p.entry) }} · Stop ${{ "%.3f"|format(p.stop) }} · {{ p.days }}d
-        </p>
+        <div style="display:flex;align-items:center;gap:.4rem;margin-top:.25rem;flex-wrap:wrap">
+          <span class="mono-dim" style="font-size:.72rem">{{ p.qty }} sh</span>
+          <span style="font-size:.65rem;color:var(--border)">·</span>
+          <span class="mono-dim" style="font-size:.72rem">In <span class="mono" style="color:var(--text)">${{ "%.3f"|format(p.entry) }}</span></span>
+          <span style="font-size:.65rem;color:var(--border)">·</span>
+          <span class="mono-dim" style="font-size:.72rem">Stop <span class="mono-neg" style="font-size:.72rem">${{ "%.3f"|format(p.stop) }}</span></span>
+        </div>
       </div>
-      <div style="text-align:right;flex-shrink:0">
-        <p class="font-bold {% if p.pnl_pct >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}" style="font-size:.875rem">
-          {{ "{:+.1f}".format(p.pnl_pct) }}%
-        </p>
-        <p class="{% if p.pnl_aud >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}" style="font-size:.75rem">
-          ${{ "{:+.0f}".format(p.pnl_aud) }}
-        </p>
+      <div style="text-align:right;flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:.2rem">
+        <span class="chip {% if p.pnl_pct >= 0 %}chip-pos{% else %}chip-neg{% endif %}">
+          {% if p.pnl_pct >= 0 %}▲{% else %}▼{% endif %} {{ "{:.1f}".format(p.pnl_pct|abs) }}%
+        </span>
+        <span class="{% if p.pnl_aud >= 0 %}mono-pos{% else %}mono-neg{% endif %}" style="font-size:.72rem">
+          ${{ "{:+,.0f}".format(p.pnl_aud) }}
+        </span>
       </div>
     </div>
     {% endfor %}
@@ -497,27 +511,26 @@
   </script>
 
   <div class="table-responsive">
-    <table class="tbl">
+    <table class="tbl tbl-dense">
       <thead>
         <tr>
-          <th>Ticker</th>
-          <th>Company Name</th>
-          <th>Sector</th>
-          <th>Price</th>
-          <th>50MA</th>
-          <th>150MA</th>
-          <th>200MA</th>
-          <th>Vol Ratio</th>
-          <th>RS Rating</th>
-          <th>52w High</th>
-          <th>Data Date</th>
+          <th class="tl">Ticker</th>
+          <th class="tl">Company</th>
+          <th class="tr">Price</th>
+          <th class="tr" title="% above/below 50-day MA">vs 50d</th>
+          <th class="tr" title="% above/below 150-day MA">vs 150d</th>
+          <th class="tr" title="% above/below 200-day MA">vs 200d</th>
+          <th class="tc" title="Volume vs 50-day avg">Vol</th>
+          <th class="tc">RS</th>
+          <th class="tr" title="% below 52-week high">52w Hi</th>
+          <th class="tl">Date</th>
         </tr>
       </thead>
       <tbody>
         {% if watchlist_rows %}
           {% for row in watchlist_rows %}
-          <tr class="tbl-row">
-            <td class="tbl-cell font-mono font-bold">
+          <tr class="tbl-row hover-row">
+            <td class="tbl-cell">
               <span style="display:inline-flex;align-items:center;gap:.35rem">
                 <form method="post" action="/watchlist/toggle-favourite" style="display:inline">
                   <input type="hidden" name="ticker" value="{{ row.ticker }}">
@@ -527,37 +540,78 @@
                   </button>
                 </form>
                 {% if row.label %}
-                <span title="{{ row.label.name }}" style="width:.45rem;height:.45rem;border-radius:50%;background:{{ row.label.color }};display:inline-block"></span>
+                <span title="{{ row.label.name }}" style="width:.4rem;height:.4rem;border-radius:50%;background:{{ row.label.color }};flex-shrink:0;display:inline-block"></span>
                 {% endif %}
-                {{ row.ticker }}
+                <span class="mono font-bold" style="font-size:.8rem">{{ row.ticker }}</span>
+                {% if row.is_custom %}<span style="font-size:.6rem;padding:.05rem .3rem;border-radius:.2rem;background:var(--a-accent-bg);color:var(--a-accent);font-weight:700">CUSTOM</span>{% endif %}
               </span>
-              {% if row.is_custom %}
-                <span class="tag text-[9px] py-0 px-1 ml-1 tag-admin">CUSTOM</span>
-              {% endif %}
             </td>
-            <td class="tbl-cell text-xs" style="color:var(--text-muted)">{{ row.company_name }}</td>
-            <td class="tbl-cell text-xs">{{ row.sector }}</td>
-            <td class="tbl-cell font-mono">${{ "%.2f"|format(row.close) if row.close is not none else '—' }}</td>
-            <td class="tbl-cell font-mono text-xs {% if row.close and row.ma_50 and row.close > row.ma_50 %}pnl-pos{% else %}pnl-neg{% endif %}">
-              ${{ "%.2f"|format(row.ma_50) if row.ma_50 is not none else '—' }}
+            <td class="tbl-cell" style="color:var(--text-muted);font-size:.72rem;max-width:9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ row.company_name }}</td>
+            <td class="tbl-cell tr">
+              <span class="mono" style="font-size:.82rem;font-weight:600;color:var(--text)">${{ "%.2f"|format(row.close) if row.close is not none else '—' }}</span>
             </td>
-            <td class="tbl-cell font-mono text-xs">${{ "%.2f"|format(row.ma_150) if row.ma_150 is not none else '—' }}</td>
-            <td class="tbl-cell font-mono text-xs">${{ "%.2f"|format(row.ma_200) if row.ma_200 is not none else '—' }}</td>
-            <td class="tbl-cell font-mono text-xs {% if row.vol_ratio and row.vol_ratio >= 1.5 %}pnl-pos font-semibold{% endif %}">
-              {{ "%.2f"|format(row.vol_ratio) if row.vol_ratio is not none else '—' }}x
+            {# vs 50MA chip #}
+            <td class="tbl-cell tr">
+              {% if row.close is not none and row.ma_50 is not none and row.ma_50 > 0 %}
+                {% set pct50 = (row.close - row.ma_50) / row.ma_50 * 100 %}
+                <span class="chip chip-sm {% if pct50 >= 0 %}chip-pos{% else %}chip-neg{% endif %}">
+                  {{ "{:+.1f}".format(pct50) }}%
+                </span>
+              {% else %}<span class="mono-dim" style="font-size:.72rem">—</span>{% endif %}
             </td>
-            <td class="tbl-cell font-mono text-xs font-bold {% if row.rs_rating and row.rs_rating >= 70 %}pnl-pos{% else %}pnl-neg{% endif %}">
-              {{ row.rs_rating|int if row.rs_rating is not none else '—' }}
+            {# vs 150MA chip #}
+            <td class="tbl-cell tr">
+              {% if row.close is not none and row.ma_150 is not none and row.ma_150 > 0 %}
+                {% set pct150 = (row.close - row.ma_150) / row.ma_150 * 100 %}
+                <span class="chip chip-sm {% if pct150 >= 0 %}chip-pos{% else %}chip-neg{% endif %}">
+                  {{ "{:+.1f}".format(pct150) }}%
+                </span>
+              {% else %}<span class="mono-dim" style="font-size:.72rem">—</span>{% endif %}
             </td>
-            <td class="tbl-cell font-mono text-xs {% if row.pct_from_52w_high and row.pct_from_52w_high >= -5 %}pnl-pos font-semibold{% endif %}">
-              {{ "%.1f"|format(row.pct_from_52w_high) if row.pct_from_52w_high is not none else '—' }}%
+            {# vs 200MA chip #}
+            <td class="tbl-cell tr">
+              {% if row.close is not none and row.ma_200 is not none and row.ma_200 > 0 %}
+                {% set pct200 = (row.close - row.ma_200) / row.ma_200 * 100 %}
+                <span class="chip chip-sm {% if pct200 >= 0 %}chip-pos{% else %}chip-neg{% endif %}">
+                  {{ "{:+.1f}".format(pct200) }}%
+                </span>
+              {% else %}<span class="mono-dim" style="font-size:.72rem">—</span>{% endif %}
             </td>
-            <td class="tbl-cell text-xs font-mono text-gray-500">{{ row.bar_date }}</td>
+            {# Vol ratio — bar + number #}
+            <td class="tbl-cell tc">
+              {% if row.vol_ratio is not none %}
+                {% set vr = row.vol_ratio %}
+                {% set vbar = [vr / 3.0 * 100, 100]|min %}
+                <div class="mini-bar" style="align-items:center;min-width:44px;margin:0 auto">
+                  <span class="mono {% if vr >= 2.0 %}mono-pos{% elif vr >= 1.5 %}mono-warn{% else %}mono-dim{% endif %}" style="font-size:.72rem">{{ "%.1f"|format(vr) }}×</span>
+                  <div class="mini-bar-track" style="width:44px">
+                    <div class="mini-bar-fill {% if vr >= 2.0 %}fill-pos{% elif vr >= 1.5 %}fill-warn{% else %}fill-blue{% endif %}" style="width:{{ vbar }}%"></div>
+                  </div>
+                </div>
+              {% else %}<span class="mono-dim" style="font-size:.72rem">—</span>{% endif %}
+            </td>
+            {# RS pill #}
+            <td class="tbl-cell tc">
+              {% if row.rs_rating is not none %}
+                {% set rs = row.rs_rating|int %}
+                <span class="rs-pill {% if rs >= 80 %}rs-hi{% elif rs >= 60 %}rs-mid{% else %}rs-low{% endif %}">{{ rs }}</span>
+              {% else %}<span class="mono-dim" style="font-size:.72rem">—</span>{% endif %}
+            </td>
+            {# 52w high % chip #}
+            <td class="tbl-cell tr">
+              {% if row.pct_from_52w_high is not none %}
+                {% set h52 = row.pct_from_52w_high %}
+                <span class="chip chip-sm {% if h52 >= -5 %}chip-pos{% elif h52 >= -15 %}chip-warn{% else %}chip-neg{% endif %}">
+                  {{ "%.1f"|format(h52) }}%
+                </span>
+              {% else %}<span class="mono-dim" style="font-size:.72rem">—</span>{% endif %}
+            </td>
+            <td class="tbl-cell" style="font-size:.68rem;color:var(--text-subtle);font-family:'SF Mono',Monaco,monospace;white-space:nowrap">{{ row.bar_date }}</td>
           </tr>
           {% endfor %}
         {% else %}
           <tr>
-            <td colspan="11" class="empty">
+            <td colspan="10" class="empty">
               <p class="empty-title">No watchlist stocks match the selected filters</p>
               <p class="empty-sub">Add stocks on the <a href="/watchlist" style="color:var(--t-accent)">Watchlist page</a></p>
             </td>

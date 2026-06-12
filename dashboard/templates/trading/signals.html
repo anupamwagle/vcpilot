@@ -126,24 +126,54 @@
   </div>
 
   {# ── Key metrics ──────────────────────────────────────────────────── #}
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));border-bottom:1px solid var(--border)">
-    {% for label, val, color in [
-      ('Close*',   '$'~"%.3f"|format(s.close),  'var(--text)'),
-      ('Pivot',    '$'~"%.3f"|format(s.pivot),  'var(--pos)'),
-      ('Stop',     '$'~"%.3f"|format(s.stop),   'var(--neg)'),
-      ('Target 1', '$'~"%.3f"|format(s.target), 'var(--warn)'),
-      ('RS Rating',s.rs|int|string,             'var(--t-accent)'),
-      ('VCP',      s.vcp_contractions|string~'c · '~s.vcp_weeks|string~'w', 'var(--text)'),
-      ('Position', s.size|string~' sh / $'~s.risk_aud|int|string, 'var(--text)'),
-    ] %}
-    <div style="padding:.75rem 1rem;border-right:1px solid var(--border)">
-      <p class="field-label">{{ label }}</p>
-      <p style="font-family:'SF Mono',monospace;font-size:.875rem;font-weight:700;color:{{ color }}">{{ val }}</p>
+  {% set pct_from_pivot = ((s.close - s.pivot) / s.pivot * 100) if s.pivot and s.pivot > 0 else none %}
+  {% set rr_ratio = ((s.target - s.pivot) / (s.pivot - s.stop)) if s.target and s.pivot and s.stop and (s.pivot - s.stop) > 0 else none %}
+  {% set rs_v = s.rs|int %}
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));border-bottom:1px solid var(--border)">
+    <div style="padding:.65rem 1rem;border-right:1px solid var(--border)">
+      <p class="field-label" style="font-size:.6rem">Close*</p>
+      <p class="mono font-bold" style="font-size:.85rem;color:var(--text)">${{ "%.3f"|format(s.close) }}</p>
+      {% if pct_from_pivot is not none %}
+      <p class="dist-pill {% if pct_from_pivot <= 0 %}chip-pos{% elif pct_from_pivot <= 3 %}chip-warn{% else %}chip-neg{% endif %}" style="margin-top:.2rem;font-size:.62rem;padding:.05rem .3rem">
+        {{ "{:+.1f}".format(pct_from_pivot) }}% vs pivot
+      </p>
+      {% endif %}
     </div>
-    {% endfor %}
+    <div style="padding:.65rem 1rem;border-right:1px solid var(--border)">
+      <p class="field-label" style="font-size:.6rem">Pivot</p>
+      <p class="mono-pos" style="font-size:.85rem">${{ "%.3f"|format(s.pivot) }}</p>
+    </div>
+    <div style="padding:.65rem 1rem;border-right:1px solid var(--border)">
+      <p class="field-label" style="font-size:.6rem">Stop</p>
+      <p class="mono-neg" style="font-size:.85rem">${{ "%.3f"|format(s.stop) }}</p>
+      {% if s.pivot and s.stop %}
+      <p class="mono-dim" style="font-size:.62rem;margin-top:.2rem">{{ "%.1f"|format((s.pivot - s.stop) / s.pivot * 100) }}% risk</p>
+      {% endif %}
+    </div>
+    <div style="padding:.65rem 1rem;border-right:1px solid var(--border)">
+      <p class="field-label" style="font-size:.6rem">Target 1</p>
+      <p class="mono-pos" style="font-size:.85rem">${{ "%.3f"|format(s.target) }}</p>
+      {% if rr_ratio is not none %}
+      <p style="margin-top:.2rem"><span class="chip chip-blue chip-sm">R:R {{ "%.1f"|format(rr_ratio) }}×</span></p>
+      {% endif %}
+    </div>
+    <div style="padding:.65rem 1rem;border-right:1px solid var(--border)">
+      <p class="field-label" style="font-size:.6rem">RS Rating</p>
+      <span class="rs-pill {% if rs_v >= 80 %}rs-hi{% elif rs_v >= 60 %}rs-mid{% else %}rs-low{% endif %}" style="font-size:.82rem;padding:.2rem .55rem">{{ rs_v }}</span>
+    </div>
+    <div style="padding:.65rem 1rem;border-right:1px solid var(--border)">
+      <p class="field-label" style="font-size:.6rem">VCP</p>
+      <p class="mono" style="font-size:.82rem;color:var(--text)">{{ s.vcp_contractions }}c</p>
+      <p class="mono-dim" style="font-size:.72rem;margin-top:.1rem">{{ s.vcp_weeks }}w base</p>
+    </div>
+    <div style="padding:.65rem 1rem">
+      <p class="field-label" style="font-size:.6rem">Position</p>
+      <p class="mono" style="font-size:.82rem;color:var(--text)">{{ s.size }} sh</p>
+      <p class="mono-warn" style="font-size:.72rem;margin-top:.1rem">R ${{ s.risk_aud|int }}</p>
+    </div>
   </div>
   <div style="padding:.2rem 1rem;border-bottom:1px solid var(--border)">
-    <span style="font-size:.65rem;color:var(--text-subtle)">* Close = price when this signal was generated (static). For the live, 5-minute-refreshed price, see "Live $…" in the entry-check panel below.</span>
+    <span style="font-size:.63rem;color:var(--text-subtle)">* Close = price when signal generated (static). Live price in entry-check panel below.</span>
   </div>
 
   {# ── Screener rule badges ─────────────────────────────────────────── #}
