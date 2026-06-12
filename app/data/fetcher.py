@@ -23,7 +23,7 @@ from loguru import logger
 
 ASX200_WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/S%26P/ASX_200"
 ASX300_WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/S%26P/ASX_300"
-ASX_ALL_LISTED_URL   = "https://www.asx.com.au/asx/research/listedCompanies.do?ajax=true"
+ASX_ALL_LISTED_URL   = "https://www.asx.com.au/asx/research/ASXListedCompanies.csv"
 
 # ---------------------------------------------------------------------------
 # Ticker normalisation — convert user input to yfinance canonical format
@@ -398,17 +398,20 @@ def get_asx_all_listed() -> list[dict]:
             "Accept": "text/html,application/xhtml+xml,*/*",
             "Referer": "https://www.asx.com.au/",
         }
-        resp = _req.get(url, headers=headers, timeout=30)
+        resp = _req.get(url, headers=headers, timeout=60)
         resp.raise_for_status()
         text = resp.text
 
-        # The ASX endpoint returns a CSV with a header preamble line
-        # Format: "ASX listed companies as at DD-Mon-YYYY\nASX code,Company name,Listing date,GICs industry group,Market Cap"
+        # Real ASX CSV format (as at Jun 2026):
+        #   Line 1: "ASX listed companies as at <date>"   ← preamble, skip
+        #   Line 2: "Company name,ASX code,GICS industry group"  ← header
+        #   Line 3+: data rows
         lines = text.strip().splitlines()
         # Skip preamble lines until we hit the CSV header
         csv_start = 0
         for i, line in enumerate(lines):
-            if "asx code" in line.lower() or "code" in line.lower():
+            low = line.lower()
+            if "asx code" in low or ("company" in low and ("code" in low or "gics" in low)):
                 csv_start = i
                 break
 
@@ -416,38 +419,39 @@ def get_asx_all_listed() -> list[dict]:
         df = pd.read_csv(io.StringIO(csv_text), dtype=str)
         df.columns = [c.strip().lower() for c in df.columns]
 
-        # Find the ticker and name columns (ASX uses varied column names)
-        code_col  = next((c for c in df.columns if "code" in c), None)
-        name_col  = next((c for c in df.columns if "company" in c or "name" in c), None)
-        gics_col  = next((c for c in df.columns if "gics" in c or "industry" in c), None)
-        mcap_col  = next((c for c in df.columns if "market" in c and "cap" in c), None)
+        # Locate columns flexibly — ASX has changed column order/names before
+        code_col = next((c for c in df.columns if "asx code" in c or (c == "code")), None)
+        if code_col is None:
+            code_col = next((c for c in df.columns if "code" in c), None)
+        name_col = next((c for c in df.columns if "company" in c or "name" in c), None)
+        gics_col = next((c for c in df.columns if "gics" in c or "industry" in c), None)
+        mcap_col = next((c for c in df.columns if "market" in c and "cap" in c), None)
 
         if code_col is None:
-            logger.warning("ASX all-listed CSV: could not find code column")
+            logger.warning(f"ASX all-listed CSV: could not find code column. Columns: {list(df.columns)}")
             return []
 
         results = []
         for _, row in df.iterrows():
             code = str(row[code_col]).strip().upper() if code_col else ""
-            if not code or len(code) < 2 or code == "NAN":
+            if not code or len(code) < 2 or code in ("NAN", "ASX CODE"):
                 continue
-            # Skip warrants, options, ETOs (codes longer than 3 chars are usually not equities)
-            # Keep up to 5-char codes (some legitimate small caps have 4-5 chars)
+            # Skip warrants / options (codes > 5 chars are usually not plain equities)
             if len(code) > 5:
                 continue
-            name    = str(row[name_col]).strip()    if name_col  and pd.notna(row[name_col])  else ""
-            gics    = str(row[gics_col]).strip()    if gics_col  and pd.notna(row[gics_col])  else ""
-            mcap_str = str(row[mcap_col]).strip()   if mcap_col  and pd.notna(row[mcap_col])  else ""
+            name     = str(row[name_col]).strip()  if name_col and pd.notna(row[name_col])  else ""
+            gics     = str(row[gics_col]).strip()  if gics_col and pd.notna(row[gics_col])  else ""
+            mcap_str = str(row[mcap_col]).strip()  if mcap_col and pd.notna(row[mcap_col])  else ""
             try:
                 mcap = int(float(mcap_str.replace(",", "").replace("$", ""))) if mcap_str else None
             except (ValueError, TypeError):
                 mcap = None
 
             results.append({
-                "ticker": f"{code}.AX",
-                "name":   name,
-                "sector": gics,
-                "industry": gics,
+                "ticker":     f"{code}.AX",
+                "name":       name,
+                "sector":     gics,
+                "industry":   gics,
                 "market_cap": mcap,
             })
 
