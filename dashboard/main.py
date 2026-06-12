@@ -1563,6 +1563,7 @@ async def watchlist(
     request: Request,
     label: int = Query(None),
     exchange: str = Query("ALL"),
+    page: int = Query(1),
     db: Session = Depends(get_db)
 ):
     if not _auth(request):
@@ -1595,7 +1596,10 @@ async def watchlist(
         q = q.filter(Watchlist.exchange_key.in_(["NYSE", "NASDAQ"]))
     elif af == "CRYPTO":
         q = q.filter(Watchlist.asset_type == "CRYPTO")
-    items = q.order_by(desc(Watchlist.created_at)).all()
+    _WL_PER_PAGE = 20
+    total = q.count()
+    items = q.order_by(desc(Watchlist.created_at)).offset((page - 1) * _WL_PER_PAGE).limit(_WL_PER_PAGE).all()
+    has_more = (page * _WL_PER_PAGE) < total
 
     stock_names = get_cached_stock_names(db)
 
@@ -1760,8 +1764,143 @@ async def watchlist(
         db.rollback(); ee=[{"key":"ASX","name":"ASX","flag":"","asset_type":"EQUITY"}]
     ctx.update({"enabled_exchanges":ee,"exchange_filters":ef,"active_exchange_filter":af,
                 "base_url":"/watchlist","extra_params":f"label={label}" if label is not None else "",
-                "watchlist":watchlist_data})
+                "watchlist":watchlist_data, "total":total, "page":page, "has_more":has_more})
     return templates.TemplateResponse("trading/watchlist.html", ctx)
+
+
+@app.get("/watchlist/rows", response_class=HTMLResponse)
+async def watchlist_rows(
+    request: Request,
+    label: int = Query(None),
+    exchange: str = Query("ALL"),
+    page: int = Query(1),
+    db: Session = Depends(get_db)
+):
+    """Fragment endpoint — returns paginated watchlist card HTML for infinite scroll."""
+    if not _auth(request):
+        return HTMLResponse("", status_code=403)
+    org_id = request.session.get("organization_id")
+
+    from app.models.signal import Watchlist, WatchlistStatus, WatchlistLabel
+    from app.models.market import PriceBar, Stock
+    from sqlalchemy.orm import joinedload
+
+    # Labels (needed by card template for label picker)
+    all_labels = db.query(WatchlistLabel).filter(
+        WatchlistLabel.organization_id == org_id
+    ).order_by(WatchlistLabel.sort_order).all()
+    labels = [{"id": l.id, "name": l.name, "color": l.color, "is_default": l.is_default} for l in all_labels]
+
+    # Same paginated query as the main route
+    _WL_PER_PAGE = 20
+    af = (exchange or "ALL").upper()
+    q = db.query(Watchlist).options(joinedload(Watchlist.label)).filter(
+        Watchlist.status == WatchlistStatus.WATCHING,
+        Watchlist.organization_id == org_id
+    )
+    if label is not None:
+        q = q.filter(Watchlist.label_id == label)
+    if af == "ASX":
+        q = q.filter(Watchlist.exchange_key == "ASX")
+    elif af == "US":
+        q = q.filter(Watchlist.exchange_key.in_(["NYSE", "NASDAQ"]))
+    elif af == "CRYPTO":
+        q = q.filter(Watchlist.asset_type == "CRYPTO")
+
+    total = q.count()
+    items = q.order_by(desc(Watchlist.created_at)).offset((page - 1) * _WL_PER_PAGE).limit(_WL_PER_PAGE).all()
+    has_more = (page * _WL_PER_PAGE) < total
+
+    stock_names = get_cached_stock_names(db)
+
+    # Bulk PriceBar prefetch for this page's tickers
+    _wl_tickers = list({w.ticker for w in items})
+    _bar_lookup: dict[str, object] = {}
+    if _wl_tickers:
+        from sqlalchemy import func as _func
+        _sub = (
+            db.query(PriceBar.ticker, _func.max(PriceBar.date).label("max_date"))
+            .filter(PriceBar.ticker.in_(_wl_tickers))
+            .group_by(PriceBar.ticker)
+            .subquery()
+        )
+        for _bar in db.query(PriceBar).join(_sub, (PriceBar.ticker == _sub.c.ticker) & (PriceBar.date == _sub.c.max_date)).all():
+            _bar_lookup[_bar.ticker] = _bar
+
+    _bar_lookup_dict: dict[str, dict] = {}
+    for _tk, _bar in _bar_lookup.items():
+        _bd = {
+            "close":     float(_bar.close or 0),
+            "ma_50":     float(_bar.ma_50 or 0),
+            "ma_150":    float(_bar.ma_150 or 0),
+            "ma_200":    float(_bar.ma_200 or 0),
+            "high_52w":  float(_bar.high_52w or 0),
+            "low_52w":   float(_bar.low_52w or 0),
+            "rs_rating": float(_bar.rs_rating or 0),
+        }
+        _bar_lookup_dict[_tk] = _bd
+        _ck = f"latest_price_bar:{_tk}"
+        if not cache.get(_ck):
+            cache.set(_ck, _bd, expire_seconds=300)
+
+    # Build watchlist_data (same logic as main route, minus live crypto fetch for simplicity)
+    watchlist_data = []
+    for w in items:
+        company_name = stock_names.get(w.ticker, "")
+        if not company_name:
+            _nck = f"missing_name_fetch:{w.ticker}"
+            if not cache.get(_nck):
+                cache.set(_nck, "attempted", expire_seconds=86400)
+
+        bar_data = cache.get(f"latest_price_bar:{w.ticker}") or {}
+        stats_data = bar_data if bar_data else None
+
+        rr = w.rule_results or {}
+        passed = sum(1 for v in rr.values() if v.get("passed"))
+        lbl = None
+        if w.label:
+            lbl = {"id": w.label.id, "name": w.label.name, "color": w.label.color}
+
+        watchlist_data.append({
+            "id": w.id,
+            "ticker": w.ticker,
+            "exchange_key": getattr(w, "exchange_key", "ASX") or "ASX",
+            "asset_type":   getattr(w, "asset_type", "EQUITY") or "EQUITY",
+            "company_name": company_name,
+            "added": str(w.added_date),
+            "by": w.added_by,
+            "notes": w.notes or "",
+            "stats": stats_data,
+            "rules_passed": passed,
+            "rules_total": len(rr),
+            "rule_results": _enrich_rule_results(w.ticker, rr, db, _bar_data=_bar_lookup_dict.get(w.ticker)),
+            "label": lbl,
+        })
+
+    # Favourites — same query as _global()
+    try:
+        _fav_res = db.query(Watchlist.ticker).join(
+            WatchlistLabel, Watchlist.label_id == WatchlistLabel.id
+        ).filter(
+            Watchlist.organization_id == org_id,
+            Watchlist.status == WatchlistStatus.WATCHING,
+            WatchlistLabel.is_default == True
+        ).all()
+        favourited_tickers = {r[0] for r in _fav_res}
+    except Exception:
+        favourited_tickers = set()
+
+    return templates.TemplateResponse("components/watchlist_cards.html", {
+        "request": request,
+        "watchlist": watchlist_data,
+        "labels": labels,
+        "favourited_tickers": favourited_tickers,
+        "path": "/watchlist",
+        "has_more": has_more,
+        "page": page,
+        "total": total,
+        "active_label": label,
+    })
 
 
 @app.post("/watchlist/labels/create")
