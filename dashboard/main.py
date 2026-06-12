@@ -1250,6 +1250,7 @@ async def signals(request: Request, db: Session = Depends(get_db),
     _sig_bar_lookup: dict[str, dict] = {}
     if _sig_tickers:
         from sqlalchemy import func as _sfunc
+        from app.models.market import PriceBar
         _ssub = (
             db.query(PriceBar.ticker, _sfunc.max(PriceBar.date).label("max_date"))
             .filter(PriceBar.ticker.in_(_sig_tickers))
