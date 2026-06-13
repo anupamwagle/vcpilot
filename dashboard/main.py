@@ -1217,6 +1217,7 @@ async def signals(request: Request, db: Session = Depends(get_db),
             "category": r.category.value,
             "is_mandatory": r.is_mandatory,
             "globally_enabled": r.enabled_globally,
+            "asset_types": getattr(r, "asset_types", "BOTH") or "BOTH",
         }
         for r in all_org_rules
     }
@@ -1400,6 +1401,12 @@ async def signals(request: Request, db: Session = Depends(get_db),
         for rule_id, meta in rules_meta.items():
             if not meta["globally_enabled"]:
                 continue
+            # Skip rules that don't apply to this signal's asset type
+            rule_asset = meta.get("asset_types", "BOTH")
+            if rule_asset == "CRYPTO" and at != "CRYPTO":
+                continue
+            if rule_asset == "EQUITY" and at == "CRYPTO":
+                continue
             rule_passed = screener_pass_fail.get(rule_id)   # True / False / None (unknown)
             current_override = overrides.get(rule_id, None)  # True / False / None
             entry = {
@@ -1441,6 +1448,7 @@ async def signals(request: Request, db: Session = Depends(get_db),
             "size": s.suggested_size_shares or 0,
             "risk_aud": float(s.risk_per_trade_aud or 0),
             "status": s.status.value,
+            "sig_date": str(s.signal_date) if s.signal_date else "",
             "rules_passed": passed,
             "rules_total": len(rr),
             "rule_results": _enrich_rule_results(s.ticker, rr, db, target_date=s.signal_date, overrides=overrides, _bar_data=_sig_bar_lookup.get(s.ticker)),

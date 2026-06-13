@@ -820,23 +820,21 @@ function traderApp() {
         </span>`;
       }
       this.tapeHtml = html || '<span class="tape-item"><span class="tape-ticker" style="color:var(--muted)">No price data — run Refresh Price Data</span></span>';
-      // Recalculate scroll speed after DOM updates
-      this.$nextTick(() => this._updateTapeSpeed());
+      // Recalculate scroll speed after DOM updates and layout
+      this.$nextTick(() => requestAnimationFrame(() => this._updateTapeSpeed()));
     },
 
     _updateTapeSpeed() {
       const track = document.querySelector('.tape-track');
-      if (!track) return;
-      // scrollWidth = full doubled content; half = one loop length
+      if (!track || track.scrollWidth <= 0) return;
+      // Half of doubled content = one full loop length in pixels
       const loopWidth = track.scrollWidth / 2;
-      // Target: 90px per second — readable but lively
-      const PX_PER_SEC = 90;
-      const dur = Math.max(10, Math.round(loopWidth / PX_PER_SEC));
+      if (loopWidth <= 0) return;
+      // 80px/s = comfortable reading speed regardless of item count
+      const PX_PER_SEC = 80;
+      const dur = Math.max(15, Math.round(loopWidth / PX_PER_SEC));
+      // Only update the CSS variable — never restart the animation (avoids jump-to-start)
       document.documentElement.style.setProperty('--tape-dur', dur + 's');
-      // Restart animation cleanly to avoid jump
-      track.style.animation = 'none';
-      track.offsetWidth; // force reflow
-      track.style.animation = '';
     },
 
     // ── TradingView symbol mapping ────────────────────────────────────────

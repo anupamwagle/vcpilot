@@ -75,6 +75,24 @@
   <div style="flex:1;height:1px;background:var(--border)"></div>
 </div>
 {% endif %}
+
+{# ── Compact row for old triggered/skipped signals (not today's date) ── #}
+{% if s.status in ('TRIGGERED', 'SKIPPED') and s.sig_date != signal_date %}
+<div class="card" id="sig-{{ s.id }}" data-search="{{ s.ticker }} {{ s.company_name or '' }}"
+     style="padding:.5rem .875rem;opacity:.5;display:flex;align-items:center;gap:.75rem">
+  <span style="font-size:.65rem;color:var(--text-subtle)">{{ s.sig_date }}</span>
+  <span class="mono font-bold" style="color:var(--text)">{{ s.ticker.replace('.AX','').replace('-AUD','').replace('-USD','') }}</span>
+  {% if s.company_name %}<span style="font-size:.75rem;color:var(--text-muted)">{{ s.company_name }}</span>{% endif %}
+  <span style="margin-left:auto;font-size:.65rem;font-weight:700;padding:.1rem .45rem;border-radius:.25rem;
+    {% if s.status == 'TRIGGERED' %}background:var(--pos-bg);color:var(--pos){% else %}background:var(--surface-alt);color:var(--text-subtle){% endif %}">
+    {{ s.status }}
+  </span>
+  {% if s.pivot %}<span style="font-size:.7rem;color:var(--text-muted)">Pivot {{ s.pivot | round(3) }}</span>{% endif %}
+  {% if s.stop  %}<span style="font-size:.7rem;color:var(--neg)">Stop {{ s.stop | round(3) }}</span>{% endif %}
+</div>
+{% else %}
+
+{# ── Full card for today's signals or all PENDING ── #}
 <div class="card overflow-hidden card-lift card-enter" id="sig-{{ s.id }}"
      data-search="{{ s.ticker }} {{ s.company_name or '' }}"
      style="{% if s.status == 'TRIGGERED' %}opacity:.65;border-color:var(--bull-border){% elif s.status == 'SKIPPED' %}opacity:.45{% endif %}">
@@ -364,6 +382,7 @@
   {% endif %}
 
 </div>
+{% endif %}{# end full-card vs compact-row #}
 {% endfor %}
 </div>
 {% endif %}
