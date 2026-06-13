@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>VCPilot — Trader Terminal</title>
+  <title>AstraTrade — Trader Terminal</title>
 
   <!-- TradingView embed widget -->
   <script src="https://s3.tradingview.com/tv.js"></script>
@@ -117,7 +117,7 @@
       white-space: nowrap;
       display: inline-block;
       will-change: transform;
-      animation: tape-scroll 60s linear infinite;
+      animation: tape-scroll var(--tape-dur, 60s) linear infinite;
     }
     .tape-track:hover { animation-play-state: paused; }
     @keyframes tape-scroll {
@@ -352,7 +352,7 @@
        ROW 1 — Regime / status bar
   ═══════════════════════════════════════════════════════════ -->
   <div class="tv-regime">
-    <a href="/" class="back-link">← VCPilot</a>
+    <a href="/" class="back-link">← AstraTrade</a>
     <div class="regime-sep"></div>
 
     <template x-for="[exch, regime] in Object.entries(regimes)" :key="exch">
@@ -798,6 +798,8 @@ function traderApp() {
       } catch { /* silent */ }
     },
 
+
+
     async _refreshAll() {
       await this._loadAll();
       this._buildTape();
@@ -818,6 +820,23 @@ function traderApp() {
         </span>`;
       }
       this.tapeHtml = html || '<span class="tape-item"><span class="tape-ticker" style="color:var(--muted)">No price data — run Refresh Price Data</span></span>';
+      // Recalculate scroll speed after DOM updates
+      this.$nextTick(() => this._updateTapeSpeed());
+    },
+
+    _updateTapeSpeed() {
+      const track = document.querySelector('.tape-track');
+      if (!track) return;
+      // scrollWidth = full doubled content; half = one loop length
+      const loopWidth = track.scrollWidth / 2;
+      // Target: 90px per second — readable but lively
+      const PX_PER_SEC = 90;
+      const dur = Math.max(10, Math.round(loopWidth / PX_PER_SEC));
+      document.documentElement.style.setProperty('--tape-dur', dur + 's');
+      // Restart animation cleanly to avoid jump
+      track.style.animation = 'none';
+      track.offsetWidth; // force reflow
+      track.style.animation = '';
     },
 
     // ── TradingView symbol mapping ────────────────────────────────────────
@@ -954,6 +973,6 @@ function traderApp() {
   };
 }
 </script>
-<!-- VCPilot Trader Terminal v2 -->
+<!-- AstraTrade Trader Terminal v2 -->
 </body>
 </html>
