@@ -1396,6 +1396,9 @@ async def signals(request: Request, db: Session = Depends(get_db),
             # True if user already overrode this rule for the signal, False if still blocking
             screener_pass_fail[bear_rule_id] = overrides.get(bear_rule_id) is False
 
+        ek = getattr(s, "exchange_key", "ASX") or "ASX"
+        at = getattr(s, "asset_type",   "EQUITY") or "EQUITY"
+
         override_rules_failed = []
         override_rules_passed = []
         for rule_id, meta in rules_meta.items():
@@ -1427,8 +1430,6 @@ async def signals(request: Request, db: Session = Depends(get_db),
         is_promoted_vcp    = notes_str.startswith("[VCP Screener]")
         has_overrides = any(overrides.get(rid) == False for rid, passed in screener_pass_fail.items() if passed is False)
 
-        ek = getattr(s, "exchange_key", "ASX") or "ASX"
-        at = getattr(s, "asset_type",   "EQUITY") or "EQUITY"
         sig_data.append({
             "id": s.id, "ticker": s.ticker,
             "exchange_key":  ek,
