@@ -540,9 +540,10 @@
         <span class="chart-name">Select an instrument to load chart</span>
       </template>
 
-      <div style="margin-left:auto;display:flex;gap:3px;align-items:center">
-        <template x-for="tf in [['60','1H'],['240','4H'],['D','D'],['W','W']]" :key="tf[0]">
-          <button class="tf-btn" :class="activeTf===tf[0]&&'active'" @click="setTf(tf[0])" x-text="tf[1]"></button>
+      <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
+        <!-- Timeframe buttons -->
+        <template x-for="tf in ['1M','3M','6M','1Y','2Y']" :key="tf">
+          <button class="tf-btn" :class="activeTf===tf&&'active'" @click="setTf(tf)" x-text="tf"></button>
         </template>
       </div>
     </div>
@@ -564,6 +565,14 @@
       <span x-show="selectedSignal?.target2">
         <span class="marker-label">▲▲ T2</span>
         <span class="marker-val" style="color:#4ade80" x-text="fmtPrice(selectedSignal?.target2, selectedCurrency)"></span>
+      </span>
+      <span x-show="chartRs !== null" style="border-left:1px solid var(--border);padding-left:10px">
+        <span class="marker-label">RS </span>
+        <span class="marker-val" :class="chartRs >= 70 ? 'up' : (chartRs >= 50 ? '' : 'down')" x-text="chartRs"></span>
+      </span>
+      <span x-show="chart52wHigh !== null" style="border-left:1px solid var(--border);padding-left:10px">
+        <span class="marker-label">52w H </span>
+        <span class="marker-val" style="color:#8b5cf6" x-text="fmtPrice(chart52wHigh, selectedCurrency)"></span>
       </span>
       <span style="margin-left:auto" x-show="selectedSignal?.vs_pivot_pct !== null">
         <span class="marker-label">vs pivot </span>
@@ -884,16 +893,23 @@ function traderApp() {
         toolbar_bg: '#0a0a12',
         backgroundColor: '#0a0a12',
         gridColor: '#18182a',
-        hide_top_toolbar: false,
-        hide_side_toolbar: false,
+        hide_top_toolbar: true,
+        hide_side_toolbar: true,
         allow_symbol_change: false,
         save_image: false,
-        withdateranges: true,
+        withdateranges: false,
         details: false,
         studies: [
-          'MASimple@tv-basicstudies',     // user can adjust lengths in-chart
+          { id: 'MASimple@tv-basicstudies', inputs: { length: 50  } },
+          { id: 'MASimple@tv-basicstudies', inputs: { length: 150 } },
+          { id: 'MASimple@tv-basicstudies', inputs: { length: 200 } },
           'Volume@tv-basicstudies',
         ],
+        studies_overrides: {
+          'moving average.plot.color.0': '#3b82f6',   // MA50 — blue
+          'moving average.plot.color.1': '#f59e0b',   // MA150 — amber
+          'moving average.plot.color.2': '#ef5350',   // MA200 — red
+        },
       });
     },
 

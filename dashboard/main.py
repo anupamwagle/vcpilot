@@ -2852,20 +2852,46 @@ async def trader_chart_data(
         .all()
     )
 
-    candles, volumes = [], []
+    candles, volumes, ma50, ma150, ma200 = [], [], [], [], []
+    high_52w = low_52w = rs_rating = None
+
     for b in bars:
         if not all([b.open, b.high, b.low, b.close]):
             continue
         ts = b.date.strftime("%Y-%m-%d")
         o, h, l, c = float(b.open), float(b.high), float(b.low), float(b.close)
         candles.append({"time": ts, "open": o, "high": h, "low": l, "close": c})
-        volumes.append({
-            "time": ts,
-            "value": int(b.volume) if b.volume else 0,
-            "color": "#26a69a44" if c >= o else "#ef535044",
-        })
 
-    return JSONResponse({"candles": candles, "volumes": volumes, "ticker": ticker, "tf": tf})
+        # Volume — brighter when breakout volume (vol_ratio ≥ 1.5)
+        vr = float(b.vol_ratio) if b.vol_ratio else 1.0
+        if c >= o:
+            vol_color = "#26a69a" if vr >= 1.5 else "#26a69a55"
+        else:
+            vol_color = "#ef5350" if vr >= 1.5 else "#ef535055"
+        volumes.append({"time": ts, "value": int(b.volume) if b.volume else 0, "color": vol_color})
+
+        # MA lines (skip None values so lines don't plot gaps as zero)
+        if b.ma_50:   ma50.append({"time": ts,  "value": float(b.ma_50)})
+        if b.ma_150:  ma150.append({"time": ts, "value": float(b.ma_150)})
+        if b.ma_200:  ma200.append({"time": ts, "value": float(b.ma_200)})
+
+        # 52-week range from the last bar
+        if b.high_52w: high_52w = float(b.high_52w)
+        if b.low_52w:  low_52w  = float(b.low_52w)
+        if b.rs_rating: rs_rating = float(b.rs_rating)
+
+    return JSONResponse({
+        "candles": candles,
+        "volumes": volumes,
+        "ma50":    ma50,
+        "ma150":   ma150,
+        "ma200":   ma200,
+        "high_52w":  high_52w,
+        "low_52w":   low_52w,
+        "rs_rating": rs_rating,
+        "ticker": ticker,
+        "tf": tf,
+    })
 
 
 @app.get("/trader/prices")
