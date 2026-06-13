@@ -886,7 +886,7 @@ function traderApp() {
         autosize: true,
         symbol: this._tvSymbol(ticker, this.selectedExchange),
         interval: this.activeTf,
-        timezone: 'Australia/Sydney',
+        timezone: '{{ display_tz | default("Australia/Sydney") }}',
         theme: 'dark',
         style: '1',                       // candles
         locale: 'en',
