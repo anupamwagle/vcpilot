@@ -26,14 +26,11 @@
   </div>
 </div>
 
-<!-- ── Sticky filter bar (exchange + refresh timer) ─────────────────── -->
+<!-- ── Sticky filter bar ─────────────────────────────────────────────── -->
 <div class="sticky-filters">
   {% set base_url = "/watchlist" %}
   {% set extra_params = ("label=" ~ active_label) if active_label is not none else "" %}
   {% include "components/exchange_filter.html" %}
-  <div style="display:flex;justify-content:flex-end;padding:.2rem 0 0;margin-top:-.25rem">
-    <span id="wl-refresh-timer" style="font-size:.62rem;color:var(--text-subtle);font-family:'SF Mono',monospace">Auto-refreshes every 90s</span>
-  </div>
 </div>
 
 {% if has_crypto and crypto_tickers %}
@@ -46,7 +43,6 @@
       <span id="cl-badge" class="badge-sm" style="font-size:.65rem;background:#fef9c3;color:#b45309">Loading…</span>
     </div>
     <div style="display:flex;align-items:center;gap:.75rem">
-      <span id="cl-timer" class="text-xs" style="color:var(--text-muted)"></span>
       <button onclick="clRefresh(true)" style="font-size:.75rem;padding:.25rem .625rem;border-radius:.3rem;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer">↻ Refresh</button>
     </div>
   </div>
@@ -84,7 +80,7 @@
   // Strip exchange suffix to get base symbol: "BTC-AUD" → "BTC"
   const SYMBOLS = WL_TICKERS.map(t => t.replace(/-AUD$/,'').replace(/-USD$/,'').replace(/-USDT$/,'').toUpperCase());
 
-  let _countdown = 60, _timer = null;
+  let _timer = null;
 
   function fmtPrice(n) {
     n = parseFloat(n);
@@ -178,18 +174,12 @@
       document.getElementById('cl-badge').textContent = 'Error — CoinGecko rate limit? Retry in 60s';
       console.error('Crypto live panel error:', e);
     }
-    _countdown = 60;
   }
   window.clRefresh = clRefresh;
 
   function startTimer() {
     clearInterval(_timer);
-    _timer = setInterval(() => {
-      _countdown--;
-      const el = document.getElementById('cl-timer');
-      if (el) el.textContent = `Refreshing in ${_countdown}s`;
-      if (_countdown <= 0) clRefresh(true);
-    }, 1000);
+    _timer = setInterval(() => clRefresh(true), 60000);
   }
 
   clRefresh(true);
@@ -480,25 +470,6 @@ if (checked) {
   }
 })();
 
-// ── Watchlist soft reload every 90s (new signals / watchlist changes) ────────
-(function() {
-  const INTERVAL = 90;
-  let t = INTERVAL;
-  const el = document.getElementById('wl-refresh-timer');
-  setInterval(() => {
-    t--;
-    if (el) el.textContent = 'Page refreshes in ' + t + 's';
-    if (t <= 0) {
-      // Preserve scroll position across reload
-      sessionStorage.setItem('wl-scroll', window.scrollY);
-      location.reload();
-    }
-  }, 1000);
-  // Restore scroll after reload
-  const saved = sessionStorage.getItem('wl-scroll');
-  if (saved) { window.scrollTo(0, parseInt(saved)); sessionStorage.removeItem('wl-scroll'); }
-  if (el) el.textContent = 'Page refreshes in ' + t + 's';
-})();
 // ── Watchlist search ──────────────────────────────────────────────────────
 function wlSearch(q) {
   const term = q.trim().toLowerCase();
@@ -512,5 +483,10 @@ function wlSearch(q) {
   const noRes = document.getElementById('wl-no-results');
   if (noRes) noRes.style.display = (term && visible === 0) ? '' : 'none';
 }
+
+// Save current watchlist filters so sidebar nav link can restore them
+(function() {
+  localStorage.setItem('wl_filters', window.location.search.slice(1));
+})();
 </script>
 {% endblock %}

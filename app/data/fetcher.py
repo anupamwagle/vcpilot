@@ -235,40 +235,150 @@ def currency_to_aud(amount: float, from_currency: str) -> float:
 # Crypto universe — top 100 tokens supported by yfinance
 # ---------------------------------------------------------------------------
 
-# Base symbols (no suffix). normalize_ticker() appends "-USD" or "-AUD" per exchange.
+# ---------------------------------------------------------------------------
+# Independent Reserve — live coin map (yfinance base → IR lowercase code).
+# Built from: GET https://api.independentreserve.com/Public/GetValidPrimaryCurrencyCodes
+# Note: IR uses "xbt" for Bitcoin; "audm"/"ausd" are AUD tokens (excluded).
+# ---------------------------------------------------------------------------
+IR_SYMBOL_MAP: dict[str, str] = {
+    "BTC":    "xbt",     # IR calls Bitcoin "xbt"
+    "ETH":    "eth",
+    "SOL":    "sol",
+    "XRP":    "xrp",
+    "USDC":   "usdc",
+    "USDT":   "usdt",
+    "AAVE":   "aave",
+    "ADA":    "ada",
+    "AVAX":   "avax",
+    "BAT":    "bat",
+    "BCH":    "bch",
+    "BONK":   "bonk",
+    "COMP":   "comp",
+    "DAI":    "dai",
+    "DOGE":   "doge",
+    "DOT":    "dot",
+    "ETC":    "etc",
+    "GRT":    "grt",
+    "HYPE":   "hype",
+    "LINK":   "link",
+    "LTC":    "ltc",
+    "MANA":   "mana",
+    "MATIC":  "matic",
+    "MKR":    "mkr",
+    "PENGU":  "pengu",
+    "PEPE":   "pepe",
+    "RENDER": "render",
+    "RLUSD":  "rlusd",
+    "SAND":   "sand",
+    "SHIB":   "shib",
+    "SNX":    "snx",
+    "TRUMP":  "trump",
+    "TRX":    "trx",
+    "UNI":    "uni",
+    "WIF":    "wif",
+    "XAUT":   "xaut",
+    "XLM":    "xlm",
+    "YFI":    "yfi",
+    "ZRX":    "zrx",
+}
+
+
+def get_ir_supported_tickers() -> list[str]:
+    """
+    Return all coins tradeable on Independent Reserve in yfinance AUD format.
+    Fetches live list from IR's public API; falls back to hardcoded IR_SYMBOL_MAP.
+    Excludes AUD-denominated tokens (audm, ausd) which are not crypto assets.
+    """
+    _SKIP_IR_CODES = {"audm", "ausd"}  # AUD money-market / stablecoin tokens
+    try:
+        import requests as _req
+        r = _req.get(
+            "https://api.independentreserve.com/Public/GetValidPrimaryCurrencyCodes",
+            timeout=8,
+            headers={"User-Agent": "AstraTrade/1.0 (+https://github.com/anupamwagle/vcpilot)"},
+        )
+        r.raise_for_status()
+        ir_codes = [c.lower() for c in r.json()]
+        result = []
+        for ir_code in ir_codes:
+            if ir_code in _SKIP_IR_CODES:
+                continue
+            # Look up our canonical yfinance symbol from the map
+            yf_base = next((k for k, v in IR_SYMBOL_MAP.items() if v == ir_code), None)
+            if yf_base:
+                result.append(f"{yf_base}-AUD")
+            else:
+                # New coin IR added that isn't in our map yet — use uppercase directly
+                result.append(f"{ir_code.upper()}-AUD")
+        return result if result else [f"{sym}-AUD" for sym in IR_SYMBOL_MAP]
+    except Exception:
+        # Network failure — fall back to hardcoded map
+        return [f"{sym}-AUD" for sym in IR_SYMBOL_MAP]
+
+
+# ---------------------------------------------------------------------------
+# Generic top-~300 list for non-IR exchanges (Binance, Coinbase, Kraken).
+# Suffix (-USD / -AUD) is applied by get_top_crypto_tickers().
+# For IR, use get_ir_supported_tickers() instead — IR has its own coin list.
+# ---------------------------------------------------------------------------
 TOP_CRYPTO_SYMBOLS: list[str] = [
-    # Mega-cap
+    # ── Mega-cap (top ~30) ────────────────────────────────────────────────────
     "BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "AVAX", "DOGE", "TRX", "LINK",
     "DOT", "MATIC", "SHIB", "LTC", "BCH", "UNI", "ATOM", "XLM", "NEAR", "ETC",
     "TON", "PEPE", "IMX", "APT", "SUI", "RENDER", "OP", "ARB", "FET", "STX",
-    # Large-cap
+    # ── Large-cap (top 30–80) ─────────────────────────────────────────────────
     "FIL", "HBAR", "VET", "ALGO", "AAVE", "ICP", "MKR", "QNT", "SAND", "MANA",
     "FLOW", "AXS", "THETA", "GRT", "CHZ", "ZEC", "XMR", "COMP", "YFI", "BAT",
     "INJ", "LDO", "WIF", "FLOKI", "BONK", "JUP", "TIA", "GALA", "PYTH", "JASMY",
     "FTM", "AR", "SEI", "BEAM", "W", "ENA", "CORE", "EGLD", "WLD", "DYDX",
-    # Mid-cap DeFi / Infrastructure
+    # ── Notable large-caps not in original list ───────────────────────────────
+    "KAS", "TAO", "HYPE", "ONDO", "TRUMP", "PENGU", "APE", "HNT",
+    # ── Mid-cap DeFi / Infrastructure ────────────────────────────────────────
     "ENJ", "ZRX", "CRV", "SNX", "SUSHI", "OMG", "BAL", "REN", "1INCH", "RUNE",
     "STRK", "AGIX", "ORDI", "BTT", "MINA", "RON", "LRC", "GNO", "WOO", "RAY",
     "IOTA", "ENS", "GMT", "ONE", "QTUM", "DGB", "KAVA", "ZIL", "ANKR", "WAVES",
-    # Extended top-200
+    # ── DeFi additions ────────────────────────────────────────────────────────
+    "CAKE", "GMX", "BLUR", "MAGIC", "SSV", "BADGER", "PERP", "BNT", "NEXO", "PAXG",
+    "SCRT", "GTC", "CREAM", "FIS", "AUCTION", "OSMO", "JST", "TRB", "IQ", "ZEN",
+    # ── Infrastructure / L1–L2 ───────────────────────────────────────────────
+    "METIS", "SKL", "CKB", "FLUX", "XDC", "GLMR", "MOVR", "COTI", "ICX", "XEC",
+    "XEM", "RVN", "TOMO", "XNO", "KDA", "ASTR", "SXP", "RSR", "DUSK", "POND",
+    "FLR", "SAFE", "FXS", "STG", "GFI", "ATM",
+    # ── Gaming / NFT / Metaverse ─────────────────────────────────────────────
+    "ALICE", "AUDIO", "HIGH", "DAR", "LOKA", "SLP", "HOOK", "VOXEL", "LIT", "SPELL",
+    "KEY", "MNGO", "KUJI",
+    # ── Fan tokens ────────────────────────────────────────────────────────────
+    "LAZIO", "SANTOS", "ALPINE", "PORTO", "CITY", "BAR", "JUV", "ACM", "PSG", "OG",
+    # ── Utilities / Misc ─────────────────────────────────────────────────────
+    "CYBER", "ID", "AERGO", "ARPA", "CELR", "CHR", "ACH", "DENT", "WIN", "VRA",
+    "VTHO", "POKT", "UTK", "CLV", "REEF", "OGN", "PHA", "STEEM", "KMD", "NULS",
+    "TWT", "REQ", "ERN", "BIFI", "XVG", "NFT", "MAPS",
+    # ── New / recent launches ─────────────────────────────────────────────────
+    "MOVE", "ME", "USUAL", "VIRTUAL",
+    # ── Extended meme / launch tokens ────────────────────────────────────────
     "PENDLE", "JTO", "PYUSD", "PIXEL", "PORTAL", "ALT", "DYM", "MANTA", "ZK", "SAGA",
     "ETHFI", "REZ", "BB", "OMNI", "LISTA", "ZRO", "BANANA", "DOGS", "HMSTR", "CATI",
     "EIGEN", "SCR", "KAIA", "CELO", "ROSE", "CFX", "LPT", "API3", "OCEAN", "BAND",
+    # ── Long tail / extended coverage ────────────────────────────────────────
     "STORJ", "NMR", "RLC", "OXT", "CTSI", "LOOM", "ORN", "DOCK", "DATA", "AST",
     "BAKE", "BURGER", "DEGO", "MASK", "POLS", "ALPHA", "HARD", "WING", "BEL", "CTK",
     "CHESS", "DODO", "FOR", "MDX", "FRONT", "LINA", "UNFI", "TLM", "QUICK", "FARM",
     "GHST", "SUPER", "COMBO", "VITE", "FIRO", "STMX", "ONG", "COCOS", "XVS", "AUTO",
+    # ── Trending meme / new coins ─────────────────────────────────────────────
+    "PNUT", "POPCAT", "MOODENG", "NEIRO", "BOME", "MEW", "MOTHER", "WEN", "DEGEN",
+    "PONKE", "BRETT", "TURBO", "MOG", "GIGA", "SLERF", "FARTCOIN", "MELANIA",
 ]
 
 
 def get_top_crypto_tickers(exchange_key: str = "CRYPTO_INDEPENDENTRESERVE") -> list[str]:
     """
-    Return the top 200 crypto tickers in yfinance format for the given exchange.
-    e.g. CRYPTO_INDEPENDENTRESERVE → ["BTC-AUD", "ETH-AUD", ...]
-         CRYPTO_BINANCE → ["BTC-USD", "ETH-USD", ...]
+    Return crypto tickers in yfinance format for the given exchange.
+    - CRYPTO_INDEPENDENTRESERVE → fetches live list from IR API (~40 AUD pairs)
+    - Other exchanges (Binance, Coinbase, Kraken) → top-~300 generic USD list
     """
-    suffix = "-AUD" if exchange_key in CRYPTO_AUD_EXCHANGES else "-USD"
-    return [f"{sym}{suffix}" for sym in TOP_CRYPTO_SYMBOLS]
+    if exchange_key in CRYPTO_AUD_EXCHANGES:
+        return get_ir_supported_tickers()
+    return [f"{sym}-USD" for sym in TOP_CRYPTO_SYMBOLS]
 
 
 def get_asx200_tickers() -> list[str]:
@@ -778,25 +888,9 @@ def _get_ir_live_price(ticker: str) -> dict | None:
     import requests as _req
     from datetime import datetime as _dt
 
-    # Map yfinance base symbol → IR primaryCurrencyCode
-    _IR_CODE_MAP = {
-        "BTC": "xbt", "ETH": "eth", "XRP": "xrp", "LTC": "ltc",
-        "BCH": "bch", "XLM": "xlm", "EOS": "eos", "LINK": "link",
-        "DOT": "dot", "UNI": "uni", "AAVE": "aave", "COMP": "comp",
-        "SNX": "snx", "YFI": "yfi", "ATOM": "atom", "MATIC": "matic",
-        "SOL": "sol", "ADA": "ada", "AVAX": "avax", "SAND": "sand",
-        "MANA": "mana", "AXS": "axs", "THETA": "theta", "ALGO": "algo",
-        "DOGE": "doge", "SHIB": "shib", "GRT": "grt", "MKR": "mkr",
-        "SUSHI": "sushi", "USDT": "usdt",
-        # Additional IR-listed coins
-        "TRX": "trx", "BAT": "bat", "ZRX": "zrx", "OMG": "omg",
-        "ENJ": "enj", "CHZ": "chz", "FTM": "ftm", "NEAR": "near",
-        "ICP": "icp", "VET": "vet", "EGLD": "egld", "FLOW": "flow",
-        "HBAR": "hbar", "ONE": "one", "ROSE": "rose",
-    }
-
+    # Use the module-level IR_SYMBOL_MAP (kept in sync with IR's live coin list)
     base = ticker.replace("-AUD", "").upper()
-    ir_code = _IR_CODE_MAP.get(base)
+    ir_code = IR_SYMBOL_MAP.get(base)
     if not ir_code:
         return None  # coin not listed on IR
 

@@ -25,9 +25,6 @@
 {% set base_url = "/signals" %}
 {% set extra_params = "" %}
 {% include "components/exchange_filter.html" %}
-<div style="display:flex;justify-content:flex-end;padding:.25rem 0 .25rem;margin-bottom:-.5rem">
-  <span id="signals-refresh-timer" style="font-size:.65rem;color:var(--text-subtle);font-family:'SF Mono',monospace">Live prices refresh every 30s</span>
-</div>
 
 {% if not signals %}
 <div class="card p-12 text-center">
@@ -395,29 +392,14 @@ function togglePassingRules(sigId) {
   }
 }
 
-// ── Live entry-check polling (30s) ──────────────────────────────────────────
-// Updates only the price badge + check label/time in-place — no page flash.
+// ── Live entry-check polling (30s, silent) ──────────────────────────────────
+// Updates price badge + check label/time in-place — no page flash, no countdown.
 (function() {
-  const INTERVAL = 30000;
-  let countdown = INTERVAL / 1000;
-  const timerEl = document.getElementById('signals-refresh-timer');
-
-  function fmtCountdown(s) { return s + 's'; }
-
-  function tick() {
-    countdown--;
-    if (timerEl) timerEl.textContent = 'Refreshing in ' + fmtCountdown(countdown);
-    if (countdown <= 0) {
-      countdown = INTERVAL / 1000;
-      pollChecks();
-    }
-  }
-
   async function pollChecks() {
     try {
       const r = await fetch('/signals/poll');
       if (!r.ok) return;
-      const data = await r.json(); // {signal_id: {time, close, pivot, result, data_source, delay_mins}}
+      const data = await r.json();
       for (const [sid, chk] of Object.entries(data)) {
         const priceEl = document.getElementById('chk-price-' + sid);
         const timeEl  = document.getElementById('chk-time-' + sid);
@@ -440,34 +422,19 @@ function togglePassingRules(sigId) {
                                  : chk.result === 'not_triggered' ? 'rgba(220,38,38,.04)'
                                  : 'var(--surface-alt)';
         }
-        if (chk.close != null) {
-          const isIR      = chk.data_source === 'independentreserve';
-          const icon      = isIR ? '🟢' : '🔴';
-          const delayStr  = chk.delay_mins != null && chk.delay_mins > 0 ? ` (~${chk.delay_mins}m delayed)` : (isIR ? ' ⚡ Real-time' : '');
-          const srcStr    = chk.data_source ? ` · source: ${chk.data_source}` : '';
-          const delayTitle = chk.delay_mins != null && chk.delay_mins > 0 ? ` · ~${chk.delay_mins} min delayed` : (isIR ? ' · real-time (IR)' : '');
-          if (priceEl) {
-            priceEl.textContent = `${icon} Live $${parseFloat(chk.close).toFixed(3)} as of ${chk.time}${delayStr}`;
-            priceEl.title = `Live price from most recent entry check${srcStr}${delayTitle}`;
-            // Flash green briefly when price updates
-            priceEl.style.background = 'var(--pos)';
-            setTimeout(() => { priceEl.style.background = 'var(--t-accent)'; }, 600);
-          } else {
-            // Price element didn't exist yet (first check after page load) — reload to render it
-            location.reload();
-          }
+        if (chk.close != null && priceEl) {
+          const isIR     = chk.data_source === 'independentreserve';
+          const icon     = isIR ? '🟢' : '🔴';
+          const delayStr = chk.delay_mins != null && chk.delay_mins > 0 ? ` (~${chk.delay_mins}m delayed)` : (isIR ? ' ⚡ Real-time' : '');
+          priceEl.textContent = `${icon} Live $${parseFloat(chk.close).toFixed(3)} as of ${chk.time}${delayStr}`;
+          priceEl.style.background = 'var(--pos)';
+          setTimeout(() => { priceEl.style.background = 'var(--t-accent)'; }, 600);
         }
       }
-      if (timerEl) timerEl.textContent = 'Updated just now';
-      setTimeout(() => {
-        countdown = INTERVAL / 1000;
-        if (timerEl) timerEl.textContent = 'Refreshing in ' + fmtCountdown(countdown);
-      }, 2000);
     } catch(e) { /* silent */ }
   }
 
-  setInterval(tick, 1000);
-  if (timerEl) timerEl.textContent = 'Refreshing in ' + fmtCountdown(countdown);
+  setInterval(pollChecks, 30000);
 })();
 
 // ── Signals search ────────────────────────────────────────────────────────

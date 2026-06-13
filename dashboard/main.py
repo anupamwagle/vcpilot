@@ -8,7 +8,7 @@ sys.path.insert(0, "/app")
 from datetime import date, datetime, timedelta
 from app.utils.time_helper import get_current_date
 from fastapi import FastAPI, Request, Form, Depends, Query
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.orm import Session
@@ -2516,6 +2516,30 @@ async def action_force_screen(request: Request, exchange: str = Form("ASX")):
     return RedirectResponse("/signals?msg=screen", 302)
 
 
+@app.post("/action/force-screen-async")
+async def action_force_screen_async(
+    request: Request, exchange: str = Form("ASX"), db: Session = Depends(get_db)
+):
+    """AJAX version of force-screen: queues task and returns JSON with last_audit_id
+    so the dashboard widget can start polling /admin/tasks/poll?after={last_id}."""
+    from fastapi.responses import JSONResponse
+    from sqlalchemy import func
+    if not _auth(request):
+        return JSONResponse({"ok": False, "error": "unauthenticated"}, status_code=401)
+    org_id = request.session.get("organization_id")
+    # Get highest current audit ID so widget only sees events from this run
+    from app.models.audit import AuditLog
+    last_id = db.query(func.max(AuditLog.id)).filter(
+        AuditLog.organization_id == org_id
+    ).scalar() or 0
+    try:
+        from app.tasks.screening import _run_screen_force
+        _run_screen_force.delay(organization_id=org_id, exchange_key=exchange or "ASX")
+        return JSONResponse({"ok": True, "last_id": last_id, "exchange": exchange})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 @app.post("/action/force-breakout-check")
 async def action_force_breakout_check(request: Request, exchange: str = Form("ASX")):
     if not _auth(request):
@@ -2551,6 +2575,349 @@ async def action_force_stop_sync(request: Request):
     sync_stop_orders.delay()
     return RedirectResponse("/admin/tasks?msg=stops", 302)
 
+
+
+# ===========================================================================
+# TRADER TERMINAL
+# ===========================================================================
+
+@app.get("/trader", response_class=HTMLResponse)
+async def trader_view(request: Request, db: Session = Depends(get_db)):
+    if not _auth(request):
+        return RedirectResponse("/login")
+    return templates.TemplateResponse("trading/trader.html", {
+        "request": request,
+        **_global(request, db),
+    })
+
+
+@app.get("/trader/data")
+async def trader_data(request: Request, db: Session = Depends(get_db)):
+    """Full data payload for the trader terminal — initial load + 30s refresh."""
+    if not _auth(request):
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    try:
+        return await _trader_data_inner(request, db)
+    except Exception as exc:
+        import traceback
+        trace = traceback.format_exc()
+        try:
+            db.rollback()  # leave session clean so get_db teardown commit doesn't re-raise
+        except Exception:
+            pass
+        return JSONResponse({"error": str(exc), "trace": trace}, status_code=500)
+
+
+async def _trader_data_inner(request: Request, db):
+    from sqlalchemy import func, desc
+    from sqlalchemy.orm import joinedload
+    from app.models.signal import Watchlist, WatchlistStatus, Signal, SignalStatus
+    from app.models.trade import Position, TradeStatus
+    from app.models.market import PriceBar, EntryCheckLog
+    from app.models.config import SystemConfig
+    from app.models.account import Account
+    from app.models.exchange import ExchangeConfig
+
+    org_id = request.session.get("organization_id")
+
+    # ── Watchlist ──
+    wl_items = (
+        db.query(Watchlist)
+        .options(joinedload(Watchlist.label))
+        .filter(
+            Watchlist.organization_id == org_id,
+            Watchlist.status == WatchlistStatus.WATCHING,
+        )
+        .order_by(Watchlist.created_at.desc())
+        .limit(150)
+        .all()
+    )
+    wl_tickers = [w.ticker for w in wl_items]
+
+    # ── Latest price bar per watchlist ticker ──
+    price_map: dict = {}
+    if wl_tickers:
+        latest_sq = (
+            db.query(PriceBar.ticker, func.max(PriceBar.date).label("mx"))
+            .filter(PriceBar.ticker.in_(wl_tickers))
+            .group_by(PriceBar.ticker)
+            .subquery()
+        )
+        bars = (
+            db.query(PriceBar)
+            .join(latest_sq, (PriceBar.ticker == latest_sq.c.ticker) & (PriceBar.date == latest_sq.c.mx))
+            .all()
+        )
+        price_map = {b.ticker: b for b in bars}
+
+    # ── Pending / triggered signals ──
+    signals = (
+        db.query(Signal)
+        .filter(
+            Signal.organization_id == org_id,
+            Signal.status.in_([SignalStatus.PENDING, SignalStatus.TRIGGERED]),
+        )
+        .order_by(Signal.signal_date.desc())
+        .limit(50)
+        .all()
+    )
+
+    # ── Latest entry-check per signal ──
+    check_map: dict = {}
+    if signals:
+        sig_ids = [s.id for s in signals]
+        chk_sq = (
+            db.query(EntryCheckLog.signal_id, func.max(EntryCheckLog.checked_at).label("mx"))
+            .filter(EntryCheckLog.organization_id == org_id, EntryCheckLog.signal_id.in_(sig_ids))
+            .group_by(EntryCheckLog.signal_id)
+            .subquery()
+        )
+        checks = (
+            db.query(EntryCheckLog)
+            .join(chk_sq, (EntryCheckLog.signal_id == chk_sq.c.signal_id) &
+                  (EntryCheckLog.checked_at == chk_sq.c.mx))
+            .all()
+        )
+        check_map = {c.signal_id: c for c in checks}
+
+    # ── Open positions ──
+    positions = (
+        db.query(Position)
+        .filter(Position.organization_id == org_id, Position.status == TradeStatus.OPEN)
+        .all()
+    )
+
+    # ── Market regimes ──
+    regime_keys = [
+        "last_market_regime_ASX", "last_market_regime_NYSE",
+        "last_market_regime_NASDAQ", "last_market_regime_CRYPTO_INDEPENDENTRESERVE",
+        "last_market_regime_CRYPTO_BINANCE",
+    ]
+    regime_rows = db.query(SystemConfig).filter(
+        SystemConfig.organization_id == org_id,
+        SystemConfig.key.in_(regime_keys),
+    ).all()
+    regimes = {
+        row.key.replace("last_market_regime_", ""): (row.value or "UNKNOWN")
+        for row in regime_rows if row.value
+    }
+
+    # ── Account ──
+    account = db.query(Account).filter(Account.organization_id == org_id).first()
+    capital = float(account.capital_aud) if account and account.capital_aud else 0.0
+    is_paper = account.is_paper if account else True
+
+    # ── Exchange configs (for flags) ──
+    ex_cfgs = {e.exchange_key: e for e in db.query(ExchangeConfig).all()}
+    def _flag(exk: str) -> str:
+        c = ex_cfgs.get(exk)
+        return (c.flag_emoji if c and c.flag_emoji else "🌐")
+
+    def _disp(ticker: str) -> str:
+        return ticker.replace(".AX", "").replace("-AUD", "").replace("-USD", "")
+
+    stock_names = get_cached_stock_names(db)
+
+    # ── Build watchlist payload ──
+    wl_data = []
+    for w in wl_items:
+        bar = price_map.get(w.ticker)
+        has_sig = any(s.ticker == w.ticker for s in signals)
+        close = float(bar.close) if bar and bar.close else None
+        open_ = float(bar.open) if bar and bar.open else None
+        chg = round((close - open_) / open_ * 100, 2) if close and open_ and open_ > 0 else 0.0
+        wl_data.append({
+            "ticker": w.ticker,
+            "display_ticker": _disp(w.ticker),
+            "name": stock_names.get(w.ticker, _disp(w.ticker)),
+            "exchange_key": w.exchange_key or "ASX",
+            "asset_type": w.asset_type or "EQUITY",
+            "currency": w.currency or "AUD",
+            "flag": _flag(w.exchange_key or "ASX"),
+            "close": close,
+            "change_pct": chg,
+            "volume": int(bar.volume) if bar and bar.volume else 0,
+            "label_name": w.label.name if w.label else None,
+            "label_color": w.label.color if w.label else None,
+            "has_signal": has_sig,
+        })
+
+    # ── Build signals payload ──
+    sig_data = []
+    for s in signals:
+        chk = check_map.get(s.id)
+        bar = price_map.get(s.ticker)
+        sig_data.append({
+            "id": s.id,
+            "ticker": s.ticker,
+            "display_ticker": _disp(s.ticker),
+            "name": stock_names.get(s.ticker, _disp(s.ticker)),
+            "exchange_key": s.exchange_key or "ASX",
+            "currency": s.currency or "AUD",
+            "flag": _flag(s.exchange_key or "ASX"),
+            "status": s.status.value if s.status else "PENDING",
+            "signal_date": s.signal_date.isoformat() if s.signal_date else None,
+            "pivot": float(s.pivot_price) if s.pivot_price else None,
+            "stop": float(s.stop_price) if s.stop_price else None,
+            "target1": float(s.target_price_1) if s.target_price_1 else None,
+            "target2": float(s.target_price_2) if s.target_price_2 else None,
+            "close": float(bar.close) if bar and bar.close else None,
+            "last_check_price": float(chk.price_current) if chk and chk.price_current else None,
+            "last_check_at": chk.checked_at.isoformat() if chk else None,
+            "breakout_confirmed": bool(chk.breakout_confirmed) if chk else False,
+            "vs_pivot_pct": float(chk.price_vs_pivot) if chk and chk.price_vs_pivot else None,
+        })
+
+    # ── Build positions payload ──
+    pos_data = []
+    total_pnl = 0.0
+    for p in positions:
+        pnl = float(p.unrealised_pnl) if p.unrealised_pnl else 0.0
+        total_pnl += pnl
+        pos_data.append({
+            "id": p.id,
+            "ticker": p.ticker,
+            "display_ticker": _disp(p.ticker),
+            "name": stock_names.get(p.ticker, _disp(p.ticker)),
+            "exchange_key": p.exchange_key or "ASX",
+            "currency": p.currency or "AUD",
+            "flag": _flag(p.exchange_key or "ASX"),
+            "entry_price": float(p.entry_price) if p.entry_price else None,
+            "current_price": float(p.current_price) if p.current_price else None,
+            "quantity": float(p.qty) if p.qty else 0,
+            "unrealised_pnl": pnl,
+            "unrealised_pct": float(p.unrealised_pct) if p.unrealised_pct else 0.0,
+            "stop": float(p.current_stop) if p.current_stop else None,
+            "target1": float(p.target_1) if p.target_1 else None,
+        })
+
+    # ── Ticker tape: prices for all watchlist items ──
+    tape: dict = {}
+    for w in wl_items:
+        bar = price_map.get(w.ticker)
+        if bar and bar.close:
+            close = float(bar.close)
+            open_ = float(bar.open) if bar.open and float(bar.open) > 0 else close
+            chg = round((close - open_) / open_ * 100, 2)
+            tape[w.ticker] = {
+                "display": _disp(w.ticker),
+                "price": close,
+                "change_pct": chg,
+                "currency": w.currency or "AUD",
+            }
+
+    return JSONResponse({
+        "watchlist": wl_data,
+        "signals": sig_data,
+        "positions": pos_data,
+        "regimes": regimes,
+        "total_unrealised_pnl": round(total_pnl, 2),
+        "open_positions_count": len(pos_data),
+        "capital_aud": capital,
+        "account_is_paper": is_paper,
+        "tape": tape,
+    })
+
+
+@app.get("/trader/chart/{ticker:path}")
+async def trader_chart_data(
+    ticker: str,
+    request: Request,
+    tf: str = "1Y",
+    db: Session = Depends(get_db),
+):
+    """OHLCV history for TradingView Lightweight Charts."""
+    if not _auth(request):
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+
+    from app.models.market import PriceBar
+    from datetime import timedelta
+
+    tf_days = {"1M": 30, "3M": 90, "6M": 180, "1Y": 365, "2Y": 730}.get(tf.upper(), 365)
+    cutoff = datetime.utcnow().date() - timedelta(days=tf_days)
+
+    bars = (
+        db.query(PriceBar)
+        .filter(PriceBar.ticker == ticker, PriceBar.date >= cutoff)
+        .order_by(PriceBar.date.asc())
+        .all()
+    )
+
+    candles, volumes = [], []
+    for b in bars:
+        if not all([b.open, b.high, b.low, b.close]):
+            continue
+        ts = b.date.strftime("%Y-%m-%d")
+        o, h, l, c = float(b.open), float(b.high), float(b.low), float(b.close)
+        candles.append({"time": ts, "open": o, "high": h, "low": l, "close": c})
+        volumes.append({
+            "time": ts,
+            "value": int(b.volume) if b.volume else 0,
+            "color": "#26a69a44" if c >= o else "#ef535044",
+        })
+
+    return JSONResponse({"candles": candles, "volumes": volumes, "ticker": ticker, "tf": tf})
+
+
+@app.get("/trader/prices")
+async def trader_prices(request: Request, db: Session = Depends(get_db)):
+    """Live price poll — latest bar close for all org watchlist tickers."""
+    if not _auth(request):
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    try:
+        return _trader_prices_inner(request, db)
+    except Exception as exc:
+        import traceback
+        trace = traceback.format_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return JSONResponse({"error": str(exc), "trace": trace}, status_code=500)
+
+
+def _trader_prices_inner(request: Request, db):
+    from sqlalchemy import func
+    from app.models.signal import Watchlist, WatchlistStatus
+    from app.models.market import PriceBar
+
+    org_id = request.session.get("organization_id")
+    rows = db.query(Watchlist.ticker, Watchlist.currency).filter(
+        Watchlist.organization_id == org_id,
+        Watchlist.status == WatchlistStatus.WATCHING,
+    ).all()
+
+    if not rows:
+        return JSONResponse({})
+
+    tickers = [r[0] for r in rows]
+    currency_map = {r[0]: (r[1] or "AUD") for r in rows}
+
+    latest_sq = (
+        db.query(PriceBar.ticker, func.max(PriceBar.date).label("mx"))
+        .filter(PriceBar.ticker.in_(tickers))
+        .group_by(PriceBar.ticker)
+        .subquery()
+    )
+    bars = (
+        db.query(PriceBar)
+        .join(latest_sq, (PriceBar.ticker == latest_sq.c.ticker) & (PriceBar.date == latest_sq.c.mx))
+        .all()
+    )
+
+    result = {}
+    for b in bars:
+        close = float(b.close)
+        open_ = float(b.open) if b.open and float(b.open) > 0 else close
+        chg = round((close - open_) / open_ * 100, 2)
+        result[b.ticker] = {
+            "display": b.ticker.replace(".AX", "").replace("-AUD", "").replace("-USD", ""),
+            "price": close,
+            "change_pct": chg,
+            "currency": currency_map.get(b.ticker, "AUD"),
+        }
+
+    return JSONResponse(result)
 
 
 # ===========================================================================
@@ -4947,6 +5314,24 @@ async def superadmin_operations(request: Request, db: Session = Depends(get_db))
     asx_count    = db.query(func.count(Stock.id)).filter(Stock.exchange_key == "ASX",    Stock.is_active == True).scalar() or 0
     us_count     = db.query(func.count(Stock.id)).filter(Stock.exchange_key.in_(["NYSE","NASDAQ"]), Stock.is_active == True).scalar() or 0
     crypto_count = db.query(func.count(Stock.id)).filter(Stock.asset_type == "CRYPTO",   Stock.is_active == True).scalar() or 0
+
+    # Per-exchange crypto breakdown for the universe table
+    crypto_rows = (
+        db.query(Stock.exchange_key, func.count(Stock.id).label("cnt"))
+        .filter(Stock.asset_type == "CRYPTO", Stock.is_active == True)
+        .group_by(Stock.exchange_key)
+        .all()
+    )
+    crypto_by_exchange = [{"key": r.exchange_key or "CRYPTO", "count": r.cnt} for r in crypto_rows]
+
+    # Count crypto stocks that have at least one price bar (active/seeded)
+    seeded_crypto_count = (
+        db.query(func.count(func.distinct(PriceBar.ticker)))
+        .join(Stock, Stock.ticker == PriceBar.ticker)
+        .filter(Stock.asset_type == "CRYPTO")
+        .scalar() or 0
+    )
+
     total_bars   = db.query(func.count(PriceBar.id)).scalar() or 0
     latest_bar   = db.query(func.max(PriceBar.date)).scalar()
     today_bars   = db.query(func.count(PriceBar.id)).filter(PriceBar.date == get_current_date()).scalar() or 0
@@ -5030,6 +5415,8 @@ async def superadmin_operations(request: Request, db: Session = Depends(get_db))
         "crypto_keys": crypto_keys, "all_exchanges": sorted(all_exchanges),
         "regimes": regimes, "task_runs": task_runs,
         "active_org_count": active_org_count,
+        "crypto_by_exchange": crypto_by_exchange,
+        "seeded_crypto_count": seeded_crypto_count,
     })
     return templates.TemplateResponse("superadmin/operations.html", ctx)
 

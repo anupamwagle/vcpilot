@@ -596,6 +596,15 @@ The WAHA webhook routes incoming messages to `http://api:8501/webhook/whatsapp`.
 
 **Current operational state (pick up here in next session):**
 
+- **Dashboard UX Polish (12 Jun 2026 — Session 2):**
+  - Auto page-refresh timers removed from `watchlist.html` and `signals.html` — no more forced page reloads. Silent AJAX polling kept on signals (30s) and data-log (30s).
+  - Filter persistence: exchange + label filter state survives navigation via `localStorage` (`wl_filters`, `home_wl_filters`). Nav links intercept clicks and restore saved params.
+  - Live screener progress widget on home dashboard: clicking Run Screener opens an inline log panel streaming `SCREENER_TICKER` audit events in real-time. New `POST /action/force-screen-async` JSON endpoint anchors the poll.
+- **Crypto universe expanded (12 Jun 2026 — Session 2):**
+  - IR: `get_ir_supported_tickers()` calls IR's live public API to get the exact list (~40 AUD pairs). `IR_SYMBOL_MAP` (39 coins) is authoritative and replaces old stale inline dict.
+  - Generic exchanges: `TOP_CRYPTO_SYMBOLS` expanded from 100 → ~295 symbols.
+  - Central Ops now shows per-exchange breakdown (seeded count + with price bars).
+  - **Action required:** Click "Re-seed Crypto Universe" in Central Ops for IR to update the DB with the live coin list, then "Refresh Price Data".
 - **Fixed Watchlist Exchange Filtering Bug:** Resolved the issue where crypto (e.g., TRX-AUD, SOL-USD) and US stock (e.g., AAPL, MSFT) tickers on the watchlist defaulted to `exchange_key="ASX"` and `asset_type="EQUITY"` inside the database because `_upsert_watchlist` and `screen_single_ticker`'s update branch did not propagate these columns (defaulting to model values). Also made `toggle_favourite` in `dashboard/main.py` multi-market aware. Ran a recovery script to retroactively update all 13 incorrect watchlist records in the DB.
 - **Added Exchange Filters to Dashboard Watchlist Card:** Implemented the top-level exchange filters (All / ASX / US / Crypto) on the main dashboard (`/`) Watchlist Market Data section. The filter is fully integrated with the asynchronous `wlFilter` transition, preserving the active state of labels, custom stocks, and exchange selections together.
 
@@ -607,7 +616,7 @@ The WAHA webhook routes incoming messages to `http://api:8501/webhook/whatsapp`.
 | Capital | A$5,000 (paper=True) |
 | Crypto rules | 11 ON (6 original + 5 enhanced: RSI/MACD/vol/RR/BTC-RS) |
 | Equity rules | 45 ON |
-| IR universe | 100 tokens seeded |
+| IR universe | ⚠️ Needs re-seed via Central Ops (code now uses IR live API ~40 AUD pairs) |
 | IR live prices | Confirmed: BTC $89,847 \| ETH $2,393 \| SOL $94 \| XRP $1.63 |
 | Market regime | CAUTION (BTC -21% vs 200MA) — no signals, correct |
 | Celery beat | 5-min entry/exit/stop/P&L crypto; 4× daily screener |

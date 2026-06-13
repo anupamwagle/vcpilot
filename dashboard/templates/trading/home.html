@@ -224,21 +224,21 @@
 </div>
 
 <!-- ── Quick actions ──────────────────────────────────────────── -->
-<div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:1.5rem">
-  <form method="post" action="/action/force-screen" style="display:flex;align-items:center;gap:.35rem">
+<div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.75rem">
+  <div style="display:flex;align-items:center;gap:.35rem">
     {% if has_asx or has_us or has_crypto %}
-    <select name="exchange" class="input py-1 text-xs" style="width: auto; height: 2.25rem; min-height: 2.25rem; padding-top: 0; padding-bottom: 0;">
+    <select id="screen-exchange" class="input py-1 text-xs" style="width: auto; height: 2.25rem; min-height: 2.25rem; padding-top: 0; padding-bottom: 0;">
       {% if has_asx %}<option value="ASX">🇦🇺 ASX Screener</option>{% endif %}
       {% if has_us %}<option value="US">🇺🇸 US Screener</option>{% endif %}
       {% if has_crypto %}<option value="CRYPTO">₿ Crypto Screener</option>{% endif %}
     </select>
     {% endif %}
-    <button type="submit" class="btn-primary" style="height: 2.25rem;">
+    <button id="run-screener-btn" onclick="runScreener()" type="button" class="btn-primary" style="height: 2.25rem;">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-      </svg>Run Screener
+      </svg><span id="run-screener-label">Run Screener</span>
     </button>
-  </form>
+  </div>
   <form method="post" action="/action/send-report">
     <button type="submit" class="btn-ghost">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -256,6 +256,140 @@
   </form>
   {% endif %}
 </div>
+
+<!-- ── Screener progress widget (hidden until run) ────────────── -->
+<div id="screener-widget" style="display:none;margin-bottom:1rem">
+  <div class="card overflow-hidden">
+    <div class="section-head" style="padding:.6rem 1rem;gap:.5rem">
+      <h3 class="section-title" style="display:flex;align-items:center;gap:.5rem;font-size:.8rem">
+        <span id="sw-spinner" style="width:.6rem;height:.6rem;border-radius:50%;border:2px solid var(--t-accent);border-top-color:transparent;display:inline-block;animation:spin .7s linear infinite"></span>
+        <span id="sw-title">Screener Running…</span>
+      </h3>
+      <div style="display:flex;align-items:center;gap:.75rem">
+        <span id="sw-stats" style="font-size:.72rem;color:var(--text-muted)"></span>
+        <button onclick="document.getElementById('screener-widget').style.display='none'" type="button"
+                style="font-size:.7rem;color:var(--text-subtle);background:none;border:none;cursor:pointer;padding:.1rem .3rem" title="Dismiss">✕</button>
+      </div>
+    </div>
+    <div id="sw-log" style="max-height:240px;overflow-y:auto;font-family:'SF Mono',Monaco,monospace;font-size:.72rem;padding:.5rem .75rem;display:flex;flex-direction:column;gap:.15rem">
+    </div>
+    <div id="sw-summary" style="display:none;padding:.5rem 1rem;border-top:1px solid var(--border);font-size:.75rem;color:var(--text-muted)"></div>
+  </div>
+</div>
+<style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+
+<script>
+var _swPollTimer = null;
+var _swLastId = 0;
+var _swDone = false;
+var _swPass = 0, _swFail = 0, _swNew = 0;
+
+function runScreener() {
+  var btn = document.getElementById('run-screener-btn');
+  var lbl = document.getElementById('run-screener-label');
+  var exchEl = document.getElementById('screen-exchange');
+  var exch = exchEl ? exchEl.value : 'ASX';
+
+  // Reset widget state
+  _swDone = false; _swPass = 0; _swFail = 0; _swNew = 0; _swLastId = 0;
+  document.getElementById('sw-log').innerHTML = '';
+  document.getElementById('sw-summary').style.display = 'none';
+  document.getElementById('sw-title').textContent = 'Screener Running…';
+  document.getElementById('sw-stats').textContent = '';
+  document.getElementById('sw-spinner').style.animation = 'spin .7s linear infinite';
+  document.getElementById('screener-widget').style.display = 'block';
+
+  btn.disabled = true;
+  lbl.textContent = 'Queuing…';
+
+  var fd = new FormData();
+  fd.append('exchange', exch);
+
+  fetch('/action/force-screen-async', { method: 'POST', body: fd })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.ok) {
+        lbl.textContent = 'Run Screener';
+        btn.disabled = false;
+        _swAppend('⚠️ Failed to queue screener: ' + (data.error || 'unknown'), 'var(--neg)');
+        return;
+      }
+      _swLastId = data.last_id;
+      lbl.textContent = 'Screening…';
+      clearInterval(_swPollTimer);
+      _swPollTimer = setInterval(_swPoll, 2000);
+    })
+    .catch(function(e) {
+      lbl.textContent = 'Run Screener';
+      btn.disabled = false;
+      _swAppend('⚠️ Network error: ' + e.message, 'var(--neg)');
+    });
+}
+
+function _swPoll() {
+  if (_swDone) return;
+  fetch('/admin/tasks/poll?after=' + _swLastId)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.logs) return;
+      data.logs.forEach(function(log) {
+        var action = log.action;
+        if (action !== 'SCREENER_RUN' && action !== 'SCREENER_TICKER') return;
+
+        var msg = log.ticker !== '—' ? '[' + log.ticker + '] ' + log.message : log.message;
+        var color = 'var(--text-muted)';
+        if (action === 'SCREENER_TICKER') {
+          if (log.message.indexOf('PASS') >= 0 || log.message.indexOf('pass') >= 0 || log.message.indexOf('Pass') >= 0) {
+            color = 'var(--pos)'; _swPass++;
+          } else if (log.message.indexOf('FAIL') >= 0 || log.message.indexOf('fail') >= 0 || log.message.indexOf('No data') >= 0) {
+            color = 'var(--text-subtle)'; _swFail++;
+          } else if (log.message.indexOf('signal') >= 0 || log.message.indexOf('Signal') >= 0 || log.message.indexOf('VCP') >= 0) {
+            color = 'var(--t-accent)'; _swNew++;
+          }
+        } else if (action === 'SCREENER_RUN') {
+          color = 'var(--t-accent)';
+        }
+
+        _swAppend(log.time + '  ' + msg, color);
+
+        // Detect completion
+        if (action === 'SCREENER_RUN' && log.detail && log.detail.mode === 'force_complete') {
+          _swFinish(log.message);
+        }
+        if (log.id > _swLastId) _swLastId = log.id;
+      });
+      document.getElementById('sw-stats').textContent =
+        '✅ ' + _swPass + '  ❌ ' + _swFail + (_swNew > 0 ? '  🎯 ' + _swNew + ' signals' : '');
+    })
+    .catch(function() { /* silent */ });
+}
+
+function _swAppend(text, color) {
+  var log = document.getElementById('sw-log');
+  var row = document.createElement('div');
+  row.style.color = color || 'var(--text-muted)';
+  row.style.whiteSpace = 'pre';
+  row.textContent = text;
+  log.appendChild(row);
+  log.scrollTop = log.scrollHeight;
+}
+
+function _swFinish(finalMsg) {
+  _swDone = true;
+  clearInterval(_swPollTimer);
+  document.getElementById('sw-spinner').style.animation = 'none';
+  document.getElementById('sw-spinner').style.background = 'var(--pos)';
+  document.getElementById('sw-spinner').style.border = 'none';
+  document.getElementById('sw-title').textContent = '✅ Screener Complete';
+  var sum = document.getElementById('sw-summary');
+  sum.innerHTML = finalMsg + ' &nbsp;·&nbsp; <a href="/signals" style="color:var(--t-accent);text-decoration:underline">View Signals →</a>';
+  sum.style.display = 'block';
+  var btn = document.getElementById('run-screener-btn');
+  var lbl = document.getElementById('run-screener-label');
+  btn.disabled = false;
+  lbl.textContent = 'Run Screener';
+}
+</script>
 
 <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
 
@@ -500,24 +634,32 @@
       .then(function(html) {
         var parser = new DOMParser();
         var doc = parser.parseFromString(html, 'text/html');
-        // Replace watchlist section: the card containing the table
         var newCard = doc.getElementById('watchlist-card');
         var oldCard = document.getElementById('watchlist-card');
         if (newCard && oldCard) {
           oldCard.innerHTML = newCard.innerHTML;
         } else {
-          // fallback: push state and full reload preserving scroll
           history.pushState(null, '', url);
           window.location.reload();
           return;
         }
         history.pushState(null, '', url);
+        // Persist filter so it survives navigation away and back
+        localStorage.setItem('home_wl_filters', params || '');
         window.scrollTo(0, scrollY);
       })
       .catch(function() {
         window.location.href = url;
       });
   }
+
+  // Restore saved filter on fresh page load (e.g. navigating back via sidebar)
+  document.addEventListener('DOMContentLoaded', function() {
+    if (!window.location.search) {
+      var saved = localStorage.getItem('home_wl_filters');
+      if (saved) { wlFilter(saved); }
+    }
+  });
   </script>
 
   <div class="tbl-wrap">

@@ -8,6 +8,17 @@
 
 ### ✅ Done
 
+- **Dashboard UX Polish + Crypto Universe Expansion (12 Jun 2026):**
+  - **Removed auto page-refresh timers:** Both `watchlist.html` and `signals.html` had countdown timers that force-reloaded the page (e.g. every 60s for watchlist, 5-min for signals). Removed the countdown UI, `setInterval` tick, and `location.reload()` fallback from both templates. Signals page retains its silent 30s AJAX poll (`pollChecks()`) for live entry-check updates — no full reload, just in-place DOM updates.
+  - **Filter persistence across navigation:** Exchange filter (ASX/US/Crypto) and label filter selections now survive navigating away and back. Watchlist saves current `?label=&exchange=` params to `localStorage('wl_filters')` on every load; Home page watchlist section saves to `localStorage('home_wl_filters')` after every `wlFilter()` AJAX call. `base.html` nav links intercept Dashboard and Watchlist clicks to restore saved filters via `navToHome()`/`navToWatchlist()`. Clearing to "All" saves an empty string, preventing stale restore.
+  - **Live screener progress widget:** The "Run Screener" button on the main dashboard now opens an inline progress panel below itself showing a live log of every stock being screened as it happens. Implementation: new `POST /action/force-screen-async` JSON endpoint (returns `last_id` + 200 instead of redirect), then client polls `GET /admin/tasks/poll?after={last_id}` every 2s filtering for `SCREENER_RUN`/`SCREENER_TICKER` audit events. Log rows are colour-coded (green = SIGNAL, blue = WATCHLIST, yellow = FAIL fundamentals, red = FAIL trend, grey = SKIP). Completion detected when `SCREENER_RUN` event has `detail.mode === "force_complete"`. Panel shows pass/fail/skip counters + "View Signals →" link on finish.
+  - **Crypto universe expanded to ~295 symbols (IR: live API):**
+    - `IR_SYMBOL_MAP` (39 current IR coins, module-level in `fetcher.py`) replaces stale inline dict in `_get_ir_live_price()`.
+    - `get_ir_supported_tickers()` new function — calls IR's free public API (`/Public/GetValidPrimaryCurrencyCodes`) to fetch the live coin list (~40 AUD pairs); falls back to hardcoded `IR_SYMBOL_MAP` if API unreachable. Always returns yfinance format (`BTC-AUD`, etc.).
+    - `get_top_crypto_tickers(exchange_key)` now branches: IR → `get_ir_supported_tickers()` (exact live list), generic exchanges → expanded `TOP_CRYPTO_SYMBOLS` (~295 symbols, up from 100). Central Ops shows per-exchange breakdown with count of seeded tokens and those with price bars.
+    - `TOP_CRYPTO_SYMBOLS` expanded from 100 to ~295 symbols across mega-cap, large-cap, mid-cap DeFi, infrastructure/L1–L2, gaming/NFT, fan tokens, utilities, trending meme, and long-tail categories.
+    - Super Admin Central Ops updated with per-exchange crypto breakdown table (exchange | seeded count | with price bars) and clarified description distinguishing IR (live API, ~40 AUD pairs) vs generic exchanges (~295 USD pairs).
+
 - **Expanded ASX Universe & Sector Label Auto-Categorisation (12 Jun 2026):**
   - **Expanded ASX universe beyond ASX200:** New `asx_universe_scope` SystemConfig key (default `ASX200`) controls which stocks the screener scans. Three options: `ASX200` (top 200, fast), `ASX300` (top 300, adds ~100 mid-caps), `ALL_LISTED` (full ~2,200+ ASX-listed companies from ASX website CSV, slow but covers all small caps). New fetchers added to `app/data/fetcher.py`: `get_asx300_tickers()` / `get_asx300_metadata()` from Wikipedia, `get_asx_all_listed()` from `asx.com.au` CSV export. `refresh_universe` task updated to accept `scope` param (reads from SystemConfig if not passed), flags `in_asx300=True` on ASX300 members, populates `index_name` / `market_cap` on new stocks. Health page has a new "🌏 Refresh ASX Universe" button with a scope selector. Admin Config shows a smart dropdown for `asx_universe_scope`.
   - **Watchlist sector label auto-categorisation:** New `infer_sector_label(sector, industry)` function in `fetcher.py` maps GICS sector/industry strings to 24 human-readable label categories (Gold, Lithium, Rare Earth, Uranium, Silver, Copper, Iron & Steel, Oil & Gas, Energy, Biotech, Healthcare/Pharma, FinTech, Technology, Banks, Financials, Real Estate (REIT), Consumer, Industrials, Telco/Media, Utilities, Crypto Core). Sector labels are auto-assigned when stocks are added to the watchlist by the screener (`_upsert_watchlist`) or manually added (`screen_single_ticker`). Only fills in unlabelled items — never overrides explicit user-set labels (Favourites, High Priority, VCP Forming, Under Review). New `recategorise_watchlist_labels` Celery task bulk-assigns labels to all existing unlabelled items (supports `force=True` to overwrite all). `migrate_saas.py` seeds 19 ASX sector labels per org on startup (sort_order 20–38, after crypto labels). Health page has a "🏷 Re-categorise Labels" button with "Unlabelled only" / "Force (overwrite all)" options.
@@ -381,7 +392,7 @@ First signals likely from: BTC-AUD, DOGE-AUD, LINK-AUD, XRP-AUD (closest to 200M
 
 ---
 
-## Services Status (as of 8 Jun 2026 — Session 3)
+## Services Status (as of 12 Jun 2026 — Session 2)
 
 | Service | Status | Notes |
 |---|---|---|
@@ -395,7 +406,7 @@ First signals likely from: BTC-AUD, DOGE-AUD, LINK-AUD, XRP-AUD (closest to 200M
 | `vcpilot-whatsapp` | ✅ Running | http://localhost:3000 — QR not yet scanned for AW |
 | `vcpilot-ibkr` | ⏸ Not started | Need: `docker compose --profile trading up ibkr -d` |
 
-## Data State (AW Org — id=10)
+## Data State (AW Org — id=10, as of 12 Jun 2026)
 
 | Item | State |
 |---|---|
@@ -403,8 +414,8 @@ First signals likely from: BTC-AUD, DOGE-AUD, LINK-AUD, XRP-AUD (closest to 200M
 | ASX price bars | Run `refresh_asx.sh` to verify |
 | ASX market regime | BEAR (re-evaluate via `refresh_asx.sh`) |
 | ASX signals (AW) | 0 — BEAR regime blocks entries |
-| IR crypto universe | ✅ 100 tokens seeded |
-| IR price bars | ✅ 47 tickers with 2yr history |
+| IR crypto universe | ⚠️ Needs re-seed — run "Re-seed Crypto Universe" in Central Ops (code now uses IR live API ~40 AUD pairs) |
+| IR price bars | ✅ 47 tickers with 2yr history (pre-re-seed) |
 | IR market regime | ✅ CAUTION (BTC -21% vs 200MA) |
 | IR signals (AW) | 0 — CAUTION regime, no VCP breakouts |
 | IR watchlist (AW) | 1 item: BTC-AUD |

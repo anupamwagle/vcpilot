@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VCPilot — Trader Terminal</title>
+
+  <!-- TradingView embed widget -->
+  <script src="https://s3.tradingview.com/tv.js"></script>
+  <!-- Alpine.js -->
+  <script defer src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js"></script>
+
+  <style>
+    /* ── Terminal Design System ──────────────────────────────────────────── */
+    :root {
+      --bg:       #0a0a12;
+      --surface:  #11111c;
+      --surf2:    #18182a;
+      --border:   #22223a;
+      --text:     #e2e2ec;
+      --muted:    #5a5a78;
+      --subtle:   #38384f;
+      --accent:   #00d4aa;
+      --up:       #26a69a;
+      --down:     #ef5350;
+      --warn:     #f59e0b;
+      --pivot:    #f59e0b;
+      --bull-fg:  #26a69a;
+      --bear-fg:  #ef5350;
+      --caut-fg:  #f59e0b;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+      font-size: 12px;
+    }
+
+    /* ── Grid ──────────────────────────────────────────────────────────── */
+    .tv-grid {
+      display: grid;
+      grid-template-rows: 34px 34px 1fr;
+      grid-template-columns: 296px 1fr 252px;
+      height: 100dvh;
+    }
+
+    /* full-width rows */
+    .tv-regime { grid-column: 1 / -1; grid-row: 1; }
+    .tv-tape   { grid-column: 1 / -1; grid-row: 2; }
+    /* panels */
+    .tv-left   { grid-column: 1; grid-row: 3; }
+    .tv-chart  { grid-column: 2; grid-row: 3; }
+    .tv-right  { grid-column: 3; grid-row: 3; }
+
+    /* ── Regime bar ─────────────────────────────────────────────────────── */
+    .tv-regime {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      gap: 14px;
+      font-size: 10px;
+      letter-spacing: 0.02em;
+    }
+    .regime-sep { width: 1px; height: 16px; background: var(--border); flex-shrink: 0; }
+    .regime-pill {
+      display: flex; align-items: center; gap: 5px;
+      padding: 2px 7px;
+      border-radius: 3px;
+      font-weight: 700;
+      font-size: 10px;
+      letter-spacing: 0.05em;
+    }
+    .regime-bull { background: #26a69a18; color: var(--bull-fg); border: 1px solid #26a69a44; }
+    .regime-bear { background: #ef535018; color: var(--bear-fg); border: 1px solid #ef535044; }
+    .regime-caution { background: #f59e0b18; color: var(--caut-fg); border: 1px solid #f59e0b44; }
+    .regime-unknown { background: var(--surf2); color: var(--muted); border: 1px solid var(--border); }
+    .paper-badge {
+      background: #7c3aed18; color: #a78bfa;
+      border: 1px solid #7c3aed44;
+      font-size: 9px; font-weight: 800;
+      padding: 1px 6px; border-radius: 3px; letter-spacing: 0.07em;
+    }
+    .regime-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+    .pnl-pos { color: var(--up); font-weight: 700; }
+    .pnl-neg { color: var(--down); font-weight: 700; }
+    .icon-btn {
+      background: none; border: none; cursor: pointer;
+      color: var(--muted); font-size: 13px; padding: 2px 4px;
+      border-radius: 3px; transition: color .15s, background .15s;
+    }
+    .icon-btn:hover { color: var(--text); background: var(--surf2); }
+    .back-link {
+      color: var(--muted); text-decoration: none; font-size: 10px;
+      font-weight: 600; letter-spacing: 0.04em;
+      padding: 2px 6px; border-radius: 3px;
+      transition: color .15s, background .15s;
+      border: 1px solid transparent;
+    }
+    .back-link:hover { color: var(--accent); border-color: var(--border); background: var(--surf2); }
+
+    /* ── Ticker tape ────────────────────────────────────────────────────── */
+    .tv-tape {
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+    }
+    .tape-track {
+      white-space: nowrap;
+      display: inline-block;
+      will-change: transform;
+      animation: tape-scroll 60s linear infinite;
+    }
+    .tape-track:hover { animation-play-state: paused; }
+    @keyframes tape-scroll {
+      0%   { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
+    }
+    .tape-item {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 0 14px; border-right: 1px solid var(--border);
+      font-size: 10px; line-height: 34px;
+    }
+    .tape-ticker { color: var(--muted); font-weight: 600; }
+    .tape-price  { color: var(--text); font-weight: 700; }
+    .tape-up   { color: var(--up); }
+    .tape-down { color: var(--down); }
+
+    /* ── Left panel ─────────────────────────────────────────────────────── */
+    .tv-left {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .panel-tabs {
+      display: flex; align-items: center; gap: 3px;
+      padding: 5px 8px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .ptab {
+      padding: 3px 10px; border-radius: 3px; cursor: pointer;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.05em;
+      text-transform: uppercase; color: var(--muted);
+      border: 1px solid transparent; transition: all .15s;
+      background: none;
+    }
+    .ptab.active { background: var(--accent); color: #000; border-color: var(--accent); }
+    .ptab:not(.active):hover { color: var(--text); border-color: var(--border); }
+    .tab-count { opacity: 0.7; font-size: 9px; }
+
+    .tv-scroll {
+      flex: 1; overflow-y: auto;
+    }
+    .tv-scroll::-webkit-scrollbar { width: 3px; }
+    .tv-scroll::-webkit-scrollbar-track { background: transparent; }
+    .tv-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* ── Signal / watchlist cards ───────────────────────────────────────── */
+    .item-card {
+      margin: 4px 6px;
+      padding: 8px 9px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
+    }
+    .item-card:hover   { border-color: var(--subtle); background: var(--surf2); }
+    .item-card.active  { border-color: var(--accent); background: var(--surf2); }
+    .item-card.breakout {
+      border-color: var(--up);
+      animation: pulse-card 2.2s ease-in-out infinite;
+    }
+    @keyframes pulse-card {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(38,166,154,0); }
+      50%       { box-shadow: 0 0 0 5px rgba(38,166,154,0.2); }
+    }
+
+    .card-row { display: flex; align-items: center; justify-content: space-between; }
+    .card-ticker { font-weight: 800; font-size: 12px; color: var(--text); }
+    .card-name {
+      font-size: 9px; color: var(--muted);
+      max-width: 110px; overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap;
+    }
+    .card-price { font-size: 11px; font-weight: 700; font-family: monospace; }
+    .card-meta  { font-size: 9px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; margin-top: 3px; }
+    .up   { color: var(--up); }
+    .down { color: var(--down); }
+
+    /* market badges (flag emojis render as letters on Windows) */
+    .mkt {
+      display: inline-block; font-size: 8px; font-weight: 800;
+      padding: 1px 5px; border-radius: 3px; letter-spacing: 0.06em;
+      flex-shrink: 0;
+    }
+    .mkt-asx    { color: #42a5f5; background: #42a5f514; border: 1px solid #42a5f544; }
+    .mkt-us     { color: #a78bfa; background: #a78bfa14; border: 1px solid #a78bfa44; }
+    .mkt-crypto { color: #f7931a; background: #f7931a14; border: 1px solid #f7931a44; }
+
+    /* price tick flash */
+    @keyframes flash-up   { 0% { background: #26a69a33; } 100% { background: transparent; } }
+    @keyframes flash-down { 0% { background: #ef535033; } 100% { background: transparent; } }
+    .flash-up   { animation: flash-up 1.2s ease-out; border-radius: 3px; }
+    .flash-down { animation: flash-down 1.2s ease-out; border-radius: 3px; }
+
+    /* market session dots */
+    .sess { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10px; }
+    .sess-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--subtle); }
+    .sess-dot.open { background: var(--up); box-shadow: 0 0 6px var(--up); }
+    .clock { font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; letter-spacing: 0.03em; }
+
+    /* 32" TV / 4K scaling */
+    @media (min-width: 2200px) {
+      html, body { font-size: 16px; }
+      .tv-grid { grid-template-rows: 46px 46px 1fr; grid-template-columns: 400px 1fr 340px; }
+      .tv-regime { font-size: 14px; }
+      .regime-pill, .ptab, .tf-btn, .tape-item { font-size: 13px; }
+      .tape-item { line-height: 46px; }
+      .card-ticker { font-size: 16px; }
+      .card-name { font-size: 12px; max-width: 160px; }
+      .card-price { font-size: 15px; }
+      .card-meta { font-size: 12px; }
+      .stat-label, .stat-val, .chart-name, .quick-link { font-size: 13px; }
+      .chart-title { font-size: 18px; }
+      .panel-header { font-size: 12px; }
+      .empty-msg { font-size: 14px; }
+    }
+
+    .break-badge {
+      font-size: 8px; font-weight: 800; letter-spacing: 0.06em;
+      color: var(--up); animation: pulse-card 1.5s infinite;
+    }
+    .label-chip {
+      display: inline-block; font-size: 8px; font-weight: 700;
+      padding: 1px 5px; border-radius: 3px; margin-top: 3px;
+    }
+    .signal-badge {
+      display: inline-block; font-size: 8px; font-weight: 800;
+      color: var(--accent); margin-left: 4px;
+    }
+
+    .empty-msg { padding: 20px; text-align: center; color: var(--muted); font-size: 11px; }
+
+    /* ── Chart area ─────────────────────────────────────────────────────── */
+    .tv-chart {
+      display: flex; flex-direction: column; overflow: hidden;
+      background: var(--bg);
+    }
+    .chart-toolbar {
+      display: flex; align-items: center; gap: 8px;
+      padding: 5px 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+      min-height: 34px;
+    }
+    .chart-title { font-size: 13px; font-weight: 800; color: var(--text); }
+    .chart-name  { font-size: 10px; color: var(--muted); }
+    .tf-btn {
+      padding: 2px 8px; border-radius: 3px; cursor: pointer;
+      color: var(--muted); background: none;
+      border: 1px solid transparent;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.03em;
+      transition: all .15s; font-family: inherit;
+    }
+    .tf-btn:hover { color: var(--text); border-color: var(--border); }
+    .tf-btn.active { color: var(--accent); border-color: var(--accent); }
+
+    .chart-markers {
+      display: flex; align-items: center; gap: 14px;
+      padding: 4px 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+      font-size: 10px; min-height: 26px;
+    }
+    .marker-label { color: var(--muted); }
+    .marker-val   { font-weight: 700; font-family: monospace; }
+
+    #chart-container {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+    .chart-placeholder {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 10px; color: var(--muted);
+    }
+    .chart-placeholder svg { opacity: 0.15; }
+    .chart-loading {
+      position: absolute; inset: 0; z-index: 10;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--bg); color: var(--muted); font-size: 11px;
+    }
+
+    /* ── Right panel ────────────────────────────────────────────────────── */
+    .tv-right {
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .panel-header {
+      padding: 6px 10px;
+      font-size: 9px; font-weight: 800; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .panel-header a { font-size: 9px; color: var(--accent); text-decoration: none; font-weight: 600; }
+    .stat-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 4px 8px; padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .stat-label { font-size: 9px; color: var(--muted); }
+    .stat-val { font-size: 10px; font-weight: 700; text-align: right; font-family: monospace; }
+
+    .pos-card {
+      margin: 4px 6px; padding: 7px 9px;
+      border: 1px solid var(--border); border-radius: 6px;
+      cursor: pointer; transition: border-color .15s, background .15s;
+    }
+    .pos-card:hover { border-color: var(--subtle); background: var(--surf2); }
+
+    .quick-links { padding: 6px; border-top: 1px solid var(--border); flex-shrink: 0; }
+    .quick-link {
+      display: block; font-size: 10px; color: var(--muted);
+      text-decoration: none; padding: 4px 6px; border-radius: 3px;
+      transition: color .15s, background .15s;
+    }
+    .quick-link:hover { color: var(--text); background: var(--surf2); }
+    .quick-link.accent { color: var(--accent); }
+  </style>
+</head>
+
+<body x-data="traderApp()" x-init="init()">
+<div class="tv-grid">
+
+  <!-- ════════════════════════════════════════════════════════
+       ROW 1 — Regime / status bar
+  ═══════════════════════════════════════════════════════════ -->
+  <div class="tv-regime">
+    <a href="/" class="back-link">← VCPilot</a>
+    <div class="regime-sep"></div>
+
+    <template x-for="[exch, regime] in Object.entries(regimes)" :key="exch">
+      <div class="regime-pill" :class="'regime-' + regime.toLowerCase()">
+        <span x-text="regimeIcon(regime)"></span>
+        <span x-text="exchShort(exch)"></span>
+        <span x-text="regime"></span>
+      </div>
+    </template>
+
+    <div class="regime-sep"></div>
+    <span class="sess"><span class="sess-dot" :class="asxOpen && 'open'"></span>ASX</span>
+    <span class="sess"><span class="sess-dot" :class="nyseOpen && 'open'"></span>NYSE</span>
+    <span class="sess"><span class="sess-dot open"></span>CRYPTO</span>
+
+    <div class="regime-right">
+      <span class="clock" x-text="clock"></span>
+      <div class="regime-sep"></div>
+      <!-- P&L -->
+      <span style="color:var(--muted)">Open P&L</span>
+      <span :class="totalPnl >= 0 ? 'pnl-pos' : 'pnl-neg'" x-text="fmtAud(totalPnl, true)"></span>
+
+      <!-- Positions / signals counts -->
+      <span style="color:var(--muted)" x-show="openCount > 0">
+        <span x-text="openCount"></span> pos
+      </span>
+      <span style="color:var(--muted)" x-show="signals.length > 0">
+        <span x-text="signals.length"></span> signals
+      </span>
+
+      <span class="paper-badge" x-show="isPaper">PAPER</span>
+
+      <!-- Refresh -->
+      <button class="icon-btn" @click="refresh()" title="Refresh data">⟳</button>
+      <!-- Fullscreen -->
+      <button class="icon-btn" @click="toggleFullscreen()" title="Fullscreen">⛶</button>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════
+       ROW 2 — Live ticker tape
+  ═══════════════════════════════════════════════════════════ -->
+  <div class="tv-tape">
+    <div class="tape-track" x-html="tapeHtml + tapeHtml"></div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════
+       LEFT — Signals / Watchlist / Positions
+  ═══════════════════════════════════════════════════════════ -->
+  <div class="tv-left">
+    <!-- Tab bar -->
+    <div class="panel-tabs">
+      <button class="ptab" :class="tab==='signals'&&'active'" @click="tab='signals'">
+        Signals <span class="tab-count" x-show="signals.length" x-text="'('+signals.length+')'"></span>
+      </button>
+      <button class="ptab" :class="tab==='watchlist'&&'active'" @click="tab='watchlist'">
+        Watch <span class="tab-count" x-show="watchlist.length" x-text="'('+watchlist.length+')'"></span>
+      </button>
+      <button class="ptab" :class="tab==='positions'&&'active'" @click="tab='positions'">
+        Open <span class="tab-count" x-show="positions.length" x-text="'('+positions.length+')'"></span>
+      </button>
+    </div>
+
+    <!-- ── Signals ── -->
+    <div class="tv-scroll" x-show="tab==='signals'">
+      <div class="empty-msg" x-show="signals.length===0">No pending signals</div>
+      <template x-for="sig in signals" :key="sig.id">
+        <div class="item-card"
+             :class="{active: selectedTicker===sig.ticker, breakout: sig.breakout_confirmed}"
+             @click="selectSignal(sig)">
+          <div class="card-row">
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="mkt" :class="mktClass(sig.exchange_key)" x-text="mktLabel(sig.exchange_key)"></span>
+              <div>
+                <div style="display:flex;align-items:center;gap:5px">
+                  <span class="card-ticker" x-text="sig.display_ticker"></span>
+                  <span class="break-badge" x-show="sig.breakout_confirmed">● BREAK</span>
+                </div>
+                <div class="card-name" x-text="sig.name"></div>
+              </div>
+            </div>
+            <div style="text-align:right">
+              <div class="card-price"
+                   x-text="fmtPrice(sig.last_check_price ?? sig.close, sig.currency)"></div>
+              <div x-show="sig.vs_pivot_pct !== null"
+                   :class="(sig.vs_pivot_pct ?? 0) >= 0 ? 'up' : 'down'"
+                   style="font-size:9px"
+                   x-text="((sig.vs_pivot_pct ?? 0) >= 0 ? '+' : '') + (sig.vs_pivot_pct ?? 0).toFixed(1) + '% vs pivot'"></div>
+            </div>
+          </div>
+          <div class="card-meta">
+            <span x-show="sig.pivot">Pivot <span x-text="fmtPrice(sig.pivot, sig.currency)" style="color:var(--pivot);font-weight:700"></span></span>
+            <span x-show="sig.stop">Stop <span x-text="fmtPrice(sig.stop, sig.currency)" style="color:var(--down);font-weight:700"></span></span>
+            <span x-show="sig.target1">T1 <span x-text="fmtPrice(sig.target1, sig.currency)" style="color:var(--up);font-weight:700"></span></span>
+          </div>
+          <div x-show="sig.last_check_at" style="font-size:8px;color:var(--muted);margin-top:2px"
+               x-text="'Checked ' + fmtTime(sig.last_check_at)"></div>
+        </div>
+      </template>
+    </div>
+
+    <!-- ── Watchlist ── -->
+    <div class="tv-scroll" x-show="tab==='watchlist'">
+      <div class="empty-msg" x-show="watchlist.length===0">Watchlist is empty</div>
+      <template x-for="item in watchlist" :key="item.ticker">
+        <div class="item-card"
+             :class="{active: selectedTicker===item.ticker}"
+             @click="selectWatchlist(item)">
+          <div class="card-row">
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="mkt" :class="mktClass(item.exchange_key)" x-text="mktLabel(item.exchange_key)"></span>
+              <div>
+                <span class="card-ticker" x-text="item.display_ticker"></span>
+                <div class="card-name" x-text="item.name"></div>
+              </div>
+            </div>
+            <div style="text-align:right">
+              <div class="card-price" :class="flash[item.ticker]"
+                   x-text="fmtPrice(livePrice(item.ticker) ?? item.close, item.currency)"></div>
+              <div :class="liveChange(item.ticker) >= 0 ? 'up' : 'down'"
+                   style="font-size:9px"
+                   x-text="(liveChange(item.ticker) >= 0 ? '+' : '') + liveChange(item.ticker).toFixed(2) + '%'"></div>
+            </div>
+          </div>
+          <div style="margin-top:3px;display:flex;align-items:center;gap:4px">
+            <span x-show="item.label_name"
+                  class="label-chip"
+                  :style="`background:${item.label_color}22;color:${item.label_color};border:1px solid ${item.label_color}44`"
+                  x-text="item.label_name"></span>
+            <span class="signal-badge" x-show="item.has_signal">⚡ SIGNAL</span>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- ── Positions ── -->
+    <div class="tv-scroll" x-show="tab==='positions'">
+      <div class="empty-msg" x-show="positions.length===0">No open positions</div>
+      <template x-for="pos in positions" :key="pos.id">
+        <div class="item-card"
+             :class="{active: selectedTicker===pos.ticker}"
+             @click="selectPosition(pos)">
+          <div class="card-row">
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="mkt" :class="mktClass(pos.exchange_key)" x-text="mktLabel(pos.exchange_key)"></span>
+              <div>
+                <span class="card-ticker" x-text="pos.display_ticker"></span>
+                <div class="card-name" x-text="pos.name"></div>
+              </div>
+            </div>
+            <div style="text-align:right">
+              <div :class="pos.unrealised_pct >= 0 ? 'up' : 'down'"
+                   style="font-size:13px;font-weight:800"
+                   x-text="(pos.unrealised_pct >= 0 ? '+' : '') + pos.unrealised_pct.toFixed(2) + '%'"></div>
+              <div :class="pos.unrealised_pnl >= 0 ? 'pnl-pos' : 'pnl-neg'"
+                   style="font-size:9px"
+                   x-text="fmtAud(pos.unrealised_pnl, true)"></div>
+            </div>
+          </div>
+          <div class="card-meta">
+            <span>Entry <span x-text="fmtPrice(pos.entry_price, pos.currency)" style="color:var(--text)"></span></span>
+            <span>Now <span x-text="fmtPrice(pos.current_price, pos.currency)" style="color:var(--text)"></span></span>
+            <span x-show="pos.stop">Stop <span x-text="fmtPrice(pos.stop, pos.currency)" style="color:var(--down)"></span></span>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════
+       CENTRE — TradingView chart
+  ═══════════════════════════════════════════════════════════ -->
+  <div class="tv-chart">
+    <!-- Toolbar -->
+    <div class="chart-toolbar">
+      <template x-if="selectedTicker">
+        <div style="display:flex;align-items:center;gap:7px">
+          <span class="chart-title" x-text="selectedDisplay"></span>
+          <span class="chart-name" x-text="selectedName"></span>
+          <span style="font-size:10px;color:var(--muted)" x-text="selectedCurrency ? '· ' + selectedCurrency : ''"></span>
+          <span class="mkt mkt-crypto" x-show="_isCrypto(selectedExchange)" title="IR AUD pairs aren't on TradingView — chart shows the Binance USDT pair">chart: USDT</span>
+        </div>
+      </template>
+      <template x-if="!selectedTicker">
+        <span class="chart-name">Select an instrument to load chart</span>
+      </template>
+
+      <div style="margin-left:auto;display:flex;gap:3px;align-items:center">
+        <template x-for="tf in [['60','1H'],['240','4H'],['D','D'],['W','W']]" :key="tf[0]">
+          <button class="tf-btn" :class="activeTf===tf[0]&&'active'" @click="setTf(tf[0])" x-text="tf[1]"></button>
+        </template>
+      </div>
+    </div>
+
+    <!-- VCP marker legend -->
+    <div class="chart-markers" x-show="selectedSignal">
+      <span x-show="selectedSignal?.pivot">
+        <span class="marker-label">▶ Pivot</span>
+        <span class="marker-val" style="color:var(--pivot)" x-text="fmtPrice(selectedSignal?.pivot, selectedCurrency)"></span>
+      </span>
+      <span x-show="selectedSignal?.stop">
+        <span class="marker-label">✕ Stop</span>
+        <span class="marker-val" style="color:var(--down)" x-text="fmtPrice(selectedSignal?.stop, selectedCurrency)"></span>
+      </span>
+      <span x-show="selectedSignal?.target1">
+        <span class="marker-label">▲ T1</span>
+        <span class="marker-val" style="color:var(--up)" x-text="fmtPrice(selectedSignal?.target1, selectedCurrency)"></span>
+      </span>
+      <span x-show="selectedSignal?.target2">
+        <span class="marker-label">▲▲ T2</span>
+        <span class="marker-val" style="color:#4ade80" x-text="fmtPrice(selectedSignal?.target2, selectedCurrency)"></span>
+      </span>
+      <span style="margin-left:auto" x-show="selectedSignal?.vs_pivot_pct !== null">
+        <span class="marker-label">vs pivot </span>
+        <span :class="(selectedSignal?.vs_pivot_pct ?? 0) >= 0 ? 'up' : 'down'"
+              style="font-weight:700"
+              x-text="((selectedSignal?.vs_pivot_pct ?? 0) >= 0 ? '+' : '') + (selectedSignal?.vs_pivot_pct ?? 0).toFixed(2) + '%'"></span>
+      </span>
+    </div>
+
+    <!-- TradingView widget -->
+    <div id="chart-container">
+      <div class="chart-placeholder" x-show="!selectedTicker">
+        <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+        </svg>
+        <span style="font-size:11px">Select a signal or watchlist item</span>
+      </div>
+      <div id="tv-widget" style="position:absolute;inset:0" x-show="selectedTicker"></div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════
+       RIGHT — Summary panel
+  ═══════════════════════════════════════════════════════════ -->
+  <div class="tv-right">
+    <!-- Portfolio stats -->
+    <div class="panel-header">Portfolio</div>
+    <div class="stat-grid">
+      <span class="stat-label">Capital</span>
+      <span class="stat-val" x-text="'A$' + capitalAud.toLocaleString('en-AU', {maximumFractionDigits:0})"></span>
+      <span class="stat-label">Open P&L</span>
+      <span class="stat-val" :class="totalPnl >= 0 ? 'pnl-pos' : 'pnl-neg'" x-text="fmtAud(totalPnl, true)"></span>
+      <span class="stat-label">Positions</span>
+      <span class="stat-val" x-text="openCount + ' open'"></span>
+      <span class="stat-label">Signals</span>
+      <span class="stat-val" x-text="signals.length + ' pending'"></span>
+      <span class="stat-label">Watchlist</span>
+      <span class="stat-val" x-text="watchlist.length + ' items'"></span>
+    </div>
+
+    <!-- Regimes -->
+    <div class="panel-header">Market Regime</div>
+    <div style="padding:6px 10px;border-bottom:1px solid var(--border);flex-shrink:0">
+      <template x-for="[exch, regime] in Object.entries(regimes)" :key="exch">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="color:var(--muted);font-size:10px" x-text="exchShort(exch)"></span>
+          <div class="regime-pill" :class="'regime-' + regime.toLowerCase()" style="font-size:9px;padding:1px 6px">
+            <span x-text="regimeIcon(regime) + ' ' + regime"></span>
+          </div>
+        </div>
+      </template>
+      <div class="empty-msg" x-show="Object.keys(regimes).length===0" style="padding:8px 0">No regime data</div>
+    </div>
+
+    <!-- Open positions mini list -->
+    <div class="panel-header">
+      <span>Open Positions</span>
+      <a href="/positions">View all →</a>
+    </div>
+    <div class="tv-scroll">
+      <div class="empty-msg" x-show="positions.length===0">No open positions</div>
+      <template x-for="pos in positions" :key="pos.id">
+        <div class="pos-card" @click="selectPosition(pos)">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-weight:700;font-size:11px;display:inline-flex;align-items:center;gap:4px">
+              <span class="mkt" :class="mktClass(pos.exchange_key)" x-text="mktLabel(pos.exchange_key)"></span>
+              <span x-text="pos.display_ticker"></span>
+            </span>
+            <span :class="pos.unrealised_pct >= 0 ? 'up' : 'down'"
+                  style="font-weight:800;font-size:11px"
+                  x-text="(pos.unrealised_pct >= 0 ? '+' : '') + pos.unrealised_pct.toFixed(1) + '%'"></span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:2px">
+            <span x-text="fmtPrice(pos.current_price, pos.currency)"></span>
+            <span :class="pos.unrealised_pnl >= 0 ? 'pnl-pos' : 'pnl-neg'"
+                  x-text="fmtAud(pos.unrealised_pnl, true)"></span>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- Quick nav -->
+    <div class="quick-links">
+      <a href="/signals"  class="quick-link accent">⚡ Signals</a>
+      <a href="/watchlist" class="quick-link">👁 Watchlist</a>
+      <a href="/positions" class="quick-link">📊 Positions</a>
+      <a href="/admin/health" class="quick-link">⚙ Health</a>
+    </div>
+  </div>
+
+</div><!-- /tv-grid -->
+
+<!-- ═══════════════════════════════════════════════════════════
+     Alpine.js Application
+════════════════════════════════════════════════════════════ -->
+<script>
+function traderApp() {
+  return {
+    // ── Data ──────────────────────────────────────────────────────────────
+    tab: 'signals',
+    watchlist: [],
+    signals: [],
+    positions: [],
+    regimes: {},
+    totalPnl: 0,
+    openCount: 0,
+    capitalAud: 0,
+    isPaper: true,
+    livePrices: {},
+    flash: {},
+    clock: '',
+    asxOpen: false,
+    nyseOpen: false,
+    tapeHtml: '<span class="tape-item"><span class="tape-ticker">Loading…</span></span>',
+
+    // ── Selection ─────────────────────────────────────────────────────────
+    selectedTicker:  null,
+    selectedDisplay: '',
+    selectedName:    '',
+    selectedCurrency:'AUD',
+    selectedSignal:  null,
+    selectedExchange:'ASX',
+    activeTf:        'D',
+    chartLoading:    false,
+
+    // ── TradingView objects ───────────────────────────────────────────────
+    _widget: null,
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────
+    async init() {
+      await this._loadAll();
+      this._buildTape();
+
+      // Auto-select first signal or first watchlist item
+      if (this.signals.length) {
+        await this.selectSignal(this.signals[0]);
+      } else if (this.watchlist.length) {
+        await this.selectWatchlist(this.watchlist[0]);
+      }
+
+      // Live clock + market sessions
+      this._tickClock();
+      setInterval(() => this._tickClock(), 1_000);
+
+      // Poll prices + full data every 10s (staggered)
+      setInterval(() => this._pollPrices(), 10_000);
+      setTimeout(() => setInterval(() => this._refreshAll(), 10_000), 5_000);
+    },
+
+    _tickClock() {
+      const now = new Date();
+      this.clock = now.toLocaleTimeString('en-AU', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        timeZone: 'Australia/Sydney',
+      }) + ' AEST';
+
+      // ASX: 10:00–16:00 Sydney, Mon–Fri
+      const syd = new Date(now.toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+      const sm = syd.getHours() * 60 + syd.getMinutes();
+      this.asxOpen = syd.getDay() >= 1 && syd.getDay() <= 5 && sm >= 600 && sm < 960;
+
+      // NYSE: 9:30–16:00 New York, Mon–Fri
+      const ny = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const nm = ny.getHours() * 60 + ny.getMinutes();
+      this.nyseOpen = ny.getDay() >= 1 && ny.getDay() <= 5 && nm >= 570 && nm < 960;
+    },
+
+    async refresh() {
+      await this._loadAll();
+      this._buildTape();
+    },
+
+    toggleFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen?.();
+      } else {
+        document.exitFullscreen?.();
+      }
+    },
+
+    // ── Data loading ──────────────────────────────────────────────────────
+    async _loadAll() {
+      try {
+        const r = await fetch('/trader/data');
+        const d = await r.json();
+        if (d.error) {
+          console.error('trader /data backend error:', d.error, d.trace || '');
+          this._setTapeError('Backend error: ' + d.error);
+          return;
+        }
+        this.watchlist   = d.watchlist   || [];
+        this.signals     = d.signals     || [];
+        this.positions   = d.positions   || [];
+        this.regimes     = d.regimes     || {};
+        this.totalPnl    = d.total_unrealised_pnl || 0;
+        this.openCount   = d.open_positions_count || 0;
+        this.capitalAud  = d.capital_aud || 0;
+        this.isPaper     = d.account_is_paper !== false;
+        for (const [t, info] of Object.entries(d.tape || {})) {
+          this.livePrices[t] = info;
+        }
+        // Refresh selected signal data (legend chips above the chart)
+        if (this.selectedSignal) {
+          const updated = this.signals.find(s => s.id === this.selectedSignal.id);
+          if (updated) this.selectedSignal = updated;
+        }
+      } catch (e) {
+        console.error('trader /data fetch error:', e);
+        this._setTapeError('Fetch error — check console');
+      }
+    },
+
+    _setTapeError(msg) {
+      this.tapeHtml = `<span class="tape-item"><span class="tape-ticker" style="color:#ef5350">⚠ ${msg}</span></span>`;
+    },
+
+    async _pollPrices() {
+      try {
+        const r = await fetch('/trader/prices');
+        const d = await r.json();
+        for (const [t, info] of Object.entries(d)) {
+          const prev = this.livePrices[t]?.price;
+          if (prev != null && info.price !== prev) {
+            this.flash[t] = '';
+            requestAnimationFrame(() => {
+              this.flash[t] = info.price > prev ? 'flash-up' : 'flash-down';
+            });
+          }
+          this.livePrices[t] = info;
+        }
+        this._buildTape();
+      } catch { /* silent */ }
+    },
+
+    async _refreshAll() {
+      await this._loadAll();
+      this._buildTape();
+    },
+
+    // ── Ticker tape ───────────────────────────────────────────────────────
+    _buildTape() {
+      let html = '';
+      for (const [ticker, info] of Object.entries(this.livePrices)) {
+        const up    = info.change_pct >= 0;
+        const arrow = up ? '▲' : '▼';
+        const cls   = up ? 'tape-up' : 'tape-down';
+        const price = this._fmt(info.price, info.currency);
+        html += `<span class="tape-item">
+          <span class="tape-ticker">${info.display}</span>
+          <span class="tape-price">${price}</span>
+          <span class="${cls}">${arrow}${Math.abs(info.change_pct).toFixed(2)}%</span>
+        </span>`;
+      }
+      this.tapeHtml = html || '<span class="tape-item"><span class="tape-ticker" style="color:var(--muted)">No price data — run Refresh Price Data</span></span>';
+    },
+
+    // ── TradingView symbol mapping ────────────────────────────────────────
+    _tvSymbol(ticker, exchangeKey) {
+      // Crypto: chart the Binance USDT pair — IR AUD pairs aren't on TradingView.
+      // BTC-AUD → BINANCE:BTCUSDT (USD-denominated, but full coverage incl. small caps)
+      if ((exchangeKey || '').startsWith('CRYPTO')) {
+        const base = ticker.split('-')[0];
+        if (base === 'USDT' || base === 'USDC') return 'KRAKEN:' + base + 'USD';
+        return 'BINANCE:' + base + 'USDT';
+      }
+      const disp = ticker.replace('.AX', '');
+      if (exchangeKey === 'ASX')    return 'ASX:' + disp;
+      if (exchangeKey === 'NYSE')   return 'NYSE:' + disp;
+      if (exchangeKey === 'NASDAQ') return 'NASDAQ:' + disp;
+      return disp;
+    },
+
+    _isCrypto(exchangeKey) { return (exchangeKey || '').startsWith('CRYPTO'); },
+
+    // ── Market badges ─────────────────────────────────────────────────────
+    mktLabel(ek) {
+      if ((ek || '').startsWith('CRYPTO')) return 'CRYPTO';
+      return ek || 'ASX';
+    },
+    mktClass(ek) {
+      if ((ek || '').startsWith('CRYPTO')) return 'mkt-crypto';
+      return ek === 'ASX' ? 'mkt-asx' : 'mkt-us';
+    },
+
+    // ── TradingView widget (re)build ──────────────────────────────────────
+    _loadChart(ticker) {
+      if (!ticker || !window.TradingView) return;
+      const el = document.getElementById('tv-widget');
+      if (!el) return;
+      el.innerHTML = '';
+
+      this._widget = new TradingView.widget({
+        container_id: 'tv-widget',
+        autosize: true,
+        symbol: this._tvSymbol(ticker, this.selectedExchange),
+        interval: this.activeTf,
+        timezone: 'Australia/Sydney',
+        theme: 'dark',
+        style: '1',                       // candles
+        locale: 'en',
+        toolbar_bg: '#0a0a12',
+        backgroundColor: '#0a0a12',
+        gridColor: '#18182a',
+        hide_top_toolbar: false,
+        hide_side_toolbar: false,
+        allow_symbol_change: false,
+        save_image: false,
+        withdateranges: true,
+        details: false,
+        studies: [
+          'MASimple@tv-basicstudies',     // user can adjust lengths in-chart
+          'Volume@tv-basicstudies',
+        ],
+      });
+    },
+
+    // ── Timeframe switching ───────────────────────────────────────────────
+    setTf(tf) {
+      this.activeTf = tf;
+      if (this.selectedTicker) this._loadChart(this.selectedTicker);
+    },
+
+    // ── Selection handlers ────────────────────────────────────────────────
+    _select(t) {
+      this.selectedTicker   = t.ticker;
+      this.selectedDisplay  = t.display_ticker;
+      this.selectedName     = t.name;
+      this.selectedCurrency = t.currency;
+      this.selectedExchange = t.exchange_key || 'ASX';
+      // Daily for equities, hourly for crypto (unless user picked another TF)
+      this.activeTf = this._isCrypto(this.selectedExchange) ? '60' : 'D';
+      this.$nextTick(() => this._loadChart(t.ticker));
+    },
+
+    selectSignal(sig) {
+      this.selectedSignal = sig;
+      this._select(sig);
+    },
+
+    selectWatchlist(item) {
+      this.selectedSignal = this.signals.find(s => s.ticker === item.ticker) ?? null;
+      this._select(item);
+    },
+
+    selectPosition(pos) {
+      this.selectedSignal = this.signals.find(s => s.ticker === pos.ticker) ?? null;
+      this._select(pos);
+    },
+
+    // ── Live price helpers ────────────────────────────────────────────────
+    livePrice(ticker)  { return this.livePrices[ticker]?.price ?? null; },
+    liveChange(ticker) { return this.livePrices[ticker]?.change_pct ?? 0; },
+
+    // ── Formatters ────────────────────────────────────────────────────────
+    _fmt(price, currency) {
+      if (price == null) return '—';
+      const p   = parseFloat(price);
+      const pfx = currency === 'AUD' ? 'A$' : '$';
+      if (p >= 10000) return pfx + p.toLocaleString('en-AU', { maximumFractionDigits: 0 });
+      if (p >= 100)   return pfx + p.toFixed(2);
+      if (p >= 1)     return pfx + p.toFixed(3);
+      return pfx + p.toFixed(5);
+    },
+    fmtPrice(price, currency) { return this._fmt(price, currency || this.selectedCurrency); },
+
+    fmtAud(v, signed = false) {
+      if (v == null) return '—';
+      const n = parseFloat(v);
+      const s = signed && n >= 0 ? '+' : '';
+      return s + 'A$' + Math.abs(n).toFixed(2);
+    },
+
+    fmtTime(iso) {
+      if (!iso) return '';
+      try { return new Date(iso).toLocaleTimeString('en-AU', { hour:'2-digit', minute:'2-digit', second:'2-digit' }); }
+      catch { return iso; }
+    },
+
+    // ── Exchange labels ───────────────────────────────────────────────────
+    exchShort(key) {
+      return { ASX:'ASX', NYSE:'NYSE', NASDAQ:'NASDAQ',
+               CRYPTO_INDEPENDENTRESERVE:'IR',
+               CRYPTO_BINANCE:'Binance', CRYPTO_COINBASE:'Coinbase', CRYPTO_KRAKEN:'Kraken' }[key] || key;
+    },
+    regimeIcon(r) {
+      return { BULL:'🐂', CAUTION:'⚠', BEAR:'🐻', UNKNOWN:'?' }[r] || '?';
+    },
+  };
+}
+</script>
+<!-- VCPilot Trader Terminal v2 -->
+</body>
+</html>
