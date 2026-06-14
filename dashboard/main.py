@@ -1747,33 +1747,8 @@ async def watchlist(
                 # Cache hit — could be real data or a failure sentinel
                 bar_data = None if cached.get("_failed") else cached
             else:
-                # Cache miss — attempt live fetch
-                try:
-                    from app.data.fetcher import get_intraday_price
-                    price_result = get_intraday_price(w.ticker, org_id, asset_type="CRYPTO")
-                    if price_result.get("ok") and price_result.get("price"):
-                        # Merge live price into bar_data; keep MA/RS from pre-fetched PriceBar
-                        bar = _bar_lookup.get(w.ticker)
-                        bar_data = {
-                            "close":     float(price_result["price"]),
-                            "ma_50":     float(bar.ma_50  or 0) if bar else 0,
-                            "ma_150":    float(bar.ma_150 or 0) if bar else 0,
-                            "ma_200":    float(bar.ma_200 or 0) if bar else 0,
-                            "high_52w":  float(bar.high_52w or 0) if bar else 0,
-                            "low_52w":   float(bar.low_52w  or 0) if bar else 0,
-                            "rs_rating": float(bar.rs_rating or 0) if bar else 0,
-                            "bar_date":  str(bar.date) if bar and bar.date else None,
-                            "live_price": True,
-                            "data_source": price_result.get("data_source", "live"),
-                            "delay_mins":  price_result.get("delay_mins", 0),
-                        }
-                        cache.set(live_cache_key, bar_data, expire_seconds=300)  # 5-min TTL
-                    else:
-                        bar_data = None
-                        cache.set(live_cache_key, {"_failed": True}, expire_seconds=120)  # 2-min back-off
-                except Exception:
-                    bar_data = None
-                    cache.set(live_cache_key, {"_failed": True}, expire_seconds=120)  # 2-min back-off
+                # Cache miss — no live fetch on load from API, let workers handle it
+                bar_data = None
 
             if bar_data and bar_data.get("live_price"):
                 live_price_used = True
@@ -3028,34 +3003,8 @@ def _trader_prices_inner(request: Request, db):
                     }
                     continue
         else:
-            # Cache miss — attempt live fetch
-            try:
-                from app.data.fetcher import get_intraday_price
-                price_result = get_intraday_price(ticker, org_id, asset_type=asset_type)
-                if price_result.get("ok") and price_result.get("price"):
-                    live_close = float(price_result["price"])
-                    eod_bar = eod_map.get(ticker)
-                    eod_open = float(eod_bar.open) if eod_bar and eod_bar.open and float(eod_bar.open) > 0 else live_close
-                    chg = round((live_close - eod_open) / eod_open * 100, 2) if eod_open > 0 else 0.0
-                    live_data = {
-                        "close": live_close,
-                        "change_pct": chg,
-                        "data_source": price_result.get("data_source", "live"),
-                    }
-                    cache.set(live_cache_key, live_data, expire_seconds=300)  # 5-min TTL
-                    result[ticker] = {
-                        "display": _disp(ticker),
-                        "price": live_close,
-                        "change_pct": chg,
-                        "currency": currency,
-                        "live": True,
-                    }
-                    continue
-                else:
-                    # Fetch returned no price — back-off sentinel to avoid hammering
-                    cache.set(live_cache_key, {"_failed": True}, expire_seconds=120)
-            except Exception:
-                cache.set(live_cache_key, {"_failed": True}, expire_seconds=120)
+            # Cache miss — no live fetch on load from API, let workers handle it
+            pass
 
         # ── EOD fallback (PriceBar last close) ──────────────────────────────────────────
         eod_bar = eod_map.get(ticker)
@@ -3297,23 +3246,8 @@ def _trader_watchlist_data_inner(request: Request, db):
                     if live_cached.get("change_pct") is not None:
                         open_ = None  # chg_pct computed from cache below
             else:
-                # Cache miss for crypto — attempt live fetch and prime the cache
-                try:
-                    from app.data.fetcher import get_intraday_price
-                    pr = get_intraday_price(w.ticker, org_id, asset_type="CRYPTO")
-                    if pr.get("ok") and pr.get("price"):
-                        live_close = float(pr["price"])
-                        eod_open = float(bar.open) if bar and bar.open and float(bar.open) > 0 else live_close
-                        chg_live = round((live_close - eod_open) / eod_open * 100, 2) if eod_open > 0 else 0.0
-                        cache.set(live_cache_key, {"close": live_close, "change_pct": chg_live,
-                                                   "data_source": pr.get("data_source", "live")},
-                                  expire_seconds=300)
-                        close = live_close
-                        open_ = None  # signal to compute chg from live_close vs eod_open below
-                    else:
-                        cache.set(live_cache_key, {"_failed": True}, expire_seconds=120)
-                except Exception:
-                    cache.set(live_cache_key, {"_failed": True}, expire_seconds=120)
+                # Cache miss for crypto — no live fetch on load from API, let workers handle it
+                pass
 
         chg_pct   = _pct(close, open_) if close and open_ and open_ > 0 else 0.0
         range_pct = None
