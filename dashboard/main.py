@@ -2643,23 +2643,7 @@ async def _trader_data_inner(request: Request, db):
     )
     wl_tickers = [w.ticker for w in wl_items]
 
-    # ── Latest price bar per watchlist ticker ──
-    price_map: dict = {}
-    if wl_tickers:
-        latest_sq = (
-            db.query(PriceBar.ticker, func.max(PriceBar.date).label("mx"))
-            .filter(PriceBar.ticker.in_(wl_tickers))
-            .group_by(PriceBar.ticker)
-            .subquery()
-        )
-        bars = (
-            db.query(PriceBar)
-            .join(latest_sq, (PriceBar.ticker == latest_sq.c.ticker) & (PriceBar.date == latest_sq.c.mx))
-            .all()
-        )
-        price_map = {b.ticker: b for b in bars}
-
-    # ── Pending / triggered signals ──
+    # ── Pending signals ──
     signals = (
         db.query(Signal)
         .filter(
@@ -2670,6 +2654,32 @@ async def _trader_data_inner(request: Request, db):
         .limit(50)
         .all()
     )
+
+    # ── Open positions (pre-fetch here to use in price_map too) ──
+    positions = (
+        db.query(Position)
+        .filter(Position.organization_id == org_id, Position.status == TradeStatus.OPEN)
+        .all()
+    )
+
+    # ── Latest price bar — watchlist + signal + position tickers ──
+    price_map: dict = {}
+    all_tickers = list(set(wl_tickers)
+                       | {s.ticker for s in signals}
+                       | {p.ticker for p in positions})
+    if all_tickers:
+        latest_sq = (
+            db.query(PriceBar.ticker, func.max(PriceBar.date).label("mx"))
+            .filter(PriceBar.ticker.in_(all_tickers))
+            .group_by(PriceBar.ticker)
+            .subquery()
+        )
+        bars = (
+            db.query(PriceBar)
+            .join(latest_sq, (PriceBar.ticker == latest_sq.c.ticker) & (PriceBar.date == latest_sq.c.mx))
+            .all()
+        )
+        price_map = {b.ticker: b for b in bars}
 
     # ── Latest entry-check per signal ──
     check_map: dict = {}
@@ -2688,13 +2698,6 @@ async def _trader_data_inner(request: Request, db):
             .all()
         )
         check_map = {c.signal_id: c for c in checks}
-
-    # ── Open positions ──
-    positions = (
-        db.query(Position)
-        .filter(Position.organization_id == org_id, Position.status == TradeStatus.OPEN)
-        .all()
-    )
 
     # ── Market regimes ──
     regime_keys = [
@@ -2800,19 +2803,28 @@ async def _trader_data_inner(request: Request, db):
             "target1": float(p.target_1) if p.target_1 else None,
         })
 
-    # ── Ticker tape: prices for all watchlist items ──
+    # ── Ticker tape: prices for watchlist + signals + positions ──
     tape: dict = {}
-    for w in wl_items:
-        bar = price_map.get(w.ticker)
+    # Collect all tickers that need prices
+    tape_currency: dict = {w.ticker: (w.currency or "AUD") for w in wl_items}
+    for s in signals:
+        if s.ticker not in tape_currency:
+            tape_currency[s.ticker] = getattr(s, "currency", "AUD") or "AUD"
+    for p in positions:
+        if p.ticker not in tape_currency:
+            tape_currency[p.ticker] = getattr(p, "currency", "AUD") or "AUD"
+
+    for ticker, currency in tape_currency.items():
+        bar = price_map.get(ticker)
         if bar and bar.close:
             close = float(bar.close)
             open_ = float(bar.open) if bar.open and float(bar.open) > 0 else close
             chg = round((close - open_) / open_ * 100, 2)
-            tape[w.ticker] = {
-                "display": _disp(w.ticker),
+            tape[ticker] = {
+                "display": _disp(ticker),
                 "price": close,
                 "change_pct": chg,
-                "currency": w.currency or "AUD",
+                "currency": currency,
             }
 
     return JSONResponse({
@@ -2913,20 +2925,43 @@ async def trader_prices(request: Request, db: Session = Depends(get_db)):
 
 def _trader_prices_inner(request: Request, db):
     from sqlalchemy import func
-    from app.models.signal import Watchlist, WatchlistStatus
-    from app.models.market import PriceBar
+    from app.models.signal import Watchlist, WatchlistStatus, Signal, SignalStatus
+    from app.models.trade import Position, TradeStatus
+    from app.models.market import PriceBar, Stock
 
     org_id = request.session.get("organization_id")
-    rows = db.query(Watchlist.ticker, Watchlist.currency).filter(
+
+    # Collect tickers from watchlist + open positions + pending signals
+    wl_rows = db.query(Watchlist.ticker, Watchlist.currency).filter(
         Watchlist.organization_id == org_id,
         Watchlist.status == WatchlistStatus.WATCHING,
     ).all()
+    sig_rows = db.query(Signal.ticker).filter(
+        Signal.organization_id == org_id,
+        Signal.status == SignalStatus.PENDING,
+    ).all()
+    pos_rows = db.query(Position.ticker).filter(
+        Position.organization_id == org_id,
+        Position.status == TradeStatus.OPEN,
+    ).all()
 
-    if not rows:
+    # Build ticker set and currency map
+    currency_map: dict = {r[0]: (r[1] or "AUD") for r in wl_rows}
+    all_tickers = set(currency_map.keys())
+    for r in sig_rows: all_tickers.add(r[0])
+    for r in pos_rows: all_tickers.add(r[0])
+
+    if not all_tickers:
         return JSONResponse({})
 
-    tickers = [r[0] for r in rows]
-    currency_map = {r[0]: (r[1] or "AUD") for r in rows}
+    # Fill currency for any ticker not in watchlist
+    missing = [t for t in all_tickers if t not in currency_map]
+    if missing:
+        stocks = db.query(Stock.ticker, Stock.currency).filter(Stock.ticker.in_(missing)).all()
+        for s in stocks:
+            currency_map[s[0]] = s[1] or "AUD"
+
+    tickers = list(all_tickers)
 
     latest_sq = (
         db.query(PriceBar.ticker, func.max(PriceBar.date).label("mx"))
@@ -2953,6 +2988,99 @@ def _trader_prices_inner(request: Request, db):
         }
 
     return JSONResponse(result)
+
+
+@app.get("/trader/exit-checks")
+async def trader_exit_checks(request: Request, db: Session = Depends(get_db)):
+    """Latest exit-rule check per open position — polled every 30s by trader terminal."""
+    if not _auth(request):
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    try:
+        from app.models.trade import Position, TradeStatus
+        from app.models.audit import AuditLog, AuditAction
+        from sqlalchemy import desc, or_
+
+        org_id = request.session.get("organization_id")
+        display_tz = _get_display_tz(org_id, db)
+        positions = db.query(Position).filter(
+            Position.organization_id == org_id,
+            Position.status == TradeStatus.OPEN,
+        ).all()
+
+        results = []
+        for p in positions:
+            entry = float(p.entry_price or 0)
+            stop  = float(p.stop_price  or 0)
+
+            # Latest exit-check AuditLog row for this ticker/position
+            log_entries = db.query(AuditLog).filter(
+                AuditLog.organization_id == org_id,
+                AuditLog.action == AuditAction.TASK_RUN,
+                AuditLog.ticker == p.ticker,
+                or_(
+                    AuditLog.entity_id == str(p.id),
+                    AuditLog.message.ilike("Exit check @ %"),
+                ),
+            ).order_by(desc(AuditLog.created_at)).limit(5).all()
+
+            checks = []
+            for log in log_entries:
+                d   = log.detail or {}
+                msg = log.message or ""
+                result = d.get("result", "")
+                if not result:
+                    result = "exit_triggered" if "EXIT triggered" in msg else ("holding" if "holding" in msg else "unknown")
+
+                pnl_pct = d.get("pnl_pct")
+                if pnl_pct is None and "P&L " in msg:
+                    try: pnl_pct = float(msg.split("P&L ")[1].split("%")[0])
+                    except Exception: pass
+
+                price = d.get("close")
+                if price is None and "Price $" in msg:
+                    try: price = float(msg.split("Price $")[1].split(" ")[0].split("|")[0].strip())
+                    except Exception: pass
+
+                reason = ""
+                if result == "exit_triggered" and "EXIT triggered — " in msg:
+                    reason = msg.split("EXIT triggered — ")[1].split(" | ")[0]
+                elif result == "holding":
+                    reason = "No exit criteria met"
+                elif result == "skipped":
+                    reason = d.get("reason", "Skipped")
+                elif result == "error":
+                    reason = d.get("error", "Check error")
+
+                checks.append({
+                    "time": _fmt_dt(str(log.created_at), display_tz),
+                    "result": result,
+                    "price": price,
+                    "pnl_pct": pnl_pct,
+                    "reason": reason,
+                    "message": msg[:120],
+                })
+
+            ek = getattr(p, "exchange_key", "ASX") or "ASX"
+            curr = float(p.current_price or entry)
+            pnl_pct_live = round((curr - entry) / entry * 100, 2) if entry else 0
+
+            results.append({
+                "id": p.id,
+                "ticker": p.ticker,
+                "exchange_key": ek,
+                "display_ticker": p.ticker.replace(".AX", "").replace("-AUD", "").replace("-USD", ""),
+                "currency": getattr(p, "currency", "AUD") or "AUD",
+                "entry": entry,
+                "stop": stop,
+                "current": curr,
+                "pnl_pct": pnl_pct_live,
+                "checks": checks,
+            })
+
+        return JSONResponse({"positions": results, "display_tz": display_tz})
+    except Exception as exc:
+        import traceback
+        return JSONResponse({"error": str(exc), "trace": traceback.format_exc()}, status_code=500)
 
 
 # ===========================================================================

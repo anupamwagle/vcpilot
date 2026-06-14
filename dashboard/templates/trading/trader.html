@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AstraTrade — Trader Terminal</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231d4ed8' stroke-width='2.5'><path d='M3 17c1.5-1 2.5-3 4-3s2.5 1.5 4 1.5 2-2 3.5-2 1.5.5 2.5.5L21 9M21 9h-4M21 9v4' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 
   <!-- TradingView embed widget -->
   <script src="https://s3.tradingview.com/tv.js"></script>
@@ -435,12 +436,11 @@
               </div>
             </div>
             <div style="text-align:right">
-              <div class="card-price"
-                   x-text="fmtPrice(sig.last_check_price ?? sig.close, sig.currency)"></div>
-              <div x-show="sig.vs_pivot_pct !== null"
-                   :class="(sig.vs_pivot_pct ?? 0) >= 0 ? 'up' : 'down'"
+              <div class="card-price" :class="flash[sig.ticker]"
+                   x-text="fmtPrice(livePrice(sig.ticker) ?? sig.last_check_price ?? sig.close, sig.currency)"></div>
+              <div :class="liveChangePct(sig.ticker, sig.pivot) >= 0 ? 'up' : 'down'"
                    style="font-size:9px"
-                   x-text="((sig.vs_pivot_pct ?? 0) >= 0 ? '+' : '') + (sig.vs_pivot_pct ?? 0).toFixed(1) + '% vs pivot'"></div>
+                   x-text="(liveChangePct(sig.ticker, sig.pivot) >= 0 ? '+' : '') + liveChangePct(sig.ticker, sig.pivot).toFixed(1) + '% vs pivot'"></div>
             </div>
           </div>
           <div class="card-meta">
@@ -504,17 +504,17 @@
               </div>
             </div>
             <div style="text-align:right">
-              <div :class="pos.unrealised_pct >= 0 ? 'up' : 'down'"
+              <div :class="livePnlPct(pos) >= 0 ? 'up' : 'down'" :class="flash[pos.ticker]"
                    style="font-size:13px;font-weight:800"
-                   x-text="(pos.unrealised_pct >= 0 ? '+' : '') + pos.unrealised_pct.toFixed(2) + '%'"></div>
-              <div :class="pos.unrealised_pnl >= 0 ? 'pnl-pos' : 'pnl-neg'"
+                   x-text="(livePnlPct(pos) >= 0 ? '+' : '') + livePnlPct(pos).toFixed(2) + '%'"></div>
+              <div :class="livePnlAud(pos) >= 0 ? 'pnl-pos' : 'pnl-neg'"
                    style="font-size:9px"
-                   x-text="fmtAud(pos.unrealised_pnl, true)"></div>
+                   x-text="fmtAud(livePnlAud(pos), true)"></div>
             </div>
           </div>
           <div class="card-meta">
             <span>Entry <span x-text="fmtPrice(pos.entry_price, pos.currency)" style="color:var(--text)"></span></span>
-            <span>Now <span x-text="fmtPrice(pos.current_price, pos.currency)" style="color:var(--text)"></span></span>
+            <span>Now <span x-text="fmtPrice(livePrice(pos.ticker) ?? pos.current_price, pos.currency)" :class="flash[pos.ticker]" style="color:var(--text)"></span></span>
             <span x-show="pos.stop">Stop <span x-text="fmtPrice(pos.stop, pos.currency)" style="color:var(--down)"></span></span>
           </div>
         </div>
@@ -595,10 +595,10 @@
   </div>
 
   <!-- ════════════════════════════════════════════════════════
-       RIGHT — Summary panel
+       RIGHT — Exit monitor panel
   ═══════════════════════════════════════════════════════════ -->
   <div class="tv-right">
-    <!-- Portfolio stats -->
+    <!-- Portfolio stats row -->
     <div class="panel-header">Portfolio</div>
     <div class="stat-grid">
       <span class="stat-label">Capital</span>
@@ -609,47 +609,69 @@
       <span class="stat-val" x-text="openCount + ' open'"></span>
       <span class="stat-label">Signals</span>
       <span class="stat-val" x-text="signals.length + ' pending'"></span>
-      <span class="stat-label">Watchlist</span>
-      <span class="stat-val" x-text="watchlist.length + ' items'"></span>
     </div>
 
     <!-- Regimes -->
     <div class="panel-header">Market Regime</div>
     <div style="padding:6px 10px;border-bottom:1px solid var(--border);flex-shrink:0">
       <template x-for="[exch, regime] in Object.entries(regimes)" :key="exch">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
           <span style="color:var(--muted);font-size:10px" x-text="exchShort(exch)"></span>
           <div class="regime-pill" :class="'regime-' + regime.toLowerCase()" style="font-size:9px;padding:1px 6px">
             <span x-text="regimeIcon(regime) + ' ' + regime"></span>
           </div>
         </div>
       </template>
-      <div class="empty-msg" x-show="Object.keys(regimes).length===0" style="padding:8px 0">No regime data</div>
+      <div class="empty-msg" x-show="Object.keys(regimes).length===0" style="padding:4px 0">No regime data</div>
     </div>
 
-    <!-- Open positions mini list -->
+    <!-- Exit rule monitor -->
     <div class="panel-header">
-      <span>Open Positions</span>
-      <a href="/positions">View all →</a>
+      <span>Exit Monitor</span>
+      <span style="font-size:9px;color:var(--muted)" x-text="exitLastPoll ? 'polled ' + exitLastPoll : ''"></span>
     </div>
-    <div class="tv-scroll">
-      <div class="empty-msg" x-show="positions.length===0">No open positions</div>
-      <template x-for="pos in positions" :key="pos.id">
-        <div class="pos-card" @click="selectPosition(pos)">
-          <div style="display:flex;justify-content:space-between;align-items:center">
+    <div class="tv-scroll" style="flex:1">
+      <div class="empty-msg" x-show="exitPositions.length===0">No open positions to monitor</div>
+      <template x-for="pos in exitPositions" :key="pos.id">
+        <div style="border-bottom:1px solid var(--border);padding:8px 10px">
+          <!-- Ticker + live P&L -->
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
             <span style="font-weight:700;font-size:11px;display:inline-flex;align-items:center;gap:4px">
               <span class="mkt" :class="mktClass(pos.exchange_key)" x-text="mktLabel(pos.exchange_key)"></span>
-              <span x-text="pos.display_ticker"></span>
+              <span x-text="pos.display_ticker" style="cursor:pointer" @click="selectPosition(pos)"></span>
             </span>
-            <span :class="pos.unrealised_pct >= 0 ? 'up' : 'down'"
+            <span :class="livePnlPctExit(pos) >= 0 ? 'up' : 'down'"
                   style="font-weight:800;font-size:11px"
-                  x-text="(pos.unrealised_pct >= 0 ? '+' : '') + pos.unrealised_pct.toFixed(1) + '%'"></span>
+                  x-text="(livePnlPctExit(pos) >= 0 ? '+' : '') + livePnlPctExit(pos).toFixed(2) + '%'"></span>
           </div>
-          <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:2px">
-            <span x-text="fmtPrice(pos.current_price, pos.currency)"></span>
-            <span :class="pos.unrealised_pnl >= 0 ? 'pnl-pos' : 'pnl-neg'"
-                  x-text="fmtAud(pos.unrealised_pnl, true)"></span>
+          <!-- Entry / Stop -->
+          <div style="display:flex;gap:10px;font-size:9px;color:var(--muted);margin-bottom:5px">
+            <span>Entry <span style="color:var(--text)" x-text="fmtPrice(pos.entry, pos.currency)"></span></span>
+            <span>Stop <span style="color:var(--down)" x-text="fmtPrice(pos.stop, pos.currency)"></span></span>
+            <span>Now <span style="color:var(--text)" :class="flash[pos.ticker]" x-text="fmtPrice(livePrice(pos.ticker) ?? pos.current, pos.currency)"></span></span>
           </div>
+          <!-- Last exit checks -->
+          <div x-show="pos.checks.length===0" class="empty-msg" style="font-size:9px;padding:0">No checks yet</div>
+          <template x-for="(chk, ci) in pos.checks" :key="ci">
+            <div style="display:flex;align-items:flex-start;gap:5px;margin-bottom:3px;font-size:9px">
+              <!-- Status dot -->
+              <span style="margin-top:1px;flex-shrink:0"
+                    :style="chk.result==='exit_triggered' ? 'color:#ef5350' : (chk.result==='holding' ? 'color:#26a69a' : 'color:#5a5a78')">
+                <span x-text="chk.result==='exit_triggered' ? '⚠' : (chk.result==='holding' ? '✓' : '·')"></span>
+              </span>
+              <div style="flex:1;min-width:0">
+                <div style="display:flex;justify-content:space-between;gap:4px">
+                  <span style="color:var(--muted)" x-text="chk.time"></span>
+                  <span x-show="chk.pnl_pct !== null && chk.pnl_pct !== undefined"
+                        :class="chk.pnl_pct >= 0 ? 'pnl-pos' : 'pnl-neg'"
+                        x-text="(chk.pnl_pct >= 0 ? '+' : '') + (chk.pnl_pct ?? 0).toFixed(2) + '%'"></span>
+                </div>
+                <div style="color:var(--text);margin-top:1px;word-break:break-word"
+                     :style="chk.result==='exit_triggered' ? 'color:#ef5350;font-weight:700' : ''"
+                     x-text="chk.reason || chk.message"></div>
+              </div>
+            </div>
+          </template>
         </div>
       </template>
     </div>
@@ -688,6 +710,10 @@ function traderApp() {
     nyseOpen: false,
     tapeHtml: '<span class="tape-item"><span class="tape-ticker">Loading…</span></span>',
 
+    // ── Exit monitor ──────────────────────────────────────────────────────
+    exitPositions: [],
+    exitLastPoll:  '',
+
     // ── Selection ─────────────────────────────────────────────────────────
     selectedTicker:  null,
     selectedDisplay: '',
@@ -700,6 +726,7 @@ function traderApp() {
 
     // ── TradingView objects ───────────────────────────────────────────────
     _widget: null,
+    _priceLines: [],
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
     async init() {
@@ -720,6 +747,10 @@ function traderApp() {
       // Poll prices + full data every 10s (staggered)
       setInterval(() => this._pollPrices(), 10_000);
       setTimeout(() => setInterval(() => this._refreshAll(), 10_000), 5_000);
+
+      // Poll exit checks every 30s
+      await this._pollExitChecks();
+      setInterval(() => this._pollExitChecks(), 30_000);
     },
 
     _tickClock() {
@@ -787,6 +818,19 @@ function traderApp() {
 
     _setTapeError(msg) {
       this.tapeHtml = `<span class="tape-item"><span class="tape-ticker" style="color:#ef5350">⚠ ${msg}</span></span>`;
+    },
+
+    async _pollExitChecks() {
+      try {
+        const r = await fetch('/trader/exit-checks');
+        const d = await r.json();
+        if (d.error) { console.warn('exit-checks error:', d.error); return; }
+        this.exitPositions = d.positions || [];
+        const now = new Date();
+        this.exitLastPoll = now.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      } catch (e) {
+        console.error('exit-checks fetch error:', e);
+      }
     },
 
     async _pollPrices() {
@@ -880,6 +924,7 @@ function traderApp() {
       const el = document.getElementById('tv-widget');
       if (!el) return;
       el.innerHTML = '';
+      this._priceLines = [];
 
       this._widget = new TradingView.widget({
         container_id: 'tv-widget',
@@ -888,7 +933,7 @@ function traderApp() {
         interval: this.activeTf,
         timezone: '{{ display_tz | default("Australia/Sydney") }}',
         theme: 'dark',
-        style: '1',                       // candles
+        style: '1',
         locale: 'en',
         toolbar_bg: '#0a0a12',
         backgroundColor: '#0a0a12',
@@ -906,11 +951,61 @@ function traderApp() {
           'Volume@tv-basicstudies',
         ],
         studies_overrides: {
-          'moving average.plot.color.0': '#3b82f6',   // MA50 — blue
-          'moving average.plot.color.1': '#f59e0b',   // MA150 — amber
-          'moving average.plot.color.2': '#ef5350',   // MA200 — red
+          // MA50 — cyan/teal (distinct from MA150 amber and MA200 red)
+          'moving average.plot.color':   '#22d3ee',
+          'moving average.plot.linewidth': 1,
+        },
+        overrides: {
+          // Grid lines subtle
+          'paneProperties.backgroundType': 'solid',
+          'paneProperties.background': '#0a0a12',
+          'paneProperties.gridProperties.color': '#18182a',
+          'paneProperties.legendProperties.showStudyValues': true,
         },
       });
+
+      // Draw VCP price lines once the chart is ready
+      this._widget.onChartReady(() => {
+        this._drawPriceLines();
+      });
+    },
+
+    // ── VCP price line overlay ────────────────────────────────────────────
+    _drawPriceLines() {
+      if (!this._widget || !this.selectedSignal) return;
+      const sig = this.selectedSignal;
+      try {
+        const chart = this._widget.chart();
+        // Clear any existing lines
+        this._priceLines.forEach(l => { try { l.remove(); } catch(e) {} });
+        this._priceLines = [];
+
+        const addLine = (price, color, text, style) => {
+          if (!price || price <= 0) return;
+          const line = chart.createPositionLine()
+            .setPrice(parseFloat(price))
+            .setLineColor(color)
+            .setBodyBorderColor(color)
+            .setBodyBackgroundColor(color + '22')
+            .setBodyTextColor(color)
+            .setQuantity('')
+            .setText(text)
+            .setLineStyle(style ?? 0)  // 0=solid, 1=dotted, 2=dashed
+            .setLineLength(50);
+          this._priceLines.push(line);
+        };
+
+        // Pivot / entry — amber dashed
+        addLine(sig.pivot,   '#f59e0b', 'Pivot',   2);
+        // Stop — red dotted
+        addLine(sig.stop,    '#ef5350', 'Stop',    1);
+        // Target 1 — teal dotted
+        addLine(sig.target1, '#22d3ee', 'T1 +20%', 1);
+        // Target 2 — green dotted
+        addLine(sig.target2, '#4ade80', 'T2 +40%', 1);
+      } catch (e) {
+        console.warn('Could not draw price lines:', e);
+      }
     },
 
     // ── Timeframe switching ───────────────────────────────────────────────
@@ -932,8 +1027,11 @@ function traderApp() {
     },
 
     selectSignal(sig) {
+      const sameTicker = this.selectedTicker === sig.ticker;
       this.selectedSignal = sig;
       this._select(sig);
+      // If same ticker, chart doesn't reload — redraw price lines for new signal levels
+      if (sameTicker) this.$nextTick(() => this._drawPriceLines());
     },
 
     selectWatchlist(item) {
@@ -949,6 +1047,37 @@ function traderApp() {
     // ── Live price helpers ────────────────────────────────────────────────
     livePrice(ticker)  { return this.livePrices[ticker]?.price ?? null; },
     liveChange(ticker) { return this.livePrices[ticker]?.change_pct ?? 0; },
+
+    // % vs pivot using live price (for signal cards)
+    liveChangePct(ticker, pivot) {
+      const price = this.livePrice(ticker);
+      if (price == null || !pivot || pivot <= 0) return 0;
+      return ((price - pivot) / pivot) * 100;
+    },
+
+    // Live P&L % for position cards (uses livePrices if available)
+    livePnlPct(pos) {
+      const curr = this.livePrice(pos.ticker) ?? pos.current_price;
+      const entry = pos.entry_price;
+      if (!entry || entry <= 0) return 0;
+      return ((curr - entry) / entry) * 100;
+    },
+
+    // Live P&L AUD for position cards
+    livePnlAud(pos) {
+      const curr = this.livePrice(pos.ticker) ?? pos.current_price;
+      const entry = pos.entry_price;
+      const qty   = pos.qty ?? 0;
+      return (curr - entry) * qty;
+    },
+
+    // Live P&L % for exit monitor panel (pos has .entry and .current fields)
+    livePnlPctExit(pos) {
+      const curr  = this.livePrice(pos.ticker) ?? pos.current;
+      const entry = pos.entry;
+      if (!entry || entry <= 0) return 0;
+      return ((curr - entry) / entry) * 100;
+    },
 
     // ── Formatters ────────────────────────────────────────────────────────
     _fmt(price, currency) {
