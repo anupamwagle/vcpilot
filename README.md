@@ -91,6 +91,22 @@ All rules are configurable per organization via the Rules Config page, allowing 
 
 ---
 
+## Trader Terminal
+
+AstraTrade includes a Bloomberg-style live trading terminal at `http://localhost:8501/trader`. It is a fullscreen dark UI separate from the main dashboard.
+
+**Features:**
+- **Left panel** — tabbed lists: Signals (PENDING), Watchlist, Open Positions. Click any row to load that ticker in the chart.
+- **Centre** — TradingView interactive chart with MA50/150/200 + Volume auto-loaded, toolbars hidden. VCP key levels overlaid as price lines: Pivot (amber), Stop (red), T1 +20% (cyan), T2 +40% (green).
+- **Right panel** — contextual monitor that changes based on the active tab:
+  - **Entry Monitor** (Signals tab): last intraday entry check — vol ratio, RS, MA alignment, data source + delay.
+  - **Signal Monitor** (Watchlist tab): watchlist ranked with ⚡ signals first, live price vs pivot.
+  - **Exit Monitor** (Positions tab): last exit-rule check per open position, live P&L, stop level.
+- **Live prices** — all prices (signal cards, position P&L, ticker tape) update every 10 seconds without page reload.
+- Chart timezone follows your org's configured timezone (AEST by default).
+
+---
+
 ## WhatsApp Commands
 
 > [!NOTE]

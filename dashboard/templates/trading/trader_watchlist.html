@@ -1,0 +1,1212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AstraTrade — Watchlist Terminal</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231d4ed8' stroke-width='2.5'><path d='M3 17c1.5-1 2.5-3 4-3s2.5 1.5 4 1.5 2-2 3.5-2 1.5.5 2.5.5L21 9M21 9h-4M21 9v4' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+
+  <!-- TradingView widget -->
+  <script src="https://s3.tradingview.com/tv.js"></script>
+  <!-- Alpine.js -->
+  <script defer src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js"></script>
+
+  <style>
+    /* ── Terminal Design System (same palette as trader.html) ────────────── */
+    :root {
+      --bg:       #0a0a12;
+      --surface:  #11111c;
+      --surf2:    #18182a;
+      --surf3:    #1e1e30;
+      --border:   #22223a;
+      --text:     #e2e2ec;
+      --muted:    #5a5a78;
+      --subtle:   #38384f;
+      --accent:   #00d4aa;
+      --up:       #26a69a;
+      --down:     #ef5350;
+      --warn:     #f59e0b;
+      --pivot:    #f59e0b;
+      --bull-fg:  #26a69a;
+      --bear-fg:  #ef5350;
+      --caut-fg:  #f59e0b;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%; overflow: hidden;
+      background: var(--bg); color: var(--text);
+      font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+      font-size: 12px;
+    }
+
+    /* ── Main grid ───────────────────────────────────────────────────────── */
+    .wl-grid {
+      display: grid;
+      grid-template-rows: 34px 34px 1fr;
+      grid-template-columns: 300px 1fr 300px;
+      height: 100dvh;
+    }
+    .wl-topbar { grid-column: 1 / -1; grid-row: 1; }
+    .wl-tape   { grid-column: 1 / -1; grid-row: 2; }
+    .wl-left   { grid-column: 1;      grid-row: 3; }
+    .wl-center { grid-column: 2;      grid-row: 3; }
+    .wl-right  { grid-column: 3;      grid-row: 3; }
+
+    /* ── Top bar ─────────────────────────────────────────────────────────── */
+    .wl-topbar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center;
+      padding: 0 10px; gap: 10px;
+      font-size: 10px;
+    }
+    .logo-text {
+      font-weight: 800; font-size: 11px; letter-spacing: 0.04em;
+      color: var(--accent);
+    }
+    .top-sep { width: 1px; height: 18px; background: var(--border); flex-shrink: 0; }
+    .regime-pill {
+      display: flex; align-items: center; gap: 5px;
+      padding: 2px 7px; border-radius: 3px;
+      font-weight: 700; font-size: 10px; letter-spacing: 0.05em;
+    }
+    .regime-bull    { background: #26a69a18; color: var(--bull-fg); border: 1px solid #26a69a44; }
+    .regime-bear    { background: #ef535018; color: var(--bear-fg); border: 1px solid #ef535044; }
+    .regime-caution { background: #f59e0b18; color: var(--caut-fg); border: 1px solid #f59e0b44; }
+    .regime-unknown { background: var(--surf2); color: var(--muted); border: 1px solid var(--border); }
+    .paper-badge {
+      background: #7c3aed18; color: #a78bfa;
+      border: 1px solid #7c3aed44;
+      font-size: 9px; font-weight: 800;
+      padding: 1px 6px; border-radius: 3px; letter-spacing: 0.07em;
+    }
+    .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+    .clock { font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+    .nav-btn {
+      background: none; border: 1px solid transparent; cursor: pointer;
+      color: var(--muted); font-size: 10px; padding: 2px 8px;
+      border-radius: 3px; font-family: inherit;
+      transition: color .15s, border-color .15s, background .15s;
+    }
+    .nav-btn:hover { color: var(--text); border-color: var(--border); background: var(--surf2); }
+    .nav-btn.active { color: var(--accent); border-color: var(--accent); }
+    .nav-link {
+      color: var(--muted); text-decoration: none; font-size: 10px;
+      font-weight: 600; letter-spacing: 0.04em;
+      padding: 2px 6px; border-radius: 3px;
+      border: 1px solid transparent;
+      transition: color .15s, background .15s;
+    }
+    .nav-link:hover { color: var(--accent); border-color: var(--border); background: var(--surf2); }
+
+    /* ── Filter tabs (EQUITY / CRYPTO / ALL) ─────────────────────────────── */
+    .filter-tabs { display: flex; gap: 3px; }
+    .ftab {
+      padding: 2px 10px; border-radius: 3px; cursor: pointer;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+      color: var(--muted); border: 1px solid transparent;
+      background: none; font-family: inherit;
+      transition: all .15s;
+    }
+    .ftab:hover    { color: var(--text); border-color: var(--border); }
+    .ftab.active   { background: var(--accent); color: #000; border-color: var(--accent); }
+
+    /* ── Ticker tape ─────────────────────────────────────────────────────── */
+    .wl-tape {
+      background: var(--bg); border-bottom: 1px solid var(--border);
+      overflow: hidden; display: flex; align-items: center;
+    }
+    .tape-track {
+      white-space: nowrap; display: inline-block; will-change: transform;
+      animation: tape-scroll 80s linear infinite;
+    }
+    .tape-track:hover { animation-play-state: paused; }
+    @keyframes tape-scroll {
+      0%   { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
+    }
+    .tape-item {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 0 12px; border-right: 1px solid var(--border);
+      font-size: 10px; line-height: 34px;
+    }
+    .tape-ticker { color: var(--muted); font-weight: 600; }
+    .tape-price  { color: var(--text); font-weight: 700; }
+    .tape-up   { color: var(--up); }
+    .tape-down { color: var(--down); }
+
+    /* ── Left panel ──────────────────────────────────────────────────────── */
+    .wl-left {
+      background: var(--surface); border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .left-header {
+      padding: 5px 8px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+    }
+    .left-search {
+      flex: 1; background: var(--surf2); border: 1px solid var(--border);
+      border-radius: 3px; color: var(--text); font-family: inherit;
+      font-size: 10px; padding: 3px 7px; outline: none;
+    }
+    .left-search:focus { border-color: var(--accent); }
+    .left-stats { font-size: 9px; color: var(--muted); flex-shrink: 0; }
+
+    .left-scroll { flex: 1; overflow-y: auto; }
+    .left-scroll::-webkit-scrollbar { width: 3px; }
+    .left-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* ── Label group header ──────────────────────────────────────────────── */
+    .group-header {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 8px 3px;
+      font-size: 9px; font-weight: 800; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--muted);
+      position: sticky; top: 0; z-index: 1;
+      background: var(--surface); border-bottom: 1px solid var(--border);
+    }
+    .group-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .group-count { margin-left: auto; opacity: 0.6; }
+
+    /* ── Watchlist item card ─────────────────────────────────────────────── */
+    .wl-card {
+      margin: 3px 5px; padding: 7px 8px;
+      border: 1px solid var(--border); border-radius: 5px;
+      cursor: pointer; transition: border-color .12s, background .12s;
+    }
+    .wl-card:hover  { border-color: var(--subtle); background: var(--surf2); }
+    .wl-card.active { border-color: var(--accent); background: var(--surf2); }
+    .wl-card.has-signal { border-color: var(--up); }
+    .wl-card.crypto-card { border-left: 2px solid #f7931a44; }
+
+    .card-row1 { display: flex; align-items: center; justify-content: space-between; }
+    .card-ticker { font-weight: 800; font-size: 12px; color: var(--text); }
+    .card-price  { font-size: 11px; font-weight: 700; font-family: monospace; }
+    .card-name   { font-size: 9px; color: var(--muted); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+    .card-row2   { display: flex; align-items: center; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
+
+    .badge-xs {
+      display: inline-flex; align-items: center;
+      font-size: 8px; font-weight: 800; letter-spacing: 0.04em;
+      padding: 1px 5px; border-radius: 3px;
+    }
+    .badge-trend   { color: var(--accent); background: #00d4aa18; border: 1px solid #00d4aa44; }
+    .badge-trend-lo{ color: var(--warn);   background: #f59e0b18; border: 1px solid #f59e0b44; }
+    .badge-rs      { color: #a78bfa;       background: #a78bfa14; border: 1px solid #a78bfa44; }
+    .badge-vcp     { color: var(--up);     background: #26a69a14; border: 1px solid #26a69a44; }
+    .badge-sig     { color: var(--up);     background: #26a69a18; border: 1px solid #26a69a44; }
+    .badge-crypto  { color: #f7931a;       background: #f7931a14; border: 1px solid #f7931a44; }
+    .badge-mkt     { display: inline-block; font-size: 8px; font-weight: 800; padding: 1px 5px; border-radius: 3px; letter-spacing: 0.06em; }
+    .mkt-asx    { color: #42a5f5; background: #42a5f514; border: 1px solid #42a5f544; }
+    .mkt-us     { color: #a78bfa; background: #a78bfa14; border: 1px solid #a78bfa44; }
+    .mkt-crypto { color: #f7931a; background: #f7931a14; border: 1px solid #f7931a44; }
+
+    .up   { color: var(--up); }
+    .down { color: var(--down); }
+    .muted { color: var(--muted); }
+
+    /* price tick flash */
+    @keyframes flash-up   { 0% { background: #26a69a33; } 100% { background: transparent; } }
+    @keyframes flash-down { 0% { background: #ef535033; } 100% { background: transparent; } }
+    .flash-up   { animation: flash-up 1s ease-out; border-radius: 2px; }
+    .flash-down { animation: flash-down 1s ease-out; border-radius: 2px; }
+
+    /* ── Center: chart + metrics ─────────────────────────────────────────── */
+    .wl-center {
+      display: flex; flex-direction: column; overflow: hidden; background: var(--bg);
+    }
+    .chart-toolbar {
+      display: flex; align-items: center; gap: 8px;
+      padding: 5px 10px; border-bottom: 1px solid var(--border);
+      background: var(--surface); flex-shrink: 0; min-height: 34px;
+    }
+    .chart-title { font-size: 13px; font-weight: 800; color: var(--text); }
+    .chart-sub   { font-size: 10px; color: var(--muted); }
+    .chart-price { font-size: 12px; font-weight: 700; font-family: monospace; }
+    .tf-btn {
+      padding: 2px 8px; border-radius: 3px; cursor: pointer;
+      color: var(--muted); background: none; border: 1px solid transparent;
+      font-size: 10px; font-weight: 700; transition: all .15s; font-family: inherit;
+    }
+    .tf-btn:hover  { color: var(--text); border-color: var(--border); }
+    .tf-btn.active { color: var(--accent); border-color: var(--accent); }
+
+    #chart-container { flex: 1; position: relative; overflow: hidden; }
+    .chart-placeholder {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 10px; color: var(--muted);
+    }
+    .chart-placeholder svg { opacity: 0.12; }
+    .chart-placeholder p { font-size: 11px; }
+
+    /* ── Metrics bar (below chart) ───────────────────────────────────────── */
+    .metrics-bar {
+      display: flex; align-items: stretch;
+      border-top: 1px solid var(--border); flex-shrink: 0;
+      background: var(--surface); overflow-x: auto;
+    }
+    .metric-cell {
+      flex: 1; min-width: 80px;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 6px 8px; border-right: 1px solid var(--border);
+      gap: 2px;
+    }
+    .metric-cell:last-child { border-right: none; }
+    .metric-label { font-size: 8px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+    .metric-val   { font-size: 11px; font-weight: 700; font-family: monospace; }
+    .metric-sub   { font-size: 8px; color: var(--muted); font-family: monospace; }
+    .range-bar { width: 64px; height: 4px; background: var(--surf2); border-radius: 2px; position: relative; margin-top: 2px; }
+    .range-fill { position: absolute; left: 0; top: 0; height: 100%; background: var(--up); border-radius: 2px; transition: width .3s; }
+    .range-thumb { position: absolute; top: -2px; width: 8px; height: 8px; background: var(--accent); border-radius: 50%; margin-left: -4px; }
+
+    /* ── Right panel ─────────────────────────────────────────────────────── */
+    .wl-right {
+      background: var(--surface); border-left: 1px solid var(--border);
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .right-header {
+      padding: 8px 10px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    }
+    .right-ticker  { font-size: 16px; font-weight: 800; color: var(--text); }
+    .right-name    { font-size: 10px; color: var(--muted); margin-top: 2px; }
+    .score-row     { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+    .score-chip {
+      display: flex; flex-direction: column; align-items: center;
+      padding: 4px 8px; border-radius: 4px; background: var(--surf2);
+      border: 1px solid var(--border); min-width: 52px;
+    }
+    .score-chip-val { font-size: 14px; font-weight: 800; }
+    .score-chip-lbl { font-size: 8px; color: var(--muted); letter-spacing: 0.04em; }
+
+    .right-scroll { flex: 1; overflow-y: auto; }
+    .right-scroll::-webkit-scrollbar { width: 3px; }
+    .right-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* ── Rule category ───────────────────────────────────────────────────── */
+    .rule-cat {
+      padding: 5px 10px 3px;
+      font-size: 8px; font-weight: 800; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      background: var(--surf2);
+      position: sticky; top: 0; z-index: 1;
+    }
+    .rule-row {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 10px; border-bottom: 1px solid #1a1a2e;
+      transition: background .1s;
+    }
+    .rule-row:hover { background: var(--surf2); }
+    .rule-icon { width: 14px; height: 14px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 9px; }
+    .rule-name { flex: 1; font-size: 10px; color: var(--text); }
+    .rule-val  { font-size: 9px; font-family: monospace; color: var(--muted); text-align: right; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rule-pass { color: var(--up); }
+    .rule-fail { color: var(--down); }
+    .rule-ovr  { color: var(--warn); }
+    .rule-na   { color: var(--subtle); }
+
+    /* ── Action buttons ──────────────────────────────────────────────────── */
+    .right-actions {
+      padding: 8px 10px; border-top: 1px solid var(--border);
+      display: flex; flex-direction: column; gap: 6px; flex-shrink: 0;
+    }
+    .btn-promote {
+      width: 100%; padding: 7px 0;
+      background: var(--up); color: #000;
+      font-size: 11px; font-weight: 800; letter-spacing: 0.04em;
+      border: none; border-radius: 4px; cursor: pointer; font-family: inherit;
+      transition: opacity .15s; display: flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    .btn-promote:hover { opacity: .85; }
+    .btn-promote:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-remove {
+      width: 100%; padding: 5px 0;
+      background: none; color: var(--down);
+      font-size: 10px; font-weight: 700;
+      border: 1px solid #ef535044; border-radius: 4px; cursor: pointer; font-family: inherit;
+      transition: background .15s, opacity .15s;
+    }
+    .btn-remove:hover { background: #ef535011; }
+    .promote-status {
+      font-size: 9px; text-align: center; min-height: 14px;
+      transition: color .2s;
+    }
+
+    /* ── Empty state ─────────────────────────────────────────────────────── */
+    .empty-pane {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 8px; color: var(--muted); height: 100%;
+    }
+    .empty-pane svg { opacity: 0.1; }
+    .empty-pane p { font-size: 11px; }
+
+    /* ── Spinner ─────────────────────────────────────────────────────────── */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { animation: spin 1s linear infinite; }
+
+    /* ── Crypto divider in left list ─────────────────────────────────────── */
+    .asset-divider {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 8px 2px;
+      font-size: 8px; font-weight: 800; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--muted);
+      border-top: 1px solid var(--border);
+      margin-top: 4px;
+    }
+    .asset-divider-line { flex: 1; height: 1px; background: var(--border); }
+
+    /* ── 4K TV scaling ───────────────────────────────────────────────────── */
+    @media (min-width: 2200px) {
+      html, body { font-size: 15px; }
+      .wl-grid { grid-template-rows: 46px 46px 1fr; grid-template-columns: 400px 1fr 380px; }
+      .chart-title { font-size: 18px; }
+      .right-ticker { font-size: 20px; }
+      .card-ticker { font-size: 15px; }
+      .card-price  { font-size: 14px; }
+    }
+  </style>
+</head>
+
+<body x-data="wlApp()" x-init="init()">
+<div class="wl-grid">
+
+  <!-- ══ TOP BAR ═══════════════════════════════════════════════════════════ -->
+  <div class="wl-topbar">
+    <span class="logo-text">◈ WATCHLIST</span>
+    <div class="top-sep"></div>
+
+    <!-- Regime pills -->
+    <template x-for="[exk, regime] in Object.entries(regimes)" :key="exk">
+      <span class="regime-pill"
+            :class="regime==='BULL' ? 'regime-bull' : regime==='BEAR' ? 'regime-bear' : regime==='CAUTION' ? 'regime-caution' : 'regime-unknown'">
+        <span x-text="exk.replace('CRYPTO_INDEPENDENTRESERVE','IR').replace('CRYPTO_BINANCE','BNB')"></span>
+        <span x-text="regime"></span>
+      </span>
+    </template>
+    <template x-if="isPaper">
+      <span class="paper-badge">PAPER</span>
+    </template>
+
+    <div class="top-sep"></div>
+
+    <!-- Asset filter -->
+    <div class="filter-tabs">
+      <button class="ftab" :class="{active: assetFilter==='ALL'}"    @click="assetFilter='ALL'">ALL</button>
+      <button class="ftab" :class="{active: assetFilter==='EQUITY'}" @click="assetFilter='EQUITY'">EQUITY</button>
+      <button class="ftab" :class="{active: assetFilter==='CRYPTO'}" @click="assetFilter='CRYPTO'">₿ CRYPTO</button>
+    </div>
+
+    <div class="topbar-right">
+      <span class="clock" x-text="clock"></span>
+      <div class="top-sep"></div>
+      <a class="nav-link" href="/trader">← Trader</a>
+      <a class="nav-link" href="/watchlist">Full View</a>
+      <a class="nav-link" href="/">Dashboard</a>
+    </div>
+  </div>
+
+  <!-- ══ TICKER TAPE ════════════════════════════════════════════════════════ -->
+  <div class="wl-tape">
+    <div class="tape-track" x-ref="tape">
+      <template x-for="item in tapeItems" :key="item.ticker">
+        <span class="tape-item">
+          <span class="tape-ticker" x-text="item.display"></span>
+          <span class="tape-price" x-text="fmtPrice(livePrices[item.ticker]?.price ?? item.close, item.currency)"></span>
+          <span :class="(livePrices[item.ticker]?.change_pct ?? item.change_pct) >= 0 ? 'tape-up' : 'tape-down'"
+                x-text="fmtChg(livePrices[item.ticker]?.change_pct ?? item.change_pct)"></span>
+        </span>
+      </template>
+      <!-- Duplicate for seamless loop -->
+      <template x-for="item in tapeItems" :key="'d-'+item.ticker">
+        <span class="tape-item">
+          <span class="tape-ticker" x-text="item.display"></span>
+          <span class="tape-price" x-text="fmtPrice(livePrices[item.ticker]?.price ?? item.close, item.currency)"></span>
+          <span :class="(livePrices[item.ticker]?.change_pct ?? item.change_pct) >= 0 ? 'tape-up' : 'tape-down'"
+                x-text="fmtChg(livePrices[item.ticker]?.change_pct ?? item.change_pct)"></span>
+        </span>
+      </template>
+    </div>
+  </div>
+
+  <!-- ══ LEFT PANEL — LABEL-GROUPED WATCHLIST ═══════════════════════════════ -->
+  <div class="wl-left">
+    <div class="left-header">
+      <input class="left-search" type="text" x-model="search" placeholder="Search ticker / name…" />
+      <span class="left-stats" x-text="stats ? `${filteredTotal} / ${stats.total}` : ''"></span>
+    </div>
+    <div class="left-scroll">
+      <!-- Empty / loading -->
+      <template x-if="!data">
+        <div class="empty-pane" style="height:200px">
+          <svg class="spin" width="20" height="20" fill="none" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" style="opacity:.25"/>
+            <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" style="opacity:.75"/>
+          </svg>
+          <p>Loading watchlist…</p>
+        </div>
+      </template>
+
+      <!-- EQUITY section -->
+      <template x-if="data && (assetFilter === 'ALL' || assetFilter === 'EQUITY')">
+        <div>
+          <template x-if="assetFilter === 'ALL' && stats && stats.equity_count > 0">
+            <div class="asset-divider">
+              <span>Equities</span>
+              <span class="asset-divider-line"></span>
+              <span x-text="stats.equity_count"></span>
+            </div>
+          </template>
+          <template x-for="group in equityGroups" :key="group.label_id ?? 'unlabelled'">
+            <div>
+              <div class="group-header" :style="`border-left: 2px solid ${group.label_color}`">
+                <span class="group-dot" :style="`background:${group.label_color}`"></span>
+                <span x-text="group.label_name"></span>
+                <span class="group-count" x-text="group.items.length"></span>
+              </div>
+              <template x-for="item in group.items" :key="item.id">
+                <div class="wl-card"
+                     :class="{active: selectedId===item.id, 'has-signal': item.has_pending_signal}"
+                     @click="selectItem(item)">
+                  <div class="card-row1">
+                    <div>
+                      <span class="card-ticker" x-text="item.display_ticker"></span>
+                      <template x-if="item.has_pending_signal">
+                        <span style="color:var(--up);font-size:8px;font-weight:800;margin-left:4px">⚡ SIGNAL</span>
+                      </template>
+                    </div>
+                    <span class="card-price"
+                          :class="(livePrices[item.ticker]?.change_pct ?? item.change_pct) >= 0 ? 'up' : 'down'"
+                          x-text="fmtPrice(livePrices[item.ticker]?.price ?? item.close, item.currency)"></span>
+                  </div>
+                  <div class="card-name" x-text="item.name"></div>
+                  <div class="card-row2">
+                    <!-- Trend score badge -->
+                    <span class="badge-xs" :class="(item.trend_score||0) >= 7 ? 'badge-trend' : 'badge-trend-lo'"
+                          x-text="`T ${item.trend_score||0}/${item.trend_total||8}`"></span>
+                    <!-- RS badge -->
+                    <template x-if="item.rs_rating">
+                      <span class="badge-xs badge-rs" x-text="`RS ${Math.round(item.rs_rating)}`"></span>
+                    </template>
+                    <!-- VCP badge -->
+                    <template x-if="item.vcp_contractions">
+                      <span class="badge-xs badge-vcp" x-text="`VCP×${item.vcp_contractions}`"></span>
+                    </template>
+                    <!-- Change pct -->
+                    <span :class="(livePrices[item.ticker]?.change_pct ?? item.change_pct) >= 0 ? 'up' : 'down'"
+                          style="font-size:9px;font-weight:700"
+                          x-text="fmtChg(livePrices[item.ticker]?.change_pct ?? item.change_pct)"></span>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
+          <template x-if="equityGroups.length === 0 && assetFilter !== 'CRYPTO'">
+            <div class="empty-pane" style="height:80px"><p>No equity matches</p></div>
+          </template>
+        </div>
+      </template>
+
+      <!-- CRYPTO section -->
+      <template x-if="data && (assetFilter === 'ALL' || assetFilter === 'CRYPTO')">
+        <div>
+          <template x-if="assetFilter === 'ALL' && stats && stats.crypto_count > 0">
+            <div class="asset-divider" style="border-top:2px solid #f7931a22;margin-top:8px">
+              <span style="color:#f7931a">₿ Crypto</span>
+              <span class="asset-divider-line"></span>
+              <span x-text="stats.crypto_count"></span>
+            </div>
+          </template>
+          <template x-for="group in cryptoGroups" :key="(group.label_id ?? 'unlabelled')+'c'">
+            <div>
+              <div class="group-header" :style="`border-left: 2px solid ${group.label_color}`">
+                <span class="group-dot" :style="`background:${group.label_color}`"></span>
+                <span x-text="group.label_name"></span>
+                <span class="group-count" x-text="group.items.length"></span>
+              </div>
+              <template x-for="item in group.items" :key="item.id">
+                <div class="wl-card crypto-card"
+                     :class="{active: selectedId===item.id, 'has-signal': item.has_pending_signal}"
+                     @click="selectItem(item)">
+                  <div class="card-row1">
+                    <div>
+                      <span class="card-ticker" x-text="item.display_ticker"></span>
+                      <template x-if="item.has_pending_signal">
+                        <span style="color:var(--up);font-size:8px;font-weight:800;margin-left:4px">⚡ SIGNAL</span>
+                      </template>
+                    </div>
+                    <span class="card-price"
+                          :class="(livePrices[item.ticker]?.change_pct ?? item.change_pct) >= 0 ? 'up' : 'down'"
+                          x-text="fmtPrice(livePrices[item.ticker]?.price ?? item.close, item.currency)"></span>
+                  </div>
+                  <div class="card-name" x-text="item.name"></div>
+                  <div class="card-row2">
+                    <span class="badge-xs badge-crypto">₿</span>
+                    <span class="badge-xs" :class="(item.trend_score||0) >= 7 ? 'badge-trend' : 'badge-trend-lo'"
+                          x-text="`T ${item.trend_score||0}/${item.trend_total||8}`"></span>
+                    <template x-if="item.rs_rating">
+                      <span class="badge-xs badge-rs" x-text="`RS ${Math.round(item.rs_rating)}`"></span>
+                    </template>
+                    <span :class="(livePrices[item.ticker]?.change_pct ?? item.change_pct) >= 0 ? 'up' : 'down'"
+                          style="font-size:9px;font-weight:700"
+                          x-text="fmtChg(livePrices[item.ticker]?.change_pct ?? item.change_pct)"></span>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
+          <template x-if="cryptoGroups.length === 0 && assetFilter !== 'EQUITY'">
+            <div class="empty-pane" style="height:80px"><p>No crypto on watchlist</p></div>
+          </template>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- ══ CENTER — CHART + METRICS ════════════════════════════════════════════ -->
+  <div class="wl-center">
+    <!-- Chart toolbar -->
+    <div class="chart-toolbar">
+      <template x-if="selectedItem">
+        <span class="chart-title" x-text="selectedItem.display_ticker"></span>
+      </template>
+      <template x-if="!selectedItem">
+        <span class="chart-title muted">Select a stock</span>
+      </template>
+
+      <template x-if="selectedItem">
+        <span class="chart-sub" x-text="selectedItem.name"></span>
+      </template>
+      <template x-if="selectedItem">
+        <span class="chart-price"
+              :class="liveChg >= 0 ? 'up' : 'down'"
+              x-text="selectedItem ? fmtPrice(livePrice, selectedItem.currency) + '  ' + fmtChg(liveChg) : ''">
+        </span>
+      </template>
+
+      <div style="margin-left:auto;display:flex;gap:4px">
+        <button class="tf-btn" :class="{active:chartTf==='1M'}" @click="setTf('1M')">1M</button>
+        <button class="tf-btn" :class="{active:chartTf==='3M'}" @click="setTf('3M')">3M</button>
+        <button class="tf-btn" :class="{active:chartTf==='6M'}" @click="setTf('6M')">6M</button>
+        <button class="tf-btn" :class="{active:chartTf==='1Y'}" @click="setTf('1Y')">1Y</button>
+        <button class="tf-btn" :class="{active:chartTf==='2Y'}" @click="setTf('2Y')">2Y</button>
+      </div>
+    </div>
+
+    <!-- Chart container -->
+    <div id="chart-container">
+      <div class="chart-placeholder" id="chart-placeholder">
+        <svg width="80" height="80" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4v16"/>
+        </svg>
+        <p>Select a watchlist item to load chart</p>
+      </div>
+    </div>
+
+    <!-- Metrics bar (below chart, populated when item selected) -->
+    <div class="metrics-bar" x-show="selectedItem">
+      <div class="metric-cell">
+        <span class="metric-label">vs MA50</span>
+        <span class="metric-val"
+              :class="(selectedItem?.ma_50_pct??0) >= 0 ? 'up' : 'down'"
+              x-text="selectedItem?.ma_50_pct != null ? fmtPct(selectedItem.ma_50_pct) : '—'"></span>
+        <span class="metric-sub" x-text="selectedItem?.ma_50 ? fmtPrice(selectedItem.ma_50, selectedItem?.currency) : ''"></span>
+      </div>
+      <div class="metric-cell">
+        <span class="metric-label">vs MA150</span>
+        <span class="metric-val"
+              :class="(selectedItem?.ma_150_pct??0) >= 0 ? 'up' : 'down'"
+              x-text="selectedItem?.ma_150_pct != null ? fmtPct(selectedItem.ma_150_pct) : '—'"></span>
+        <span class="metric-sub" x-text="selectedItem?.ma_150 ? fmtPrice(selectedItem.ma_150, selectedItem?.currency) : ''"></span>
+      </div>
+      <div class="metric-cell">
+        <span class="metric-label">vs MA200</span>
+        <span class="metric-val"
+              :class="(selectedItem?.ma_200_pct??0) >= 0 ? 'up' : 'down'"
+              x-text="selectedItem?.ma_200_pct != null ? fmtPct(selectedItem.ma_200_pct) : '—'"></span>
+        <span class="metric-sub" x-text="selectedItem?.ma_200 ? fmtPrice(selectedItem.ma_200, selectedItem?.currency) : ''"></span>
+      </div>
+      <div class="metric-cell">
+        <span class="metric-label">Vol Ratio</span>
+        <span class="metric-val"
+              :class="(selectedItem?.vol_ratio??0) >= 1.5 ? 'up' : (selectedItem?.vol_ratio??0) < 0.8 ? 'down' : ''"
+              x-text="selectedItem?.vol_ratio ? selectedItem.vol_ratio.toFixed(2)+'×' : '—'"></span>
+        <span class="metric-sub">20-day avg</span>
+      </div>
+      <div class="metric-cell">
+        <span class="metric-label">RS Rating</span>
+        <span class="metric-val"
+              :class="(selectedItem?.rs_rating??0) >= 80 ? 'up' : (selectedItem?.rs_rating??0) < 50 ? 'down' : 'muted'"
+              x-text="selectedItem?.rs_rating ? Math.round(selectedItem.rs_rating) : '—'"></span>
+        <span class="metric-sub">Rel. Strength</span>
+      </div>
+      <div class="metric-cell" style="min-width:120px">
+        <span class="metric-label">52W Range</span>
+        <div style="display:flex;align-items:center;gap:5px;margin-top:2px">
+          <span class="metric-sub" x-text="selectedItem?.low_52w ? fmtPrice(selectedItem.low_52w, selectedItem?.currency) : '—'"></span>
+          <div class="range-bar" x-show="selectedItem?.range_pct != null">
+            <div class="range-fill" :style="`width:${Math.min(Math.max(selectedItem?.range_pct??0,0),100)}%`"></div>
+            <div class="range-thumb" :style="`left:${Math.min(Math.max(selectedItem?.range_pct??0,0),100)}%`"></div>
+          </div>
+          <span class="metric-sub" x-text="selectedItem?.high_52w ? fmtPrice(selectedItem.high_52w, selectedItem?.currency) : '—'"></span>
+        </div>
+        <span class="metric-sub" x-text="selectedItem?.range_pct != null ? Math.round(selectedItem.range_pct)+'% of range' : ''"></span>
+      </div>
+      <div class="metric-cell">
+        <span class="metric-label">Added</span>
+        <span class="metric-val muted" x-text="selectedItem?.added_date ? selectedItem.added_date.slice(5) : '—'"></span>
+        <span class="metric-sub" x-text="selectedItem?.added_by || ''"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ RIGHT PANEL — RULES + ACTIONS ═══════════════════════════════════════ -->
+  <div class="wl-right">
+    <!-- Empty state -->
+    <template x-if="!selectedItem">
+      <div class="empty-pane">
+        <svg width="40" height="40" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+        </svg>
+        <p>Select a stock to see rules</p>
+      </div>
+    </template>
+
+    <!-- Selected item detail -->
+    <template x-if="selectedItem">
+      <div style="display:flex;flex-direction:column;height:100%;overflow:hidden">
+        <!-- Header -->
+        <div class="right-header">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between">
+            <div>
+              <div class="right-ticker" x-text="selectedItem.display_ticker"></div>
+              <div class="right-name" x-text="selectedItem.name"></div>
+            </div>
+            <div>
+              <span :class="selectedItem.asset_type==='CRYPTO' ? 'badge-xs badge-crypto' : selectedItem.exchange_key?.includes('NYSE')||selectedItem.exchange_key?.includes('NASDAQ') ? 'badge-xs mkt-us badge-mkt' : 'badge-xs mkt-asx badge-mkt'"
+                    x-text="selectedItem.exchange_key==='CRYPTO_INDEPENDENTRESERVE'?'IR':selectedItem.exchange_key?.replace('CRYPTO_','').slice(0,6)"></span>
+            </div>
+          </div>
+          <!-- Score chips -->
+          <div class="score-row">
+            <div class="score-chip">
+              <span class="score-chip-val"
+                    :class="(selectedItem.trend_score||0) >= 7 ? 'up' : (selectedItem.trend_score||0) >= 5 ? '' : 'down'"
+                    x-text="`${selectedItem.trend_score||0}/${selectedItem.trend_total||8}`"></span>
+              <span class="score-chip-lbl">TREND</span>
+            </div>
+            <div class="score-chip" x-show="selectedItem.rs_rating">
+              <span class="score-chip-val"
+                    :class="(selectedItem.rs_rating||0) >= 80 ? 'up' : (selectedItem.rs_rating||0) < 50 ? 'down' : ''"
+                    x-text="Math.round(selectedItem.rs_rating||0)"></span>
+              <span class="score-chip-lbl">RS</span>
+            </div>
+            <div class="score-chip" x-show="selectedItem.vcp_contractions">
+              <span class="score-chip-val up" x-text="selectedItem.vcp_contractions+'×'"></span>
+              <span class="score-chip-lbl">VCP</span>
+            </div>
+            <div class="score-chip" x-show="selectedItem.vol_ratio">
+              <span class="score-chip-val"
+                    :class="(selectedItem.vol_ratio||0) >= 1.5 ? 'up' : (selectedItem.vol_ratio||0) < 0.8 ? 'down' : ''"
+                    x-text="(selectedItem.vol_ratio||0).toFixed(1)+'×'"></span>
+              <span class="score-chip-lbl">VOL</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Rule results (scrollable) -->
+        <div class="right-scroll">
+
+          <!-- TREND TEMPLATE rules -->
+          <template x-if="hasCat('trend_')">
+            <div>
+              <div class="rule-cat">Trend Template</div>
+              <template x-for="r in catRules('trend_')" :key="r.key">
+                <div class="rule-row">
+                  <span class="rule-icon" x-text="r.overridden ? '→' : r.passed ? '✓' : r.na ? '–' : '✗'"
+                        :class="r.overridden ? 'rule-ovr' : r.passed ? 'rule-pass' : r.na ? 'rule-na' : 'rule-fail'"></span>
+                  <span class="rule-name" :class="r.passed ? '' : r.overridden ? 'rule-ovr' : r.na ? 'rule-na' : 'rule-fail'"
+                        x-text="r.label"></span>
+                  <span class="rule-val" :class="r.passed ? 'up' : r.overridden ? 'rule-ovr' : 'muted'"
+                        x-text="r.msg || ''"></span>
+                </div>
+              </template>
+            </div>
+          </template>
+
+          <!-- VCP rules -->
+          <template x-if="hasCat('vcp_')">
+            <div>
+              <div class="rule-cat">VCP Pattern</div>
+              <template x-for="r in catRules('vcp_')" :key="r.key">
+                <div class="rule-row">
+                  <span class="rule-icon" x-text="r.overridden ? '→' : r.passed ? '✓' : r.na ? '–' : '✗'"
+                        :class="r.overridden ? 'rule-ovr' : r.passed ? 'rule-pass' : r.na ? 'rule-na' : 'rule-fail'"></span>
+                  <span class="rule-name" :class="r.passed ? '' : r.overridden ? 'rule-ovr' : r.na ? 'rule-na' : 'rule-fail'"
+                        x-text="r.label"></span>
+                  <span class="rule-val" :class="r.passed ? 'up' : r.overridden ? 'rule-ovr' : 'muted'"
+                        x-text="r.msg || ''"></span>
+                </div>
+              </template>
+            </div>
+          </template>
+
+          <!-- FUNDAMENTAL rules -->
+          <template x-if="hasCat('fundamental_')">
+            <div>
+              <div class="rule-cat">Fundamentals</div>
+              <template x-for="r in catRules('fundamental_')" :key="r.key">
+                <div class="rule-row">
+                  <span class="rule-icon" x-text="r.overridden ? '→' : r.passed ? '✓' : r.na ? '–' : '✗'"
+                        :class="r.overridden ? 'rule-ovr' : r.passed ? 'rule-pass' : r.na ? 'rule-na' : 'rule-fail'"></span>
+                  <span class="rule-name" :class="r.passed ? '' : r.overridden ? 'rule-ovr' : r.na ? 'rule-na' : 'rule-fail'"
+                        x-text="r.label"></span>
+                  <span class="rule-val" :class="r.passed ? 'up' : r.overridden ? 'rule-ovr' : 'muted'"
+                        x-text="r.msg || ''"></span>
+                </div>
+              </template>
+            </div>
+          </template>
+
+          <!-- CRYPTO rules -->
+          <template x-if="hasCat('crypto_')">
+            <div>
+              <div class="rule-cat" style="color:#f7931a">₿ Crypto Rules</div>
+              <template x-for="r in catRules('crypto_')" :key="r.key">
+                <div class="rule-row">
+                  <span class="rule-icon" x-text="r.overridden ? '→' : r.passed ? '✓' : r.na ? '–' : '✗'"
+                        :class="r.overridden ? 'rule-ovr' : r.passed ? 'rule-pass' : r.na ? 'rule-na' : 'rule-fail'"></span>
+                  <span class="rule-name" :class="r.passed ? '' : r.overridden ? 'rule-ovr' : r.na ? 'rule-na' : 'rule-fail'"
+                        x-text="r.label"></span>
+                  <span class="rule-val" :class="r.passed ? 'up' : r.overridden ? 'rule-ovr' : 'muted'"
+                        x-text="r.msg || ''"></span>
+                </div>
+              </template>
+            </div>
+          </template>
+
+          <!-- Any remaining / unknown rules -->
+          <template x-if="hasCat('other')">
+            <div>
+              <div class="rule-cat">Other</div>
+              <template x-for="r in catRules('other')" :key="r.key">
+                <div class="rule-row">
+                  <span class="rule-icon" x-text="r.passed ? '✓' : '✗'"
+                        :class="r.passed ? 'rule-pass' : 'rule-fail'"></span>
+                  <span class="rule-name" x-text="r.label"></span>
+                  <span class="rule-val muted" x-text="r.msg || ''"></span>
+                </div>
+              </template>
+            </div>
+          </template>
+
+          <!-- No rule data -->
+          <template x-if="!hasAnyRules">
+            <div style="padding:16px 10px;text-align:center;color:var(--muted);font-size:10px">
+              No rule data — screener hasn't run for this ticker yet
+            </div>
+          </template>
+        </div>
+
+        <!-- Actions -->
+        <div class="right-actions">
+          <div class="promote-status"
+               :style="promoteMsg.startsWith('✓') ? 'color:var(--up)' : promoteMsg.startsWith('✗') ? 'color:var(--down)' : 'color:var(--muted)'"
+               x-text="promoteMsg"></div>
+          <button class="btn-promote"
+                  :disabled="promoting || selectedItem?.has_pending_signal"
+                  @click="promoteSelected()">
+            <template x-if="promoting">
+              <svg class="spin" width="12" height="12" fill="none" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" style="opacity:.25"/>
+                <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" style="opacity:.75"/>
+              </svg>
+            </template>
+            <template x-if="!promoting">
+              <span>▲</span>
+            </template>
+            <span x-text="selectedItem?.has_pending_signal ? 'Already a Signal' : 'Promote to Signal'"></span>
+          </button>
+          <a :href="'/signals'" style="display:block;text-align:center;font-size:9px;color:var(--muted);text-decoration:none;margin-top:2px">
+            View Signals →
+          </a>
+          <button class="btn-remove" @click="removeSelected()">Remove from Watchlist</button>
+        </div>
+      </div>
+    </template>
+  </div>
+
+</div><!-- /wl-grid -->
+
+<script>
+// ── Rule key → human label map ───────────────────────────────────────────────
+const RULE_LABELS = {
+  // Trend template
+  trend_price_above_200ma:      'Price > 200MA',
+  trend_price_above_150ma:      'Price > 150MA',
+  trend_ma150_above_ma200:      'MA150 > MA200',
+  trend_ma200_trending_up:      '200MA Rising (21d)',
+  trend_ma50_above_ma150_200:   'MA50 > MA150/200',
+  trend_price_above_ma50:       'Price > MA50',
+  trend_pct_above_52w_low:      '≥30% Above 52W Low',
+  trend_pct_below_52w_high:     'Within 25% of 52W High',
+  trend_rs_rating_min:          'RS Rating ≥ 70',
+  // VCP
+  vcp_min_contractions:         'Min Contractions (2)',
+  vcp_min_weeks:                'Min Base Weeks (3)',
+  vcp_max_weeks:                'Max Base Weeks (52)',
+  vcp_volume_dry_up:            'Volume Dry-Up',
+  vcp_breakout_volume:          'Breakout Volume',
+  vcp_not_extended:             'Not Extended (<10%)',
+  vcp_contractions:             'VCP Contractions',
+  // Fundamental
+  fundamental_eps_growth:       'EPS Growth (≥25%)',
+  fundamental_eps_acceleration: 'EPS Acceleration',
+  fundamental_annual_eps:       'Annual EPS Positive',
+  fundamental_sales_growth:     'Sales Growth (≥25%)',
+  fundamental_roe:              'ROE (≥17%)',
+  fundamental_margins:          'Profit Margins',
+  fundamental_institutional_ownership: 'Inst. Ownership',
+  // Crypto
+  crypto_rsi_momentum:          'RSI ≥ 50 (Momentum)',
+  crypto_macd_bullish:          'MACD Bullish Cross',
+  crypto_volume_surge:          'Volume Surge (1.5×)',
+  crypto_min_rr_ratio:          'Min R/R 2.5:1',
+  crypto_btc_relative_strength: 'BTC Relative Strength',
+  // Market regime
+  regime_index_above_200ma:     'Index > 200MA',
+  regime_breadth_min:           'Breadth ≥ 60%',
+  regime_distribution_days_max: 'Distribution Days ≤ 4',
+};
+
+function ruleCat(key) {
+  if (key.startsWith('trend_'))       return 'trend_';
+  if (key.startsWith('vcp_'))         return 'vcp_';
+  if (key.startsWith('fundamental_')) return 'fundamental_';
+  if (key.startsWith('crypto_'))      return 'crypto_';
+  if (key.startsWith('regime_'))      return 'regime_';
+  return 'other';
+}
+
+function fmtRuleMsg(v) {
+  if (!v || typeof v !== 'object') return '';
+  const val = v.value, msg = v.message;
+  // Prefer compact message
+  if (msg && msg.length < 40) return msg;
+  if (val !== null && val !== undefined) {
+    if (typeof val === 'number') return val.toFixed(2);
+    return String(val).slice(0, 30);
+  }
+  return '';
+}
+
+function wlApp() {
+  return {
+    // State
+    data:         null,
+    livePrices:   {},
+    selectedItem: null,
+    selectedId:   null,
+    assetFilter:  'ALL',
+    search:       '',
+    chartWidget:  null,
+    chartTf:      '1Y',
+    regimes:      {},
+    isPaper:      true,
+    stats:        null,
+    clock:        '',
+    promoting:    false,
+    promoteMsg:   '',
+    _clockTimer:  null,
+    _priceTimer:  null,
+    _dataTimer:   null,
+
+    // ── Init ────────────────────────────────────────────────────────────────
+    async init() {
+      this.tickClock();
+      this._clockTimer = setInterval(() => this.tickClock(), 1000);
+      await this.loadData();
+      await this.refreshPrices();
+      this._priceTimer = setInterval(() => this.refreshPrices(), 10000);
+      this._dataTimer  = setInterval(() => this.loadData(), 30000);
+    },
+
+    tickClock() {
+      const now = new Date();
+      this.clock = now.toLocaleTimeString('en-AU', {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false});
+    },
+
+    // ── Data load ───────────────────────────────────────────────────────────
+    async loadData() {
+      try {
+        const r   = await fetch('/trader/watchlist/data');
+        const d   = await r.json();
+        this.data     = d;
+        this.regimes  = d.regimes  || {};
+        this.isPaper  = d.account_is_paper ?? true;
+        this.stats    = d.stats    || null;
+        // Re-select current item from fresh data (in case rule_results updated)
+        if (this.selectedId && d.groups) {
+          for (const g of d.groups) {
+            const found = g.items.find(i => i.id === this.selectedId);
+            if (found) { this.selectedItem = found; break; }
+          }
+        } else if (!this.selectedItem && this.filteredItems.length > 0) {
+          this.selectItem(this.filteredItems[0]);
+        }
+      } catch (e) { console.error('WL data load error:', e); }
+    },
+
+    async refreshPrices() {
+      try {
+        const r = await fetch('/trader/prices');
+        const d = await r.json();
+        this.livePrices = d;
+      } catch (e) { /* silent */ }
+    },
+
+    // ── Computed: all items flat (filtered by search + assetFilter) ─────────
+    get filteredItems() {
+      if (!this.data?.groups) return [];
+      const q = this.search.toLowerCase().trim();
+      return this.data.groups.flatMap(g => g.items).filter(item => {
+        const assetOk = this.assetFilter === 'ALL'
+          || (this.assetFilter === 'EQUITY' && item.asset_type !== 'CRYPTO')
+          || (this.assetFilter === 'CRYPTO' && item.asset_type === 'CRYPTO');
+        const searchOk = !q || item.display_ticker.toLowerCase().includes(q) || (item.name||'').toLowerCase().includes(q);
+        return assetOk && searchOk;
+      });
+    },
+
+    get filteredTotal() { return this.filteredItems.length; },
+
+    // Groups for equity section
+    get equityGroups() {
+      if (!this.data?.groups) return [];
+      const q = this.search.toLowerCase().trim();
+      return this.data.groups.map(g => ({
+        ...g,
+        items: g.items.filter(i =>
+          i.asset_type !== 'CRYPTO' &&
+          (!q || i.display_ticker.toLowerCase().includes(q) || (i.name||'').toLowerCase().includes(q))
+        )
+      })).filter(g => g.items.length > 0);
+    },
+
+    // Groups for crypto section
+    get cryptoGroups() {
+      if (!this.data?.groups) return [];
+      const q = this.search.toLowerCase().trim();
+      return this.data.groups.map(g => ({
+        ...g,
+        items: g.items.filter(i =>
+          i.asset_type === 'CRYPTO' &&
+          (!q || i.display_ticker.toLowerCase().includes(q) || (i.name||'').toLowerCase().includes(q))
+        )
+      })).filter(g => g.items.length > 0);
+    },
+
+    // Tape items = all items from current data
+    get tapeItems() {
+      if (!this.data?.groups) return [];
+      return this.data.groups.flatMap(g => g.items).slice(0, 60);
+    },
+
+    // ── Live price helpers ───────────────────────────────────────────────────
+    get livePrice() {
+      if (!this.selectedItem) return null;
+      return this.livePrices[this.selectedItem.ticker]?.price ?? this.selectedItem.close;
+    },
+    get liveChg() {
+      if (!this.selectedItem) return 0;
+      return this.livePrices[this.selectedItem.ticker]?.change_pct ?? this.selectedItem.change_pct ?? 0;
+    },
+
+    // ── Select item ──────────────────────────────────────────────────────────
+    selectItem(item) {
+      this.selectedItem = item;
+      this.selectedId   = item.id;
+      this.promoteMsg   = '';
+      this.loadChart(item.ticker);
+    },
+
+    // ── Chart ────────────────────────────────────────────────────────────────
+    loadChart(ticker) {
+      const el = document.getElementById('chart-placeholder');
+      if (el) el.style.display = 'none';
+
+      if (this.chartWidget) {
+        try { this.chartWidget.remove(); } catch(_) {}
+        this.chartWidget = null;
+      }
+
+      // Map yfinance ticker to TradingView symbol
+      let tvSymbol = ticker;
+      if (ticker.endsWith('.AX')) {
+        tvSymbol = 'ASX:' + ticker.replace('.AX', '');
+      } else if (ticker.endsWith('-AUD') || ticker.endsWith('-USD') || ticker.endsWith('-USDT')) {
+        const base = ticker.split('-')[0].toUpperCase();
+        tvSymbol = 'COINBASE:' + base + 'USD';  // best crypto source on TradingView
+        if (ticker.endsWith('-AUD')) tvSymbol = 'BINANCE:' + base + 'AUD';
+      }
+      // US stocks: just the ticker (TradingView auto-resolves NASDAQ/NYSE)
+
+      this.chartWidget = new TradingView.widget({
+        container_id:       'chart-container',
+        symbol:             tvSymbol,
+        interval:           'D',
+        timezone:           'Australia/Sydney',
+        theme:              'dark',
+        style:              '1',   // candlestick
+        locale:             'en',
+        toolbar_bg:         '#11111c',
+        enable_publishing:  false,
+        hide_top_toolbar:   false,
+        hide_side_toolbar:  true,
+        allow_symbol_change: false,
+        save_image:         false,
+        backgroundColor:    '#0a0a12',
+        gridColor:          '#22223a',
+        width:              '100%',
+        height:             '100%',
+        range:              this.chartTf === '1M' ? '1M' :
+                            this.chartTf === '3M' ? '3M' :
+                            this.chartTf === '6M' ? '6M' :
+                            this.chartTf === '1Y' ? '12M' : '24M',
+        studies: [
+          { id: 'MAExp@tv-basicstudies', inputs: { length: 50 },  overrides: { 'Plot.color': '#f59e0b' } },
+          { id: 'MAExp@tv-basicstudies', inputs: { length: 150 }, overrides: { 'Plot.color': '#a78bfa' } },
+          { id: 'MAExp@tv-basicstudies', inputs: { length: 200 }, overrides: { 'Plot.color': '#ef5350' } },
+          { id: 'Volume@tv-basicstudies' },
+          { id: 'RSI@tv-basicstudies', inputs: { length: 14 }, overrides: { 'hline.0.value': 50, 'hline.1.value': 70, 'hline.2.value': 30 } },
+        ],
+        overrides: {
+          'mainSeriesProperties.candleStyle.upColor':         '#26a69a',
+          'mainSeriesProperties.candleStyle.downColor':       '#ef5350',
+          'mainSeriesProperties.candleStyle.borderUpColor':   '#26a69a',
+          'mainSeriesProperties.candleStyle.borderDownColor': '#ef5350',
+          'mainSeriesProperties.candleStyle.wickUpColor':     '#26a69a',
+          'mainSeriesProperties.candleStyle.wickDownColor':   '#ef5350',
+          'paneProperties.background':                        '#0a0a12',
+          'paneProperties.backgroundType':                    'solid',
+          'paneProperties.vertGridProperties.color':          '#22223a',
+          'paneProperties.horzGridProperties.color':          '#22223a',
+          'scalesProperties.textColor':                       '#5a5a78',
+          'scalesProperties.lineColor':                       '#22223a',
+        },
+      });
+    },
+
+    setTf(tf) {
+      this.chartTf = tf;
+      if (this.selectedItem) this.loadChart(this.selectedItem.ticker);
+    },
+
+    // ── Rule results for right panel ─────────────────────────────────────────
+    get hasAnyRules() {
+      return this.selectedItem && Object.keys(this.selectedItem.rule_results || {}).length > 0;
+    },
+
+    hasCat(prefix) {
+      if (!this.selectedItem?.rule_results) return false;
+      const keys = Object.keys(this.selectedItem.rule_results);
+      if (prefix === 'other') {
+        const known = ['trend_','vcp_','fundamental_','crypto_','regime_'];
+        return keys.some(k => !known.some(p => k.startsWith(p)));
+      }
+      return keys.some(k => k.startsWith(prefix));
+    },
+
+    catRules(prefix) {
+      if (!this.selectedItem?.rule_results) return [];
+      const rules = this.selectedItem.rule_results;
+      const keys = Object.keys(rules).filter(k => {
+        if (prefix === 'other') {
+          const known = ['trend_','vcp_','fundamental_','crypto_','regime_'];
+          return !known.some(p => k.startsWith(p));
+        }
+        return k.startsWith(prefix);
+      });
+      // Order: put passing rules first, failing second
+      return keys.map(k => {
+        const v = rules[k];
+        const passed    = typeof v === 'object' ? !!v?.passed : !!v;
+        const na        = typeof v === 'object' && v?.value === null && v?.message === null;
+        const overridden= false; // watchlist items don't have per-signal overrides
+        return {
+          key:        k,
+          label:      RULE_LABELS[k] || k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+          passed,
+          overridden,
+          na,
+          msg:        typeof v === 'object' ? fmtRuleMsg(v) : '',
+        };
+      }).sort((a, b) => {
+        // pass → fail → na
+        const rank = r => r.na ? 2 : r.passed ? 0 : 1;
+        return rank(a) - rank(b);
+      });
+    },
+
+    // ── Promote to signal ─────────────────────────────────────────────────────
+    async promoteSelected() {
+      if (!this.selectedItem || this.promoting) return;
+      this.promoting  = true;
+      this.promoteMsg = 'Promoting…';
+      try {
+        const r = await fetch(`/trader/watchlist/promote/${this.selectedItem.id}`, { method: 'POST' });
+        const d = await r.json();
+        if (d.ok) {
+          this.promoteMsg = `✓ ${d.ticker} queued for promotion`;
+          await this.loadData();   // refresh — item may move to has_pending_signal
+        } else {
+          this.promoteMsg = `✗ ${d.error || 'Promotion failed'}`;
+        }
+      } catch (e) {
+        this.promoteMsg = '✗ Network error';
+      } finally {
+        this.promoting = false;
+      }
+    },
+
+    // ── Remove ────────────────────────────────────────────────────────────────
+    async removeSelected() {
+      if (!this.selectedItem) return;
+      if (!confirm(`Remove ${this.selectedItem.display_ticker} from watchlist?`)) return;
+      try {
+        await fetch(`/watchlist/${this.selectedItem.id}/remove`, { method: 'POST' });
+        this.selectedItem = null;
+        this.selectedId   = null;
+        await this.loadData();
+      } catch (e) { alert('Remove failed'); }
+    },
+
+    // ── Format helpers ────────────────────────────────────────────────────────
+    fmtPrice(val, currency) {
+      if (val === null || val === undefined) return '—';
+      const n = parseFloat(val);
+      if (isNaN(n)) return '—';
+      const pre = (currency === 'USD') ? 'US$' : 'A$';
+      if (n >= 1000)  return pre + n.toLocaleString('en-AU', {minimumFractionDigits:2, maximumFractionDigits:2});
+      if (n >= 1)     return pre + n.toFixed(2);
+      if (n >= 0.01)  return pre + n.toPrecision(4);
+      return pre + n.toExponential(2);
+    },
+    fmtChg(v) {
+      if (v === null || v === undefined || isNaN(parseFloat(v))) return '—';
+      const n = parseFloat(v), s = n >= 0 ? '+' : '';
+      return `${s}${n.toFixed(2)}%`;
+    },
+    fmtPct(v) {
+      if (v === null || v === undefined) return '—';
+      const n = parseFloat(v), s = n >= 0 ? '+' : '';
+      return `${s}${n.toFixed(1)}%`;
+    },
+  };
+}
+</script>
+</body>
+</html>

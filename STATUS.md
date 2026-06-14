@@ -1,12 +1,26 @@
 # AstraTrade — Operational Status
 
-> Last updated: 12 June 2026 AEST. Update this file when major milestones are reached.
+> Last updated: 14 June 2026 AEST. Update this file when major milestones are reached.
 
 ---
 
 ## Current Phase: 3 — Multi-Market Support (ASX + US Equities + Crypto Foundation)
 
 ### ✅ Done
+
+- **Trader Terminal — Bloomberg-style Live Trading View (14 Jun 2026):**
+  - **New `/trader` route** — standalone Bloomberg-style fullscreen terminal (dark, not extending `base.html`). Three-column CSS Grid: left panel (lists + controls), centre (TradingView chart), right (contextual monitor panel). Favicon matches main dashboard.
+  - **TradingView chart** — `TradingView.widget` embed with `hide_top_toolbar: true`, `hide_side_toolbar: true`, toolbars fully hidden. Studies (MA50, MA150, MA200, Volume) auto-enabled on load. `timezone` passed from org `display_tz` config so chart shows AEST/local time (not UTC). Timeframe buttons (1D/1W/1M) remain in a minimal toolbar strip above the chart.
+  - **VCP price lines** — On chart ready and on signal selection: pivot (amber dashed), stop (red dotted), T1 +20% (cyan dotted), T2 +40% (green dotted) drawn via `widget.chart().createPositionLine()`. Lines stored in `_priceLines` array, cleaned up on chart reload.
+  - **Three contextual right-panel modes** (Alpine `x-if` conditionals):
+    - **Entry Monitor** (tab = signals): shows latest entry check stats per selected signal — vol ratio, RS, MA50/200 above/below, data source badge (⚡ IBKR / 🕐 delayed / 📉 EOD), delay mins. Polled from `/admin/data-log/poll`.
+    - **Signal Monitor** (tab = watchlist): watchlist sorted with ⚡ signals first (amber tint), pivot + stop shown per row. Live price and % vs pivot updated every 10s.
+    - **Exit Monitor** (tab = positions): polls `/trader/exit-checks` every 30s, shows last exit-rule check per open position — timestamp, current price, P&L%, stop, hold/exit status color-coded.
+  - **Live prices** — `/trader/prices` endpoint polled every 10s. Expanded to cover watchlist + signal + position tickers (previously watchlist only). Alpine `livePrices` dict drives price display across all three panels without page reload. Signal cards and position P&L both update live without page reload.
+  - **Live P&L helpers** — `livePnlPct(pos)`, `livePnlAud(pos)`, `liveChangePct(ticker, pivot)` computed client-side from `livePrices` snapshot. Real-time unrealised P&L without waiting for `update_position_pnl_task` DB write.
+  - **TRIGGERED signal filtering** — both `/signals` page and trader terminal now exclude `SignalStatus.TRIGGERED` from active views.
+  - **New `/trader/exit-checks` endpoint** — returns latest exit-rule AuditLog message per open position. Uses `Position.current_stop` (not `Order.stop_price`).
+  - **Scroll ticker tape** — includes signal + position tickers (not just watchlist), with live prices.
 
 - **Dashboard UX Polish + Crypto Universe Expansion (12 Jun 2026):**
   - **Removed auto page-refresh timers:** Both `watchlist.html` and `signals.html` had countdown timers that force-reloaded the page (e.g. every 60s for watchlist, 5-min for signals). Removed the countdown UI, `setInterval` tick, and `location.reload()` fallback from both templates. Signals page retains its silent 30s AJAX poll (`pollChecks()`) for live entry-check updates — no full reload, just in-place DOM updates.
@@ -392,7 +406,7 @@ First signals likely from: BTC-AUD, DOGE-AUD, LINK-AUD, XRP-AUD (closest to 200M
 
 ---
 
-## Services Status (as of 12 Jun 2026 — Session 2)
+## Services Status (as of 14 Jun 2026)
 
 | Service | Status | Notes |
 |---|---|---|

@@ -518,6 +518,12 @@ All rules have `enabled_globally=True` by default. Admin can toggle any non-mand
 - `GET /positions` — Open positions + closed trades + stats (scoped to organization)
 - `GET /signals` — Today's signals with rule badge breakdown, skip button (scoped to organization)
 - `GET /watchlist` — Automatic + manual watchlist (scoped to organization)
+- `GET /trader/watchlist` — Watchlist Terminal: dedicated fullscreen dark terminal for the watchlist screen. Label-grouped left panel (equity top / crypto bottom), TradingView chart with MA50/150/200 + RSI, full Minervini rule breakdown right panel, one-click promote-to-signal. Polled live via `/trader/watchlist/data` (30s) and `/trader/prices` (10s).
+- `GET /trader/watchlist/data` — JSON payload: label-grouped watchlist items with rule_results, PriceBar MA metrics, vol ratio, RS, 52W range position, pending signal flags.
+- `POST /trader/watchlist/promote/{item_id}` — JSON promote (in-terminal, no redirect). Same rollback-on-failure safety as `/watchlist/{id}/promote`.
+- `GET /trader` — Bloomberg-style fullscreen trader terminal: TradingView chart + live signal/watchlist/position lists + contextual monitor panel (Entry/Signal/Exit). Standalone dark page (no base.html).
+- `GET /trader/prices` — JSON: live prices for all active tickers (watchlist + signals + positions). Polled every 10s by trader terminal.
+- `GET /trader/exit-checks` — JSON: latest exit-rule AuditLog entry per open position. Polled every 30s by Exit Monitor panel.
 
 **Admin (Operator) Area:**
 - `GET /admin/health` — Worker status, market regime, manual triggers, schedule reference (scoped to organization)
@@ -592,9 +598,27 @@ The WAHA webhook routes incoming messages to `http://api:8501/webhook/whatsapp`.
 
 ---
 
-## Session Handoff — Where We Are (12 Jun 2026)
+## Session Handoff — Where We Are (14 Jun 2026)
 
 **Current operational state (pick up here in next session):**
+
+- **Trader Watchlist Terminal (14 Jun 2026):**
+  - New `/trader/watchlist` dedicated fullscreen screen for monitoring the watchlist. Bloomberg dark terminal style identical to `/trader`.
+  - Left panel: label-grouped watchlist (equity top half / crypto bottom half, or filtered via ALL/EQUITY/CRYPTO tabs). Search, live prices, trend score badges, RS, VCP count per card.
+  - Center: TradingView chart (MA50/150/200 amber/violet/red + Volume + RSI). Metrics bar: vs MA50/150/200, Vol Ratio, RS Rating, 52W range bar.
+  - Right: full Minervini rule breakdown by category (Trend Template/VCP/Fundamentals/Crypto) with pass/fail/N-A per rule. Score chips summary. `▲ Promote to Signal` button (JSON endpoint, no redirect). Remove button.
+  - Backend: `GET /trader/watchlist/data`, `POST /trader/watchlist/promote/{id}`.
+  - `◈ WL` nav link added to existing trader terminal.
+
+- **Trader Terminal complete (14 Jun 2026):**
+  - Bloomberg-style fullscreen live trading view at `/trader` (dark standalone page, not extending `base.html`).
+  - Three-column grid: left = tabbed lists (Signals / Watchlist / Open), centre = TradingView chart, right = contextual monitor panel.
+  - Chart: toolbars hidden, MA50/150/200 + Volume auto-loaded as studies, timezone from org config, VCP price lines (pivot/stop/T1/T2) drawn via `createPositionLine()`.
+  - Contextual right panel: Entry Monitor (signals tab) → Signal Monitor (watchlist tab) → Exit Monitor (positions tab).
+  - Live price polling every 10s via `/trader/prices` covering all active tickers (watchlist + signals + positions). Signal prices and position P&L update live.
+  - New `/trader/exit-checks` endpoint for exit monitor panel.
+  - TRIGGERED signals excluded from all active views (signals page + trader).
+  - Favicon, AEST timezone, scroll ticker tape with live prices all working.
 
 - **Dashboard UX Polish (12 Jun 2026 — Session 2):**
   - Auto page-refresh timers removed from `watchlist.html` and `signals.html` — no more forced page reloads. Silent AJAX polling kept on signals (30s) and data-log (30s).
@@ -635,8 +659,8 @@ Before the next session can begin trading, complete ALL of:
 
 ### Next Session Prompt
 
-> "VCPilot Step 2 — live trading session. AW org (id=10) is ready. MCP is connected.  
-> Market regime: CAUTION. Run `get_portfolio_stats()` and `get_market_regime('CRYPTO_INDEPENDENTRESERVE')`  
+> "AstraTrade — continuing from 14 Jun 2026. AW org (id=10). Trader Terminal is live at /trader.  
+> Run `get_portfolio_stats()` and `get_market_regime('CRYPTO_INDEPENDENTRESERVE')`  
 > then let's review any pending signals and decide on entries."
 
 ### Recovery Watchlist (when to expect first signals)

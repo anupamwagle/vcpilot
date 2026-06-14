@@ -3091,6 +3091,278 @@ async def trader_exit_checks(request: Request, db: Session = Depends(get_db)):
 
 
 # ===========================================================================
+# TRADER WATCHLIST TERMINAL
+# ===========================================================================
+
+@app.get("/trader/watchlist", response_class=HTMLResponse)
+async def trader_watchlist_view(request: Request, db: Session = Depends(get_db)):
+    """Bloomberg-style fullscreen watchlist terminal — dedicated trader screen."""
+    if not _auth(request):
+        return RedirectResponse("/login")
+    return templates.TemplateResponse("trading/trader_watchlist.html", {
+        "request": request,
+        **_global(request, db),
+    })
+
+
+@app.get("/trader/watchlist/data")
+async def trader_watchlist_data(request: Request, db: Session = Depends(get_db)):
+    """Rich watchlist payload — label-grouped, with full rule_results + PriceBar metrics."""
+    if not _auth(request):
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    try:
+        return _trader_watchlist_data_inner(request, db)
+    except Exception as exc:
+        import traceback
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return JSONResponse({"error": str(exc), "trace": traceback.format_exc()}, status_code=500)
+
+
+def _trader_watchlist_data_inner(request: Request, db):
+    from sqlalchemy import func
+    from sqlalchemy.orm import joinedload
+    from app.models.signal import Watchlist, WatchlistStatus, WatchlistLabel, Signal, SignalStatus
+    from app.models.market import PriceBar, Stock
+    from app.models.config import SystemConfig
+    from app.models.account import Account
+    from app.models.exchange import ExchangeConfig
+
+    org_id = request.session.get("organization_id")
+
+    # ── All WATCHING items (with label eager-loaded) ──
+    wl_items = (
+        db.query(Watchlist)
+        .options(joinedload(Watchlist.label))
+        .filter(
+            Watchlist.organization_id == org_id,
+            Watchlist.status == WatchlistStatus.WATCHING,
+        )
+        .order_by(Watchlist.created_at.desc())
+        .limit(300)
+        .all()
+    )
+
+    # ── All labels (for ordering) ──
+    labels = (
+        db.query(WatchlistLabel)
+        .filter(WatchlistLabel.organization_id == org_id)
+        .order_by(WatchlistLabel.sort_order, WatchlistLabel.id)
+        .all()
+    )
+
+    # ── Latest PriceBar per ticker ──
+    all_tickers = list({w.ticker for w in wl_items})
+    price_map: dict = {}
+    if all_tickers:
+        latest_sq = (
+            db.query(PriceBar.ticker, func.max(PriceBar.date).label("mx"))
+            .filter(PriceBar.ticker.in_(all_tickers))
+            .group_by(PriceBar.ticker)
+            .subquery()
+        )
+        bars = (
+            db.query(PriceBar)
+            .join(latest_sq, (PriceBar.ticker == latest_sq.c.ticker) & (PriceBar.date == latest_sq.c.mx))
+            .all()
+        )
+        price_map = {b.ticker: b for b in bars}
+
+    # ── Active signals (to flag items that already have a pending signal) ──
+    pending_signal_tickers = {
+        row[0] for row in db.query(Signal.ticker).filter(
+            Signal.organization_id == org_id,
+            Signal.status == SignalStatus.PENDING,
+        ).all()
+    }
+
+    # ── Exchange configs ──
+    ex_cfgs = {e.exchange_key: e for e in db.query(ExchangeConfig).all()}
+    def _flag(exk: str) -> str:
+        c = ex_cfgs.get(exk)
+        return (c.flag_emoji if c and c.flag_emoji else "")
+
+    def _disp(ticker: str) -> str:
+        return ticker.replace(".AX", "").replace("-AUD", "").replace("-USD", "")
+
+    stock_names = get_cached_stock_names(db)
+
+    def _pct(a, b):
+        if a and b and float(b) > 0:
+            return round((float(a) - float(b)) / float(b) * 100, 2)
+        return None
+
+    def _build_item(w):
+        bar = price_map.get(w.ticker)
+        close     = float(bar.close)   if bar and bar.close   else None
+        open_     = float(bar.open)    if bar and bar.open    else None
+        ma50      = float(bar.ma_50)   if bar and bar.ma_50   else None
+        ma150     = float(bar.ma_150)  if bar and bar.ma_150  else None
+        ma200     = float(bar.ma_200)  if bar and bar.ma_200  else None
+        vol_ratio = float(bar.vol_ratio)  if bar and bar.vol_ratio  else None
+        rs_rating = float(bar.rs_rating)  if bar and bar.rs_rating  else None
+        high_52w  = float(bar.high_52w)   if bar and bar.high_52w   else None
+        low_52w   = float(bar.low_52w)    if bar and bar.low_52w    else None
+        chg_pct   = _pct(close, open_) if close and open_ and open_ > 0 else 0.0
+        range_pct = None
+        if high_52w and low_52w and high_52w > low_52w and close:
+            range_pct = round((close - low_52w) / (high_52w - low_52w) * 100, 1)
+
+        rules = w.rule_results or {}
+        trend_keys = [k for k in rules if k.startswith("trend_")]
+        trend_passed = sum(
+            1 for k in trend_keys
+            if (rules[k].get("passed") if isinstance(rules[k], dict) else bool(rules[k]))
+        )
+        trend_total = len(trend_keys) if trend_keys else 8
+
+        vcp_contractions = None
+        if "vcp_contractions" in rules:
+            rv = rules["vcp_contractions"]
+            vcp_contractions = int(rv.get("value") or 0) if isinstance(rv, dict) and rv.get("value") else None
+
+        return {
+            "id": w.id,
+            "ticker": w.ticker,
+            "display_ticker": _disp(w.ticker),
+            "name": stock_names.get(w.ticker, _disp(w.ticker)),
+            "exchange_key": w.exchange_key or "ASX",
+            "asset_type": w.asset_type or "EQUITY",
+            "currency": w.currency or "AUD",
+            "flag": _flag(w.exchange_key or "ASX"),
+            "label_id": w.label_id,
+            "label_name": w.label.name if w.label else None,
+            "label_color": w.label.color if w.label else None,
+            "close": close,
+            "change_pct": chg_pct,
+            "ma_50": ma50,
+            "ma_150": ma150,
+            "ma_200": ma200,
+            "ma_50_pct": _pct(close, ma50),
+            "ma_150_pct": _pct(close, ma150),
+            "ma_200_pct": _pct(close, ma200),
+            "vol_ratio": vol_ratio,
+            "rs_rating": rs_rating,
+            "high_52w": high_52w,
+            "low_52w": low_52w,
+            "range_pct": range_pct,
+            "trend_score": trend_passed,
+            "trend_total": trend_total,
+            "vcp_contractions": vcp_contractions,
+            "rule_results": rules,
+            "has_pending_signal": w.ticker in pending_signal_tickers,
+            "added_by": w.added_by or "screener",
+            "added_date": w.added_date.isoformat() if w.added_date else None,
+        }
+
+    label_map: dict = {}
+    unlabelled = []
+    for w in wl_items:
+        item = _build_item(w)
+        if w.label_id:
+            label_map.setdefault(w.label_id, []).append(item)
+        else:
+            unlabelled.append(item)
+
+    groups = []
+    for lbl in labels:
+        items = label_map.get(lbl.id, [])
+        if items:
+            groups.append({
+                "label_id": lbl.id,
+                "label_name": lbl.name,
+                "label_color": lbl.color,
+                "items": items,
+            })
+    if unlabelled:
+        groups.append({
+            "label_id": None,
+            "label_name": "Unlabelled",
+            "label_color": "#5a5a78",
+            "items": unlabelled,
+        })
+
+    equity_count = sum(1 for w in wl_items if (w.asset_type or "EQUITY") != "CRYPTO")
+    crypto_count = sum(1 for w in wl_items if (w.asset_type or "EQUITY") == "CRYPTO")
+
+    regime_keys = [
+        "last_market_regime_ASX", "last_market_regime_NYSE",
+        "last_market_regime_NASDAQ", "last_market_regime_CRYPTO_INDEPENDENTRESERVE",
+    ]
+    regime_rows = db.query(SystemConfig).filter(
+        SystemConfig.organization_id == org_id,
+        SystemConfig.key.in_(regime_keys),
+    ).all()
+    regimes = {
+        row.key.replace("last_market_regime_", ""): (row.value or "UNKNOWN")
+        for row in regime_rows if row.value
+    }
+
+    account = db.query(Account).filter(Account.organization_id == org_id).first()
+    is_paper = account.is_paper if account else True
+
+    return JSONResponse({
+        "groups": groups,
+        "regimes": regimes,
+        "account_is_paper": is_paper,
+        "stats": {
+            "total": len(wl_items),
+            "equity_count": equity_count,
+            "crypto_count": crypto_count,
+        },
+    })
+
+
+@app.post("/trader/watchlist/promote/{item_id}")
+async def trader_watchlist_promote(request: Request, item_id: int, db: Session = Depends(get_db)):
+    """Promote watchlist item to signal — JSON response for in-terminal use."""
+    if not _auth(request):
+        return JSONResponse({"ok": False, "error": "unauthenticated"}, status_code=401)
+    org_id = request.session.get("organization_id")
+
+    from app.models.signal import Watchlist, WatchlistStatus
+    from app.models.audit import AuditLog, AuditAction
+
+    w = db.query(Watchlist).filter(Watchlist.id == item_id, Watchlist.organization_id == org_id).first()
+    if not w:
+        return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
+
+    ticker = w.ticker
+    w.status = WatchlistStatus.SIGNALLED
+    db.commit()
+
+    try:
+        from app.tasks.trading import promote_watchlist_item_task
+        promote_watchlist_item_task.delay(
+            item_id,
+            org_id,
+            request.session.get("email", "dashboard"),
+            request.session.get("user_id"),
+        )
+        return JSONResponse({"ok": True, "ticker": ticker, "message": f"{ticker} queued for promotion"})
+    except Exception as e:
+        from loguru import logger
+        from app.models.signal import Watchlist as _WL
+        logger.error(f"Trader watchlist: promotion queue failed for {ticker}: {e}")
+        w2 = db.query(_WL).filter(_WL.id == item_id, _WL.organization_id == org_id).first()
+        if w2:
+            w2.status = WatchlistStatus.WATCHING
+            db.add(AuditLog(
+                action=AuditAction.TASK_ERROR,
+                ticker=ticker,
+                actor=request.session.get("email", "dashboard"),
+                user_id=request.session.get("user_id"),
+                organization_id=org_id,
+                message=f"Trader WL terminal: promotion of {ticker} failed to queue — reverted. Error: {e}",
+            ))
+            db.commit()
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+
+# ===========================================================================
 # ADMIN AREA
 # ===========================================================================
 
