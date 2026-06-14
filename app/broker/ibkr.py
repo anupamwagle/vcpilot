@@ -24,6 +24,8 @@ class IBKRBroker:
     Manages the IBKR Gateway connection and order lifecycle.
     Use as a context manager or call connect()/disconnect() explicitly.
     """
+    _last_fail_times: dict[tuple[str, int], float] = {}
+    _FAIL_COOLDOWN = 60.0  # seconds cooldown
 
     def __init__(self, organization_id=None):
         self.organization_id = organization_id
@@ -68,6 +70,14 @@ class IBKRBroker:
         if settings.ibkr_simulate or not IB_AVAILABLE:
             logger.info("IBKR sandbox/simulation mode enabled (either forced or ib_insync unavailable)")
             return False
+
+        # Cooldown check to prevent connection attempt spam when gateway is down
+        now = time.time()
+        key = (self.host, self.port)
+        last_fail = IBKRBroker._last_fail_times.get(key, 0.0)
+        if now - last_fail < IBKRBroker._FAIL_COOLDOWN:
+            return False
+
         try:
             try:
                 from ib_insync import util
@@ -89,6 +99,7 @@ class IBKRBroker:
             )
             return True
         except Exception as e:
+            IBKRBroker._last_fail_times[key] = time.time()
             logger.error(f"IBKR connection failed: {e}")
             return False
 
