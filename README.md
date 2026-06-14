@@ -2,7 +2,7 @@
 
 > **Institutional-grade algorithmic trading on ASX stocks — fully automated, locally deployable.**
 
-AstraTrade is a production-grade automated trading system. It screens the ASX universe daily, detects Volatility Contraction Patterns (VCP), manages risk with precision, and executes trades via Interactive Brokers (equities) or Independent Reserve (crypto via ccxt) — all controlled remotely via WhatsApp.
+AstraTrade is a production-grade automated trading system. It screens the ASX universe daily, detects Volatility Contraction Patterns (VCP), manages risk with precision, and executes trades via Interactive Brokers (equities) or MEXC / Independent Reserve (crypto via ccxt) — all controlled remotely via WhatsApp.
 
 ---
 
@@ -162,7 +162,7 @@ AstraTrade includes a Bloomberg-style live trading terminal at `http://localhost
 | Tue–Sat 7:30am | Run daily screener (generate signals) |
 | Mon–Fri 11:00pm – Tue–Sat 6:00am | Intraday entry breakout checks & defensive exit rules (NYSE session) |
 
-### Crypto (Independent Reserve & Others — 24/7)
+### Crypto (MEXC, Independent Reserve & Others — 24/7)
 | Time | Task |
 |---|---|
 | Every 5 min (24/7) | Intraday entry breakout checks & defensive exit rules |

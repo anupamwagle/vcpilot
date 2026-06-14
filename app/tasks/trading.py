@@ -952,16 +952,19 @@ def update_position_pnl_task(self):
     """
     Refresh current_price, unrealised_pnl, and unrealised_pct for all open positions.
 
-    Runs every 5 minutes. Fetches live prices (IR API for crypto, yfinance fallback)
-    and writes updated values to the Position rows so the dashboard UI shows live P&L
-    without a page reload.
+    Runs every 5 minutes. Fetches live prices (IR/MEXC API for crypto, yfinance fallback)
+    and writes updated values to:
+      1. Position rows in DB (for the dashboard P&L display)
+      2. live_price:{ticker} Redis cache (for the trader terminal and watchlist live feed)
 
-    For crypto positions with IR: uses the free IR public API (0-delay).
+    For IR crypto: uses the free IR public API (0-delay, AUD pairs).
+    For MEXC/Binance crypto: uses the free MEXC public API (0-delay, USDT pairs).
     For equity positions: uses yfinance 15-min bars.
     """
     from app.models.account import Organization
     from app.models.trade import Position, TradeStatus
     from app.data.fetcher import get_intraday_price, get_fx_rate
+    from app.utils.cache import cache
 
     logger.debug("update_position_pnl_task: refreshing open position P&L...")
 
@@ -974,15 +977,34 @@ def update_position_pnl_task(self):
         return
 
     # Group by ticker to avoid duplicate API calls for same ticker across orgs
-    ticker_prices: dict[str, float | None] = {}
+    ticker_prices: dict[str, dict | None] = {}  # ticker → full result dict
 
     for pos in all_open:
-        ticker = pos.ticker
-        if ticker not in ticker_prices:
-            result = get_intraday_price(ticker, asset_type=getattr(pos, "asset_type", "EQUITY"))
-            ticker_prices[ticker] = result.get("price") if result.get("ok") else None
+        ticker     = pos.ticker
+        asset_type = getattr(pos, "asset_type", "EQUITY") or "EQUITY"
 
-        price = ticker_prices[ticker]
+        if ticker not in ticker_prices:
+            result = get_intraday_price(ticker, asset_type=asset_type)
+            ticker_prices[ticker] = result if result.get("ok") else None
+
+            # ── Write to Redis live_price cache (drives trader terminal + watchlist) ──
+            if result.get("ok") and result.get("price"):
+                price_val = float(result["price"])
+                live_cache_payload = {
+                    "price":      price_val,
+                    "close":      price_val,
+                    "live_price": price_val,  # presence of this key signals it's real-time
+                    "data_source": result.get("data_source", "unknown"),
+                    "delay_mins": result.get("delay_mins", 0),
+                    "_failed":    False,
+                }
+                cache.set(f"live_price:{ticker}", live_cache_payload, expire_seconds=360)  # 6 min TTL
+            else:
+                # Write a failure sentinel so the UI can show "EOD" instead of stale live data
+                cache.set(f"live_price:{ticker}", {"_failed": True}, expire_seconds=120)
+
+        price_result = ticker_prices.get(ticker)
+        price = price_result.get("price") if price_result else None
         if price is None:
             continue
 
@@ -1017,6 +1039,81 @@ def update_position_pnl_task(self):
             logger.debug(f"update_position_pnl_task error for {pos.ticker}: {e}")
 
     logger.debug(f"update_position_pnl_task: updated {len(all_open)} positions")
+
+
+@app.task(name="app.tasks.trading.refresh_live_prices_cache_task", bind=True)
+def refresh_live_prices_cache_task(self):
+    """
+    Refresh the live_price:{ticker} Redis cache for ALL active crypto tickers:
+    watchlist items + pending signals (not just open positions).
+
+    Runs every 5 minutes alongside update_position_pnl_task. Together these two
+    tasks ensure the trader terminal and watchlist page show live prices without
+    page reloads — even before a position is open.
+
+    Routes:
+      -AUD tickers → Independent Reserve free API (0-delay)
+      -USD/-USDT tickers → MEXC free public API (0-delay, broadest coverage)
+      equity tickers → skipped here (covered by EOD PriceBar from daily screener)
+    """
+    from app.models.signal import Watchlist, WatchlistStatus, Signal, SignalStatus
+    from app.data.fetcher import get_intraday_price
+    from app.utils.cache import cache
+
+    logger.debug("refresh_live_prices_cache_task: seeding live price cache for watchlist+signals...")
+
+    crypto_tickers: set[str] = set()
+
+    with get_db() as db:
+        # Watchlist crypto items
+        wl_rows = db.query(Watchlist.ticker, Watchlist.asset_type).filter(
+            Watchlist.status == WatchlistStatus.WATCHING,
+        ).all()
+        for row in wl_rows:
+            ticker_val, at_val = row[0], (row[1] or "EQUITY")
+            # Fallback: infer CRYPTO from ticker format when asset_type was not stored
+            # correctly (e.g. NULL from the exchange-filter bug fixed in Jun 2026).
+            if at_val != "CRYPTO" and (
+                ticker_val.endswith("-AUD") or ticker_val.endswith("-USD") or ticker_val.endswith("-USDT")
+            ):
+                at_val = "CRYPTO"
+            if at_val == "CRYPTO":
+                crypto_tickers.add(ticker_val)
+
+        # Pending signal crypto items
+        sig_rows = db.query(Signal.ticker, Signal.asset_type).filter(
+            Signal.status.in_([SignalStatus.PENDING, SignalStatus.TRIGGERED]),
+        ).all()
+        for row in sig_rows:
+            ticker_val, at_val = row[0], (row[1] or "EQUITY")
+            if at_val != "CRYPTO" and (
+                ticker_val.endswith("-AUD") or ticker_val.endswith("-USD") or ticker_val.endswith("-USDT")
+            ):
+                at_val = "CRYPTO"
+            if at_val == "CRYPTO":
+                crypto_tickers.add(ticker_val)
+
+    updated = 0
+    for ticker in crypto_tickers:
+        try:
+            result = get_intraday_price(ticker, asset_type="CRYPTO")
+            if result.get("ok") and result.get("price"):
+                price_val = float(result["price"])
+                cache.set(f"live_price:{ticker}", {
+                    "price":      price_val,
+                    "close":      price_val,
+                    "live_price": price_val,
+                    "data_source": result.get("data_source", "unknown"),
+                    "delay_mins": result.get("delay_mins", 0),
+                    "_failed":    False,
+                }, expire_seconds=360)
+                updated += 1
+            else:
+                cache.set(f"live_price:{ticker}", {"_failed": True}, expire_seconds=120)
+        except Exception as e:
+            logger.debug(f"refresh_live_prices_cache_task: error for {ticker}: {e}")
+
+    logger.debug(f"refresh_live_prices_cache_task: refreshed {updated}/{len(crypto_tickers)} crypto tickers")
 
 
 @app.task(name="app.tasks.trading.promote_watchlist_item_task", bind=True)

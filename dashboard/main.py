@@ -1720,6 +1720,34 @@ async def watchlist(
         if not cache.get(_ck):
             cache.set(_ck, _bd, expire_seconds=300)
 
+    # ── Batch live-price warm-up for crypto tickers with cold cache ─────────────────────
+    # Runs in parallel (ThreadPoolExecutor) so page-load latency is ~200ms, not 2–3s.
+    # After first load the cache stays warm for 6 min; background task then takes over.
+    _crypto_miss: list[str] = [
+        w.ticker for w in items
+        if (
+            (getattr(w, "asset_type", None) == "CRYPTO")
+            or w.ticker.endswith(("-AUD", "-USD", "-USDT"))
+        )
+        and not cache.get(f"live_price:{w.ticker}")
+    ]
+    if _crypto_miss:
+        from concurrent.futures import ThreadPoolExecutor
+        from app.data.fetcher import get_intraday_price as _gip_warm
+        def _warm_one(t: str) -> None:
+            try:
+                r = _gip_warm(t, asset_type="CRYPTO")
+                if r.get("ok") and r.get("price"):
+                    pv = float(r["price"])
+                    cache.set(f"live_price:{t}", {
+                        "price": pv, "close": pv, "live_price": pv,
+                        "data_source": r.get("data_source", ""), "_failed": False,
+                    }, expire_seconds=360)
+            except Exception:
+                pass
+        with ThreadPoolExecutor(max_workers=min(8, len(_crypto_miss))) as _wex:
+            list(_wex.map(_warm_one, _crypto_miss))
+
     watchlist_data = []
     for w in items:
         company_name = stock_names.get(w.ticker, "")
@@ -1737,7 +1765,11 @@ async def watchlist(
         # IMPORTANT: reset bar_data each iteration — without this, a crypto item's
         # IR data bleeds into the next equity item in the loop.
         bar_data = None
-        is_crypto_item = (getattr(w, "asset_type", "EQUITY") == "CRYPTO")
+        # Infer CRYPTO from ticker format as well — covers rows where asset_type is NULL
+        is_crypto_item = (
+            (getattr(w, "asset_type", None) == "CRYPTO")
+            or w.ticker.endswith(("-AUD", "-USD", "-USDT"))
+        )
         live_price_used = False
 
         if is_crypto_item:
@@ -1747,7 +1779,8 @@ async def watchlist(
                 # Cache hit — could be real data or a failure sentinel
                 bar_data = None if cached.get("_failed") else cached
             else:
-                # Cache miss — no live fetch on load from API, let workers handle it
+                # Cache miss — batch pre-fetch above should have populated it;
+                # fall back to EOD via PriceBar below
                 bar_data = None
 
             if bar_data and bar_data.get("live_price"):
@@ -3003,8 +3036,33 @@ def _trader_prices_inner(request: Request, db):
                     }
                     continue
         else:
-            # Cache miss — no live fetch on load from API, let workers handle it
-            pass
+            # Cache miss — for crypto: inline live fetch (IR/MEXC are 0-delay, ~150ms each).
+            # Populates the cache so the next 10s poll is instant. Rarely fires in steady-
+            # state because refresh_live_prices_cache_task keeps cache warm every 5 min.
+            if asset_type == "CRYPTO":
+                try:
+                    from app.data.fetcher import get_intraday_price as _gip
+                    live = _gip(ticker, asset_type="CRYPTO")
+                    if live.get("ok") and live.get("price"):
+                        pv = float(live["price"])
+                        cache.set(live_cache_key, {
+                            "price": pv, "close": pv, "live_price": pv,
+                            "data_source": live.get("data_source", "unknown"),
+                            "delay_mins": live.get("delay_mins", 0), "_failed": False,
+                        }, expire_seconds=360)
+                        eod_bar = eod_map.get(ticker)
+                        eod_open = (
+                            float(eod_bar.open) if eod_bar and eod_bar.open and float(eod_bar.open) > 0
+                            else pv
+                        )
+                        result[ticker] = {
+                            "display": _disp(ticker), "price": pv,
+                            "change_pct": round((pv - eod_open) / eod_open * 100, 2) if eod_open > 0 else 0.0,
+                            "currency": currency, "live": True,
+                        }
+                        continue
+                except Exception:
+                    pass
 
         # ── EOD fallback (PriceBar last close) ──────────────────────────────────────────
         eod_bar = eod_map.get(ticker)
@@ -3235,7 +3293,11 @@ def _trader_watchlist_data_inner(request: Request, db):
         # ── For crypto: overlay live price from cache (shared 5-min cache key) ──
         # This ensures item.close already reflects the live price on initial page load,
         # before the frontend's /trader/prices poll response arrives.
-        is_crypto_wl = (getattr(w, "asset_type", "EQUITY") == "CRYPTO")
+        # Infer CRYPTO from ticker format as well — covers NULL asset_type rows
+        is_crypto_wl = (
+            (getattr(w, "asset_type", None) == "CRYPTO")
+            or w.ticker.endswith(("-AUD", "-USD", "-USDT"))
+        )
         if is_crypto_wl:
             live_cache_key = f"live_price:{w.ticker}"
             live_cached = cache.get(live_cache_key)
@@ -3246,8 +3308,19 @@ def _trader_watchlist_data_inner(request: Request, db):
                     if live_cached.get("change_pct") is not None:
                         open_ = None  # chg_pct computed from cache below
             else:
-                # Cache miss for crypto — no live fetch on load from API, let workers handle it
-                pass
+                # Cache miss — inline live fetch (IR/MEXC are 0-delay, ~150ms)
+                try:
+                    from app.data.fetcher import get_intraday_price as _gip
+                    live = _gip(w.ticker, asset_type="CRYPTO")
+                    if live.get("ok") and live.get("price"):
+                        live_close = float(live["price"])
+                        cache.set(live_cache_key, {
+                            "price": live_close, "close": live_close, "live_price": live_close,
+                            "data_source": live.get("data_source", ""), "_failed": False,
+                        }, expire_seconds=360)
+                        close = live_close
+                except Exception:
+                    pass
 
         chg_pct   = _pct(close, open_) if close and open_ and open_ > 0 else 0.0
         range_pct = None
@@ -3894,10 +3967,17 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
                                   "hint_extra": "Weekly capital added to the account for position sizing calculations"},
         # Crypto
         "crypto_exchange_key":   {"control": "crypto_exchange_select",
-                                  "hint_extra": "Active crypto exchange. Must also set API key/secret below."},
-        "crypto_api_key":        {"control": "password", "hint_extra": "Exchange API key"},
-        "crypto_api_secret":     {"control": "password", "hint_extra": "Exchange API secret"},
-        "crypto_testnet":        {},   # boolean
+                                  "hint_extra": "Active crypto exchange. Must also set API key/secret below. "
+                                                "Note: MEXC does not support a testnet — paper trading uses simulation mode."},
+        "crypto_api_key":        {"control": "password",
+                                  "hint_extra": "Exchange API key. For MEXC: create an API key at mexc.com → Account → API Management. "
+                                                "Enable 'Trade' permission; restrict to your IP for safety.",
+                                  "link_url":  "https://www.mexc.com/user/openapi",
+                                  "link_text": "MEXC API Management →"},
+        "crypto_api_secret":     {"control": "password",
+                                  "hint_extra": "Exchange API secret. Keep this private — never share it."},
+        "crypto_testnet":        {"hint_extra": "Enable sandbox/testnet mode. "
+                                               "Note: MEXC does not have a testnet — enabling this for MEXC forces simulation mode (no real orders)."},
     }
 
     # ── Enabled exchanges (for multiselect chip UI) ───────────────────────────
@@ -3967,6 +4047,36 @@ async def update_config(request: Request, config_id: int, value: str = Form(...)
         old_val = c.value
         c.value = value
         c.updated_by = request.session.get("email", "dashboard")
+
+        # ── Auto-seed crypto watchlist labels when active_exchanges gains a CRYPTO_ key ──
+        if c.key == "active_exchanges" and c.organization_id:
+            old_keys = set((old_val or "").replace(" ", "").upper().split(","))
+            new_keys = set(value.replace(" ", "").upper().split(","))
+            newly_added_crypto = [k for k in new_keys - old_keys if k.startswith("CRYPTO_")]
+            if newly_added_crypto:
+                try:
+                    from app.models.signal import WatchlistLabel
+                    _crypto_seed_labels = [
+                        ("Crypto Core",  "#06b6d4", False, 10),
+                        ("DeFi",         "#10b981", False, 11),
+                        ("Altcoins",     "#8b5cf6", False, 12),
+                        ("Crypto Watch", "#f97316", False, 13),
+                    ]
+                    for lname, lcolor, lis_default, lorder in _crypto_seed_labels:
+                        exists = db.query(WatchlistLabel).filter(
+                            WatchlistLabel.organization_id == c.organization_id,
+                            WatchlistLabel.name == lname,
+                        ).first()
+                        if not exists:
+                            db.add(WatchlistLabel(
+                                organization_id=c.organization_id,
+                                name=lname, color=lcolor,
+                                is_default=lis_default, sort_order=lorder,
+                            ))
+                    db.flush()
+                    logger.info(f"Seeded crypto watchlist labels for org {c.organization_id} (added: {newly_added_crypto})")
+                except Exception as _lbl_err:
+                    logger.warning(f"Could not seed crypto labels: {_lbl_err}")
 
         # Synchronize working capital configuration with active Account capital
         # NOTE: only working_capital_aud drives account.capital_aud.

@@ -598,9 +598,28 @@ The WAHA webhook routes incoming messages to `http://api:8501/webhook/whatsapp`.
 
 ---
 
-## Session Handoff — Where We Are (14 Jun 2026)
+## Session Handoff — Where We Are (15 Jun 2026)
 
 **Current operational state (pick up here in next session):**
+
+- **Independent Reserve (IR) Live Price Pipeline — Full Fix (15 Jun 2026):**
+  - **`refresh_live_prices_cache_task` NULL asset_type fix** (`app/tasks/trading.py`): tickers with `asset_type=NULL` or `asset_type="EQUITY"` but `-AUD`/`-USD`/`-USDT` format are now correctly inferred as CRYPTO and included in the 5-min cache refresh. Previously these were silently skipped.
+  - **Inline live fetch on cache miss** (`dashboard/main.py`): `/trader/prices` (10s poll) and `/trader/watchlist/data` (30s poll) now call `get_intraday_price(ticker, asset_type="CRYPTO")` inline on cache miss instead of silently falling to EOD. The `/watchlist` HTML route pre-fetches all cold-cache crypto tickers in parallel via `ThreadPoolExecutor(max_workers=8)` before rendering.
+  - **`is_crypto_item` / `is_crypto_wl` inference**: all three route handlers now detect CRYPTO from ticker format (`endswith("-AUD"/-USD/-USDT)`) in addition to explicit `asset_type` check — covers NULL rows from the Jun 2026 DB bug.
+  - **TradingView chart fix** (`dashboard/templates/trading/trader_watchlist.html`): `BINANCE:BTCAUD` (non-existent) → `BINANCE:BTCUSDT`. Stablecoins → `KRAKEN:USDTUSD`. Matches the working logic in `trader.html`.
+  - **`_get_ir_live_price` fallback** (`app/data/fetcher.py`): coins not in `IR_SYMBOL_MAP` now try `base.lower()` as the IR primary currency code instead of immediately returning None. API returns 400 for unknown coins which is already handled gracefully.
+  - **28 regression tests** in `tests/test_ir_integration.py` — all pass. 78 total across MEXC + IR + prior suites, 0 failures.
+
+- **MEXC Exchange Integration & 5-Min Price Refresh Fix (15 Jun 2026):**
+  - `_get_mexc_live_price(ticker)` in `app/data/fetcher.py` — MEXC public REST API, no auth, 0-delay, converts `BTC-USD` → `BTCUSDT`.
+  - `get_intraday_price()` routes `-USD` crypto through MEXC (priority 2, after IR, before yfinance).
+  - `CryptoBroker` (`app/broker/crypto.py`) — MEXC ccxt options + testnet→simulation guard.
+  - `refresh_live_prices_cache_task` (new Celery task, every 5 min, `trading_crypto` queue) — seeds `live_price:{ticker}` Redis cache for ALL crypto watchlist + signal tickers. This fixes the 5-min UI refresh bug.
+  - `update_position_pnl_task` — now also writes `live_price:{ticker}` to Redis after each fetch.
+  - Admin config: MEXC option in `crypto_exchange_key` select; label auto-seeding on `active_exchanges` update.
+  - `EXCHANGE_BENCHMARKS["CRYPTO_MEXC"]`, `CRYPTO_USD_EXCHANGES`, `CRYPTO_AUD_EXCHANGES` sets added.
+  - 42 tests in `tests/test_mexc_integration.py` — all pass.
+  - **To enable MEXC for an org:** Super Admin enables MEXC exchange → Org Admin adds `CRYPTO_MEXC` to `active_exchanges` in `/admin/config` → adds `crypto_api_key` + `crypto_api_secret` → set `crypto_testnet=false` for live trading (testnet forces simulation on MEXC).
 
 - **Trader Watchlist Terminal (14 Jun 2026):**
   - New `/trader/watchlist` dedicated fullscreen screen for monitoring the watchlist. Bloomberg dark terminal style identical to `/trader`.
@@ -641,9 +660,11 @@ The WAHA webhook routes incoming messages to `http://api:8501/webhook/whatsapp`.
 | Crypto rules | 11 ON (6 original + 5 enhanced: RSI/MACD/vol/RR/BTC-RS) |
 | Equity rules | 45 ON |
 | IR universe | ⚠️ Needs re-seed via Central Ops (code now uses IR live API ~40 AUD pairs) |
-| IR live prices | Confirmed: BTC $89,847 \| ETH $2,393 \| SOL $94 \| XRP $1.63 |
+| IR live prices | ✅ Fixed & confirmed working — all 3 UI price endpoints now fetch live on cache miss |
+| IR charts | ✅ Fixed — TradingView uses `BINANCE:BTCUSDT` (not `BINANCE:BTCAUD`) |
 | Market regime | CAUTION (BTC -21% vs 200MA) — no signals, correct |
 | Celery beat | 5-min entry/exit/stop/P&L crypto; 4× daily screener |
+| Test coverage | 78 tests passing (28 IR + 42 MEXC + 8 prior) |
 
 ### Step 2 Pre-flight Checklist
 
@@ -659,7 +680,10 @@ Before the next session can begin trading, complete ALL of:
 
 ### Next Session Prompt
 
-> "AstraTrade — continuing from 14 Jun 2026. AW org (id=10). Trader Terminal is live at /trader.  
+> "AstraTrade — continuing from 15 Jun 2026. AW org (id=10). Trader Terminal + Watchlist Terminal live.  
+> IR crypto price pipeline fully fixed (all 3 UI endpoints, TradingView charts, cache-miss inline fetch).  
+> MEXC exchange integrated (public API for live prices, CryptoBroker via ccxt).  
+> 78 regression tests passing (28 IR + 42 MEXC + 8 prior).  
 > Run `get_portfolio_stats()` and `get_market_regime('CRYPTO_INDEPENDENTRESERVE')`  
 > then let's review any pending signals and decide on entries."
 

@@ -103,15 +103,38 @@ class CryptoBroker:
                 logger.error(f"CryptoBroker: unknown ccxt provider '{self.ccxt_provider}'")
                 return False
 
-            self._exchange = exchange_class({
-                "apiKey":    self.api_key,
-                "secret":    self.api_secret,
+            # Base config — extended per-provider below
+            exchange_config: dict = {
+                "apiKey":          self.api_key,
+                "secret":          self.api_secret,
                 "enableRateLimit": True,
-                "options":   {"defaultType": "spot"},
-            })
+                "options":         {"defaultType": "spot"},
+            }
 
-            if self.testnet:
-                # Enable sandbox/testnet if supported
+            # ── MEXC-specific options ──────────────────────────────────────────
+            # MEXC v3 REST requires recvWindow and uses USDT as the quote currency.
+            # MEXC does not support a sandbox/testnet via ccxt — use simulation mode
+            # instead (no credentials) for paper trading on MEXC.
+            if self.ccxt_provider == "mexc":
+                exchange_config["options"].update({
+                    "recvWindow": 60000,       # MEXC default is tight; extend to 60s
+                    "adjustForTimeDifference": True,
+                })
+                # MEXC does not have a ccxt sandbox — force simulation if testnet requested
+                if self.testnet:
+                    logger.info("CryptoBroker: MEXC has no ccxt testnet — using simulation mode")
+                    return False
+
+            # ── Binance-specific options ───────────────────────────────────────
+            elif self.ccxt_provider == "binance":
+                exchange_config["options"].update({
+                    "adjustForTimeDifference": True,
+                })
+
+            self._exchange = exchange_class(exchange_config)
+
+            if self.testnet and self.ccxt_provider != "mexc":
+                # Enable sandbox/testnet if supported (not MEXC)
                 if hasattr(self._exchange, "set_sandbox_mode"):
                     self._exchange.set_sandbox_mode(True)
                     logger.info(f"CryptoBroker: {self.ccxt_provider} testnet enabled")
@@ -332,14 +355,22 @@ class CryptoBroker:
 
 def _yfinance_to_ccxt(yf_ticker: str, ccxt_provider: str = "") -> str:
     """
-    Convert yfinance ticker format to ccxt symbol format.
+    Convert yfinance ticker format to ccxt unified symbol format.
 
-    Independent Reserve uses:
+    Independent Reserve (AUD pairs):
         "BTC-AUD" → "XBT/AUD"   (IR uses XBT, not BTC)
         "ETH-AUD" → "ETH/AUD"
-    Binance / Kraken / Coinbase:
+
+    MEXC (USDT pairs):
+        "BTC-USD"  → "BTC/USDT"
+        "ETH-USD"  → "ETH/USDT"
+
+    Binance / Kraken / Coinbase (USDT pairs):
         "BTC-USD" → "BTC/USDT"
         "ETH-USD" → "ETH/USDT"
+
+    Note: ccxt always uses the "/" separator and the canonical symbol (e.g. "BTC/USDT").
+    MEXC internally uses concatenated symbols (BTCUSDT) but ccxt abstracts this away.
     """
     # Independent Reserve uses AUD pairs, and calls Bitcoin "XBT" (not "BTC")
     # See: https://www.independentreserve.com/API
@@ -353,6 +384,7 @@ def _yfinance_to_ccxt(yf_ticker: str, ccxt_provider: str = "") -> str:
             base = _IR_SYMBOL_MAP.get(base, base)
         return f"{base}/AUD"
     if "-USD" in yf_ticker or "-USDT" in yf_ticker:
+        # All USD-based crypto exchanges (Binance, MEXC, Coinbase, Kraken) use USDT quote
         base = yf_ticker.replace("-USD", "").replace("-USDT", "").upper()
         return f"{base}/USDT"
     return yf_ticker
@@ -379,12 +411,36 @@ def _simulate_crypto_order(
     }
 
 
-def get_crypto_broker_for_org(organization_id: int) -> "CryptoBroker":
+def get_crypto_broker_for_org(organization_id: int, exchange_key: str = None) -> "CryptoBroker":
     """
     Factory: create a CryptoBroker instance for an organisation,
     loading credentials from SystemConfig.
+
+    Args:
+      organization_id: org scope — credentials and exchange_key are loaded from SystemConfig
+      exchange_key:    optional override (e.g. "CRYPTO_MEXC"). If None, reads
+                       `crypto_exchange_key` from SystemConfig (set by org admin in /admin/config).
+
+    Supported exchanges (via ccxt):
+      CRYPTO_INDEPENDENTRESERVE → ccxt_provider = "independentreserve"
+      CRYPTO_MEXC               → ccxt_provider = "mexc"
+      CRYPTO_BINANCE            → ccxt_provider = "binance"
+      CRYPTO_COINBASE           → ccxt_provider = "coinbase"
+      CRYPTO_KRAKEN             → ccxt_provider = "kraken"
     """
+    # Derive initial provider hint from exchange_key if provided
+    initial_provider = "independentreserve"  # safe default; overridden by _load_org_credentials
+    if exchange_key:
+        _ek_map = {
+            "CRYPTO_MEXC":               "mexc",
+            "CRYPTO_BINANCE":            "binance",
+            "CRYPTO_COINBASE":           "coinbase",
+            "CRYPTO_KRAKEN":             "kraken",
+            "CRYPTO_INDEPENDENTRESERVE": "independentreserve",
+        }
+        initial_provider = _ek_map.get(exchange_key.upper(), "independentreserve")
+
     return CryptoBroker(
-        ccxt_provider="independentreserve",  # will be overridden by _load_org_credentials
+        ccxt_provider=initial_provider,
         organization_id=organization_id,
     )

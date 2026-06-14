@@ -253,7 +253,15 @@ app.conf.update(
         "update-position-pnl": {
             "task": "app.tasks.trading.update_position_pnl_task",
             "schedule": crontab(minute="*/5"),
-            "options": {"queue": "trading_equities"},
+            "options": {"queue": "trading_crypto"},
+        },
+        # Live price cache refresh — every 5 min for watchlist + signal crypto tickers
+        # Drives the 5-min auto-refresh in the trader terminal and watchlist page.
+        # Routes -AUD tickers → IR API, -USD tickers → MEXC public API (0-delay).
+        "refresh-live-prices-cache": {
+            "task": "app.tasks.trading.refresh_live_prices_cache_task",
+            "schedule": crontab(minute="*/5"),
+            "options": {"queue": "trading_crypto"},
         },
         # Crypto data refresh — every 6 hours, 24/7 (price bars stay fresh)
         "refresh-price-data-crypto": {

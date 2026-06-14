@@ -41,10 +41,14 @@ EXCHANGE_BENCHMARKS: dict[str, str] = {
     "CRYPTO_COINBASE":           "BTC-USD",
     "CRYPTO_KRAKEN":             "BTC-USD",
     "CRYPTO_INDEPENDENTRESERVE": "BTC-AUD",   # IR trades in AUD; use BTC-AUD as regime proxy
+    "CRYPTO_MEXC":               "BTC-USD",   # MEXC trades in USDT; BTC-USD is the regime proxy
 }
 
 # Exchanges that settle/price in AUD (not USD/USDT)
 CRYPTO_AUD_EXCHANGES = {"CRYPTO_INDEPENDENTRESERVE"}
+
+# Exchanges that settle in USDT/USD (ccxt native USDT pairs)
+CRYPTO_USD_EXCHANGES = {"CRYPTO_MEXC", "CRYPTO_BINANCE", "CRYPTO_COINBASE", "CRYPTO_KRAKEN"}
 
 
 def normalize_ticker(user_input: str, exchange_key: str) -> dict:
@@ -376,10 +380,12 @@ def get_top_crypto_tickers(exchange_key: str = "CRYPTO_INDEPENDENTRESERVE") -> l
     """
     Return crypto tickers in yfinance format for the given exchange.
     - CRYPTO_INDEPENDENTRESERVE → fetches live list from IR API (~40 AUD pairs)
+    - CRYPTO_MEXC               → top-~300 USD list (MEXC covers most of these)
     - Other exchanges (Binance, Coinbase, Kraken) → top-~300 generic USD list
     """
     if exchange_key in CRYPTO_AUD_EXCHANGES:
         return get_ir_supported_tickers()
+    # All other exchanges (Binance, Coinbase, Kraken, MEXC) use USD/USDT pairs
     return [f"{sym}-USD" for sym in TOP_CRYPTO_SYMBOLS]
 
 
@@ -894,7 +900,11 @@ def _get_ir_live_price(ticker: str) -> dict | None:
     base = ticker.replace("-AUD", "").upper()
     ir_code = IR_SYMBOL_MAP.get(base)
     if not ir_code:
-        return None  # coin not listed on IR
+        # Not in our static map — try using the base directly (lowercase) as the IR code.
+        # IR uses lowercase primary currency codes (e.g. "xbt", "eth"). For newer coins
+        # added to IR after the last map update, the base itself is the code (e.g. "sol" → "SOL").
+        # If the coin truly isn't on IR the API returns 400, caught below, and returns None.
+        ir_code = base.lower()
 
     import time as _time
     url = (
@@ -943,20 +953,98 @@ def _get_ir_live_price(ticker: str) -> dict | None:
     return None
 
 
+def _get_mexc_live_price(ticker: str) -> dict | None:
+    """
+    Fetch live price from MEXC public REST API (no auth, 0-delay, USDT pairs).
+
+    MEXC API doc: https://mexcdevelop.github.io/apidocs/spot_v3_en/
+    Endpoint: GET https://api.mexc.com/api/v3/ticker/24hr?symbol=BTCUSDT
+
+    Converts yfinance ticker format to MEXC symbol:
+        "BTC-USD"  → "BTCUSDT"
+        "ETH-USD"  → "ETHUSDT"
+
+    Returns None if the ticker is not tradeable on MEXC or if the API is unreachable.
+    """
+    # Only handles USD/USDT pairs for MEXC
+    if not (ticker.endswith("-USD") or ticker.endswith("-USDT")):
+        return None
+
+    import requests as _req
+    from datetime import datetime as _dt
+
+    # Convert "BTC-USD" → "BTCUSDT"
+    base = ticker.replace("-USDT", "").replace("-USD", "").upper()
+    mexc_symbol = f"{base}USDT"
+
+    url = f"https://api.mexc.com/api/v3/ticker/24hr?symbol={mexc_symbol}"
+    headers = {"User-Agent": "AstraTrade/1.0 (+https://github.com/anupamwagle/vcpilot)"}
+
+    import time as _time
+    last_exc = None
+    for attempt in range(1, 3):  # up to 2 attempts (MEXC is reliable)
+        try:
+            resp = _req.get(url, timeout=6, headers=headers)
+            if resp.status_code == 400:
+                # Symbol not found on MEXC — do not retry
+                logger.debug(f"MEXC: symbol {mexc_symbol} not found (400)")
+                return None
+            if resp.status_code != 200:
+                logger.warning(f"MEXC API attempt {attempt}: {resp.status_code} for {ticker}: {resp.text[:120]}")
+                if attempt < 2:
+                    _time.sleep(1.0)
+                    continue
+                return None
+            data = resp.json()
+            last_price = data.get("lastPrice")
+            if not last_price:
+                logger.warning(f"MEXC: missing lastPrice for {ticker}: {data}")
+                return None
+            price  = float(last_price)
+            volume = float(data.get("volume") or 0)     # base asset volume
+            bid    = float(data.get("bidPrice") or price)
+            ask    = float(data.get("askPrice") or price)
+            return {
+                "price":        price,
+                "volume":       int(volume),
+                "bid":          bid,
+                "ask":          ask,
+                "data_source":  "mexc",
+                "delay_mins":   0,
+                "bar_timestamp": _dt.utcnow(),
+                "ok":           True,
+            }
+        except Exception as e:
+            last_exc = e
+            logger.warning(f"MEXC live price attempt {attempt} failed for {ticker}: {type(e).__name__}: {e}")
+            if attempt < 2:
+                _time.sleep(1.0)
+
+    logger.error(f"MEXC live price gave up after 2 attempts for {ticker}: {last_exc}")
+    return None
+
+
 def get_intraday_price(
     ticker: str,
     organization_id: int = None,
     asset_type: str = "EQUITY",
+    exchange_key: str = None,
 ) -> dict:
     """
     Fetch the most recent intraday price for a ticker.
 
     Priority:
       1. Independent Reserve public API (crypto -AUD pairs, 0-delay, no auth)
-         Only attempted if asset_type is 'CRYPTO'.
-      2. IBKR real-time snapshot if connected (equities, 0-delay)
-      3. yfinance 15-min interval data (~15-20 min delayed)
-      4. EOD fallback (returns ok=False — caller should use last close)
+      2. MEXC public API (crypto -USD/-USDT pairs, 0-delay, no auth)
+      3. IBKR real-time snapshot if connected (equities, 0-delay)
+      4. yfinance 15-min interval data (~15-20 min delayed)
+      5. EOD fallback (returns ok=False — caller should use last close)
+
+    Args:
+      ticker:          yfinance format ticker, e.g. "BTC-AUD", "BTC-USD", "BHP.AX"
+      organization_id: org context for IBKR broker lookup
+      asset_type:      "CRYPTO" or "EQUITY" — guards exchange-specific routing
+      exchange_key:    optional explicit exchange key (e.g. "CRYPTO_MEXC") for routing
 
     Returns:
       {"price": float, "volume": int, "bid": float|None, "ask": float|None,
@@ -970,6 +1058,16 @@ def get_intraday_price(
         ir_result = _get_ir_live_price(ticker)
         if ir_result:
             return ir_result
+
+    # 2. MEXC public API for USD/USDT crypto pairs (free, 0-delay)
+    # Route here if explicitly MEXC exchange OR if it's a generic -USD crypto ticker
+    # and there is no better source (e.g. Binance, Kraken also use USD pairs but
+    # MEXC has broader coverage). We use MEXC as the fallback live feed for all
+    # non-IR crypto USD pairs because it's free, fast, and covers ~1,500+ pairs.
+    if asset_type == "CRYPTO" and (ticker.endswith("-USD") or ticker.endswith("-USDT")):
+        mexc_result = _get_mexc_live_price(ticker)
+        if mexc_result:
+            return mexc_result
 
     # 2. Try IBKR real-time if available and connected (equities only — crypto uses IR/ccxt)
     if organization_id is not None and asset_type != "CRYPTO":

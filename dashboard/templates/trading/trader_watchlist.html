@@ -1127,8 +1127,13 @@ function wlApp() {
         tvSymbol = 'ASX:' + ticker.replace('.AX', '');
       } else if (ticker.endsWith('-AUD') || ticker.endsWith('-USD') || ticker.endsWith('-USDT')) {
         const base = ticker.split('-')[0].toUpperCase();
-        tvSymbol = 'COINBASE:' + base + 'USD';  // best crypto source on TradingView
-        if (ticker.endsWith('-AUD')) tvSymbol = 'BINANCE:' + base + 'AUD';
+        // Stablecoins → KRAKEN; everything else → BINANCE USDT pair
+        // Note: Binance has no AUD pairs, so IR -AUD tickers map to BINANCE:BTCUSDT etc.
+        if (base === 'USDT' || base === 'USDC') {
+          tvSymbol = 'KRAKEN:' + base + 'USD';
+        } else {
+          tvSymbol = 'BINANCE:' + base + 'USDT';
+        }
       }
       // US stocks: just the ticker (TradingView auto-resolves NASDAQ/NYSE)
 
