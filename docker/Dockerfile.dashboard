@@ -25,4 +25,5 @@ EXPOSE 8501
 
 CMD ["uvicorn", "dashboard.main:app", \
      "--host", "0.0.0.0", "--port", "8501", \
+     "--loop", "asyncio", \
      "--proxy-headers", "--forwarded-allow-ips", "*"]

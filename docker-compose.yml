@@ -187,9 +187,9 @@ services:
       - vcpilot-net
     command: >
       sh -c "if [ \"$$APP_ENV\" = \"production\" ]; then
-               uvicorn dashboard.main:app --host 0.0.0.0 --port 8501 --proxy-headers --forwarded-allow-ips='*';
+               uvicorn dashboard.main:app --host 0.0.0.0 --port 8501 --loop asyncio --proxy-headers --forwarded-allow-ips='*';
              else
-               uvicorn dashboard.main:app --host 0.0.0.0 --port 8501 --reload --reload-dir /app/dashboard --proxy-headers --forwarded-allow-ips='*';
+               uvicorn dashboard.main:app --host 0.0.0.0 --port 8501 --loop asyncio --reload --reload-dir /app/dashboard --proxy-headers --forwarded-allow-ips='*';
              fi"
 
   # ---------------------------------------------------------------------------
