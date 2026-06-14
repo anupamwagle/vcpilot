@@ -2778,6 +2778,13 @@ async def _trader_data_inner(request: Request, db):
             "last_check_at": chk.checked_at.isoformat() if chk else None,
             "breakout_confirmed": bool(chk.breakout_confirmed) if chk else False,
             "vs_pivot_pct": float(chk.price_vs_pivot) if chk and chk.price_vs_pivot else None,
+            "vol_ratio": float(chk.vol_ratio) if chk and chk.vol_ratio else None,
+            "rs_rating": float(chk.rs_rating) if chk and chk.rs_rating else None,
+            "ma_50": float(chk.ma_50) if chk and chk.ma_50 else None,
+            "ma_200": float(chk.ma_200) if chk and chk.ma_200 else None,
+            "data_source": chk.data_source if chk else None,
+            "data_delay_mins": chk.data_delay_mins if chk else None,
+            "rule_results": chk.rule_results if chk else {},
         })
 
     # ── Build positions payload ──
@@ -2796,7 +2803,7 @@ async def _trader_data_inner(request: Request, db):
             "flag": _flag(p.exchange_key or "ASX"),
             "entry_price": float(p.entry_price) if p.entry_price else None,
             "current_price": float(p.current_price) if p.current_price else None,
-            "quantity": float(p.qty) if p.qty else 0,
+            "qty": float(p.qty) if p.qty else 0,
             "unrealised_pnl": pnl,
             "unrealised_pct": float(p.unrealised_pct) if p.unrealised_pct else 0.0,
             "stop": float(p.current_stop) if p.current_stop else None,
@@ -3010,7 +3017,7 @@ async def trader_exit_checks(request: Request, db: Session = Depends(get_db)):
         results = []
         for p in positions:
             entry = float(p.entry_price or 0)
-            stop  = float(p.stop_price  or 0)
+            stop  = float(p.current_stop or 0)
 
             # Latest exit-check AuditLog row for this ticker/position
             log_entries = db.query(AuditLog).filter(

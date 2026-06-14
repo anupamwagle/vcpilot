@@ -595,10 +595,10 @@
   </div>
 
   <!-- ════════════════════════════════════════════════════════
-       RIGHT — Exit monitor panel
+       RIGHT — Contextual monitor panel
   ═══════════════════════════════════════════════════════════ -->
   <div class="tv-right">
-    <!-- Portfolio stats row -->
+    <!-- Portfolio stats (always visible) -->
     <div class="panel-header">Portfolio</div>
     <div class="stat-grid">
       <span class="stat-label">Capital</span>
@@ -611,7 +611,7 @@
       <span class="stat-val" x-text="signals.length + ' pending'"></span>
     </div>
 
-    <!-- Regimes -->
+    <!-- Regimes (always visible) -->
     <div class="panel-header">Market Regime</div>
     <div style="padding:6px 10px;border-bottom:1px solid var(--border);flex-shrink:0">
       <template x-for="[exch, regime] in Object.entries(regimes)" :key="exch">
@@ -625,56 +625,178 @@
       <div class="empty-msg" x-show="Object.keys(regimes).length===0" style="padding:4px 0">No regime data</div>
     </div>
 
-    <!-- Exit rule monitor -->
-    <div class="panel-header">
-      <span>Exit Monitor</span>
-      <span style="font-size:9px;color:var(--muted)" x-text="exitLastPoll ? 'polled ' + exitLastPoll : ''"></span>
-    </div>
-    <div class="tv-scroll" style="flex:1">
-      <div class="empty-msg" x-show="exitPositions.length===0">No open positions to monitor</div>
-      <template x-for="pos in exitPositions" :key="pos.id">
-        <div style="border-bottom:1px solid var(--border);padding:8px 10px">
-          <!-- Ticker + live P&L -->
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-            <span style="font-weight:700;font-size:11px;display:inline-flex;align-items:center;gap:4px">
-              <span class="mkt" :class="mktClass(pos.exchange_key)" x-text="mktLabel(pos.exchange_key)"></span>
-              <span x-text="pos.display_ticker" style="cursor:pointer" @click="selectPosition(pos)"></span>
-            </span>
-            <span :class="livePnlPctExit(pos) >= 0 ? 'up' : 'down'"
-                  style="font-weight:800;font-size:11px"
-                  x-text="(livePnlPctExit(pos) >= 0 ? '+' : '') + livePnlPctExit(pos).toFixed(2) + '%'"></span>
-          </div>
-          <!-- Entry / Stop -->
-          <div style="display:flex;gap:10px;font-size:9px;color:var(--muted);margin-bottom:5px">
-            <span>Entry <span style="color:var(--text)" x-text="fmtPrice(pos.entry, pos.currency)"></span></span>
-            <span>Stop <span style="color:var(--down)" x-text="fmtPrice(pos.stop, pos.currency)"></span></span>
-            <span>Now <span style="color:var(--text)" :class="flash[pos.ticker]" x-text="fmtPrice(livePrice(pos.ticker) ?? pos.current, pos.currency)"></span></span>
-          </div>
-          <!-- Last exit checks -->
-          <div x-show="pos.checks.length===0" class="empty-msg" style="font-size:9px;padding:0">No checks yet</div>
-          <template x-for="(chk, ci) in pos.checks" :key="ci">
-            <div style="display:flex;align-items:flex-start;gap:5px;margin-bottom:3px;font-size:9px">
-              <!-- Status dot -->
-              <span style="margin-top:1px;flex-shrink:0"
-                    :style="chk.result==='exit_triggered' ? 'color:#ef5350' : (chk.result==='holding' ? 'color:#26a69a' : 'color:#5a5a78')">
-                <span x-text="chk.result==='exit_triggered' ? '⚠' : (chk.result==='holding' ? '✓' : '·')"></span>
-              </span>
-              <div style="flex:1;min-width:0">
-                <div style="display:flex;justify-content:space-between;gap:4px">
-                  <span style="color:var(--muted)" x-text="chk.time"></span>
-                  <span x-show="chk.pnl_pct !== null && chk.pnl_pct !== undefined"
-                        :class="chk.pnl_pct >= 0 ? 'pnl-pos' : 'pnl-neg'"
-                        x-text="(chk.pnl_pct >= 0 ? '+' : '') + (chk.pnl_pct ?? 0).toFixed(2) + '%'"></span>
-                </div>
-                <div style="color:var(--text);margin-top:1px;word-break:break-word"
-                     :style="chk.result==='exit_triggered' ? 'color:#ef5350;font-weight:700' : ''"
-                     x-text="chk.reason || chk.message"></div>
+    <!-- ── ENTRY MONITOR (signals tab) ───────────────────────────────── -->
+    <template x-if="tab==='signals'">
+      <div style="display:contents">
+        <div class="panel-header">
+          <span>Entry Monitor</span>
+          <span style="font-size:9px;color:var(--muted)">live · 10s</span>
+        </div>
+        <div class="tv-scroll" style="flex:1">
+          <div class="empty-msg" x-show="signals.length===0">No pending signals</div>
+          <template x-for="sig in signals" :key="sig.id">
+            <div style="border-bottom:1px solid var(--border);padding:8px 10px;cursor:pointer"
+                 @click="selectSignal(sig)">
+              <!-- Ticker + breakout badge -->
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                <span style="font-weight:700;font-size:11px;display:inline-flex;align-items:center;gap:4px">
+                  <span class="mkt" :class="mktClass(sig.exchange_key)" x-text="mktLabel(sig.exchange_key)"></span>
+                  <span x-text="sig.display_ticker"></span>
+                  <span class="break-badge" x-show="sig.breakout_confirmed" style="font-size:8px">● BREAK</span>
+                </span>
+                <span :class="liveChangePct(sig.ticker, sig.pivot) >= 0 ? 'up' : 'down'"
+                      style="font-size:10px;font-weight:700"
+                      x-text="(liveChangePct(sig.ticker, sig.pivot) >= 0 ? '+' : '') + liveChangePct(sig.ticker, sig.pivot).toFixed(1) + '% vs pivot'"></span>
               </div>
+              <!-- Price row -->
+              <div style="display:flex;gap:10px;font-size:9px;color:var(--muted);margin-bottom:5px">
+                <span>Now <span :class="flash[sig.ticker]" style="color:var(--text)"
+                      x-text="fmtPrice(livePrice(sig.ticker) ?? sig.last_check_price ?? sig.close, sig.currency)"></span></span>
+                <span>Pivot <span style="color:var(--warn)" x-text="fmtPrice(sig.pivot, sig.currency)"></span></span>
+                <span>Stop <span style="color:var(--down)" x-text="fmtPrice(sig.stop, sig.currency)"></span></span>
+              </div>
+              <!-- Entry check stats -->
+              <template x-if="sig.last_check_at">
+                <div style="font-size:9px">
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:3px">
+                    <span style="color:var(--muted)">Checked <span style="color:var(--text)" x-text="fmtTime(sig.last_check_at)"></span></span>
+                    <span x-show="sig.vol_ratio !== null">
+                      Vol <span :style="sig.vol_ratio >= 1.5 ? 'color:#26a69a;font-weight:700' : 'color:var(--text)'"
+                                x-text="sig.vol_ratio ? sig.vol_ratio.toFixed(1) + '×' : '—'"></span>
+                    </span>
+                    <span x-show="sig.rs_rating !== null">
+                      RS <span :style="sig.rs_rating >= 70 ? 'color:#22d3ee;font-weight:700' : 'color:var(--muted)'"
+                                x-text="sig.rs_rating ? sig.rs_rating.toFixed(0) : '—'"></span>
+                    </span>
+                    <span x-show="sig.data_source" style="color:var(--muted)"
+                          x-text="sig.data_source + (sig.data_delay_mins ? ' ~' + sig.data_delay_mins + 'm' : '')"></span>
+                  </div>
+                  <!-- Above/below MAs -->
+                  <template x-if="sig.ma_50 !== null || sig.ma_200 !== null">
+                    <div style="display:flex;gap:6px">
+                      <template x-if="sig.ma_50">
+                        <span :style="(livePrice(sig.ticker) ?? sig.last_check_price) > sig.ma_50 ? 'color:#22d3ee' : 'color:#ef5350'">
+                          <span x-text="(livePrice(sig.ticker) ?? sig.last_check_price) > sig.ma_50 ? '▲ 50MA' : '▼ 50MA'"></span>
+                        </span>
+                      </template>
+                      <template x-if="sig.ma_200">
+                        <span :style="(livePrice(sig.ticker) ?? sig.last_check_price) > sig.ma_200 ? 'color:#22d3ee' : 'color:#ef5350'">
+                          <span x-text="(livePrice(sig.ticker) ?? sig.last_check_price) > sig.ma_200 ? '▲ 200MA' : '▼ 200MA'"></span>
+                        </span>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </template>
+              <div x-show="!sig.last_check_at" class="empty-msg" style="font-size:9px;padding:2px 0;color:var(--muted)">Entry check not yet run</div>
             </div>
           </template>
         </div>
-      </template>
-    </div>
+      </div>
+    </template>
+
+    <!-- ── SIGNAL MONITOR (watchlist tab) ───────────────────────────── -->
+    <template x-if="tab==='watchlist'">
+      <div style="display:contents">
+        <div class="panel-header">
+          <span>Signal Monitor</span>
+          <span style="font-size:9px;color:var(--muted)" x-text="signals.length + ' active'"></span>
+        </div>
+        <div class="tv-scroll" style="flex:1">
+          <div class="empty-msg" x-show="watchlist.length===0">Watchlist is empty</div>
+          <!-- Items with active signals first, then approaching -->
+          <template x-for="item in watchlist.slice().sort((a,b) => (b.has_signal - a.has_signal))" :key="item.ticker">
+            <div style="border-bottom:1px solid var(--border);padding:7px 10px;cursor:pointer"
+                 :style="item.has_signal ? 'background:#f59e0b08' : ''"
+                 @click="selectWatchlist(item)">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <span style="font-weight:700;font-size:11px;display:inline-flex;align-items:center;gap:4px">
+                  <span class="mkt" :class="mktClass(item.exchange_key)" x-text="mktLabel(item.exchange_key)"></span>
+                  <span x-text="item.display_ticker"></span>
+                  <span class="signal-badge" x-show="item.has_signal" style="font-size:8px">⚡</span>
+                </span>
+                <span :class="(liveChange(item.ticker) ?? item.change_pct ?? 0) >= 0 ? 'up' : 'down'"
+                      style="font-size:10px;font-weight:700"
+                      x-text="((liveChange(item.ticker) >= 0 ? '+' : '') + (liveChange(item.ticker)).toFixed(2) + '%')"></span>
+              </div>
+              <template x-if="item.has_signal">
+                <div style="font-size:9px;margin-top:3px">
+                  <template x-for="sig in signals.filter(s => s.ticker === item.ticker)" :key="sig.id">
+                    <div style="display:flex;gap:8px;color:var(--muted)">
+                      <span>Pivot <span style="color:var(--warn)" x-text="fmtPrice(sig.pivot, item.currency)"></span></span>
+                      <span>Stop <span style="color:var(--down)" x-text="fmtPrice(sig.stop, item.currency)"></span></span>
+                      <span x-show="sig.breakout_confirmed" style="color:#26a69a;font-weight:700">● BREAK</span>
+                    </div>
+                  </template>
+                </div>
+              </template>
+              <template x-if="!item.has_signal">
+                <div style="font-size:9px;color:var(--muted);margin-top:2px">
+                  <span x-text="fmtPrice(livePrice(item.ticker) ?? item.close, item.currency)"></span>
+                  <span x-show="item.label_name" style="margin-left:6px"
+                        :style="`color:${item.label_color}`" x-text="item.label_name"></span>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+      </div>
+    </template>
+
+    <!-- ── EXIT MONITOR (positions tab) ─────────────────────────────── -->
+    <template x-if="tab==='positions'">
+      <div style="display:contents">
+        <div class="panel-header">
+          <span>Exit Monitor</span>
+          <span style="font-size:9px;color:var(--muted)" x-text="exitLastPoll ? 'polled ' + exitLastPoll : 'loading…'"></span>
+        </div>
+        <div class="tv-scroll" style="flex:1">
+          <div class="empty-msg" x-show="exitPositions.length===0">No open positions to monitor</div>
+          <template x-for="pos in exitPositions" :key="pos.id">
+            <div style="border-bottom:1px solid var(--border);padding:8px 10px;cursor:pointer"
+                 @click="selectPosition(pos)">
+              <!-- Ticker + live P&L -->
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                <span style="font-weight:700;font-size:11px;display:inline-flex;align-items:center;gap:4px">
+                  <span class="mkt" :class="mktClass(pos.exchange_key)" x-text="mktLabel(pos.exchange_key)"></span>
+                  <span x-text="pos.display_ticker"></span>
+                </span>
+                <span :class="livePnlPctExit(pos) >= 0 ? 'up' : 'down'"
+                      style="font-weight:800;font-size:11px"
+                      x-text="(livePnlPctExit(pos) >= 0 ? '+' : '') + livePnlPctExit(pos).toFixed(2) + '%'"></span>
+              </div>
+              <!-- Entry / Stop / Now -->
+              <div style="display:flex;gap:10px;font-size:9px;color:var(--muted);margin-bottom:5px">
+                <span>Entry <span style="color:var(--text)" x-text="fmtPrice(pos.entry, pos.currency)"></span></span>
+                <span>Stop <span style="color:var(--down)" x-text="fmtPrice(pos.stop, pos.currency)"></span></span>
+                <span>Now <span :class="flash[pos.ticker]" style="color:var(--text)" x-text="fmtPrice(livePrice(pos.ticker) ?? pos.current, pos.currency)"></span></span>
+              </div>
+              <!-- Last exit check results -->
+              <div x-show="pos.checks.length===0" style="font-size:9px;color:var(--muted)">No exit checks yet</div>
+              <template x-for="(chk, ci) in pos.checks.slice(0,3)" :key="ci">
+                <div style="display:flex;align-items:flex-start;gap:5px;margin-bottom:3px;font-size:9px">
+                  <span style="margin-top:1px;flex-shrink:0"
+                        :style="chk.result==='exit_triggered' ? 'color:#ef5350' : (chk.result==='holding' ? 'color:#26a69a' : 'color:#5a5a78')">
+                    <span x-text="chk.result==='exit_triggered' ? '⚠' : (chk.result==='holding' ? '✓' : '·')"></span>
+                  </span>
+                  <div style="flex:1;min-width:0">
+                    <div style="display:flex;justify-content:space-between;gap:4px">
+                      <span style="color:var(--muted)" x-text="chk.time"></span>
+                      <span x-show="chk.pnl_pct !== null && chk.pnl_pct !== undefined"
+                            :class="(chk.pnl_pct ?? 0) >= 0 ? 'pnl-pos' : 'pnl-neg'"
+                            x-text="((chk.pnl_pct ?? 0) >= 0 ? '+' : '') + (chk.pnl_pct ?? 0).toFixed(2) + '%'"></span>
+                    </div>
+                    <div style="color:var(--text);margin-top:1px;word-break:break-word"
+                         :style="chk.result==='exit_triggered' ? 'color:#ef5350;font-weight:700' : ''"
+                         x-text="chk.reason || chk.message"></div>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+      </div>
+    </template>
 
     <!-- Quick nav -->
     <div class="quick-links">
