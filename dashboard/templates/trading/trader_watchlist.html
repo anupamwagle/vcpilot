@@ -44,7 +44,7 @@
     .wl-grid {
       display: grid;
       grid-template-rows: 34px 34px 1fr;
-      grid-template-columns: 300px 1fr 300px;
+      grid-template-columns: 360px 1fr 300px;
       height: 100dvh;
     }
     .wl-topbar { grid-column: 1 / -1; grid-row: 1; }
@@ -142,16 +142,26 @@
       display: flex; flex-direction: column; overflow: hidden;
     }
     .left-header {
-      padding: 5px 8px; border-bottom: 1px solid var(--border);
-      display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+      padding: 6px 8px; border-bottom: 1px solid var(--border);
+      display: flex; flex-direction: column; gap: 5px; flex-shrink: 0;
+    }
+    .left-header-row {
+      display: flex; align-items: center; gap: 6px; width: 100%;
     }
     .left-search {
       flex: 1; background: var(--surf2); border: 1px solid var(--border);
       border-radius: 3px; color: var(--text); font-family: inherit;
-      font-size: 10px; padding: 3px 7px; outline: none;
+      font-size: 10px; padding: 4px 7px; outline: none;
     }
     .left-search:focus { border-color: var(--accent); }
     .left-stats { font-size: 9px; color: var(--muted); flex-shrink: 0; }
+    .left-select {
+      background: var(--surf2); border: 1px solid var(--border);
+      border-radius: 3px; color: var(--text); font-family: inherit;
+      font-size: 10px; padding: 4px 6px; outline: none; width: 100%;
+      cursor: pointer;
+    }
+    .left-select:focus { border-color: var(--accent); }
 
     /* ── Label filter row ────────────────────────────────────────────────── */
     .label-filter-row {
@@ -456,8 +466,20 @@
   <!-- ══ LEFT PANEL — LABEL-GROUPED WATCHLIST ═══════════════════════════════ -->
   <div class="wl-left">
     <div class="left-header">
-      <input class="left-search" type="text" x-model="search" placeholder="Search ticker / name…" />
-      <span class="left-stats" x-text="stats ? `${filteredTotal} / ${stats.total}` : ''"></span>
+      <div class="left-header-row">
+        <input class="left-search" type="text" x-model="search" placeholder="Search ticker / name…" />
+        <span class="left-stats" x-text="stats ? `${filteredTotal} / ${stats.total}` : ''"></span>
+      </div>
+      <template x-if="data && allLabels.length > 0">
+        <select class="left-select" 
+                :value="labelFilter === null ? 'null' : labelFilter" 
+                @change="labelFilter = ($event.target.value === 'null' ? null : parseInt($event.target.value))">
+          <option value="null">⚡ All Labels (Show All Groups)</option>
+          <template x-for="lbl in allLabels" :key="lbl.id">
+            <option :value="lbl.id" x-text="lbl.name"></option>
+          </template>
+        </select>
+      </template>
     </div>
 
     <!-- Label filter pills -->
