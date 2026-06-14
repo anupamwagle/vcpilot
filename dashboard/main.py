@@ -1240,8 +1240,8 @@ async def signals(request: Request, db: Session = Depends(get_db),
         or_(
             Signal.signal_date == get_current_date(),
             Signal.status == SignalStatus.PENDING,
-            Signal.status == SignalStatus.TRIGGERED,
         ),
+        Signal.status != SignalStatus.TRIGGERED,
         Signal.organization_id == org_id
     )
     # Apply exchange filter at DB level
@@ -2664,7 +2664,7 @@ async def _trader_data_inner(request: Request, db):
         db.query(Signal)
         .filter(
             Signal.organization_id == org_id,
-            Signal.status.in_([SignalStatus.PENDING, SignalStatus.TRIGGERED]),
+            Signal.status == SignalStatus.PENDING,
         )
         .order_by(Signal.signal_date.desc())
         .limit(50)
