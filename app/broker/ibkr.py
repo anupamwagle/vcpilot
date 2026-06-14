@@ -69,6 +69,11 @@ class IBKRBroker:
             logger.info("IBKR sandbox/simulation mode enabled (either forced or ib_insync unavailable)")
             return False
         try:
+            try:
+                from ib_insync import util
+                util.patchAsyncio()
+            except Exception:
+                pass
             self._ib = IB()
             self._ib.connect(
                 host=self.host,
