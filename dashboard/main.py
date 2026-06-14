@@ -3293,11 +3293,8 @@ def _trader_watchlist_data_inner(request: Request, db):
         # ── For crypto: overlay live price from cache (shared 5-min cache key) ──
         # This ensures item.close already reflects the live price on initial page load,
         # before the frontend's /trader/prices poll response arrives.
-        # Infer CRYPTO from ticker format as well — covers NULL asset_type rows
-        is_crypto_wl = (
-            (getattr(w, "asset_type", None) == "CRYPTO")
-            or w.ticker.endswith(("-AUD", "-USD", "-USDT"))
-        )
+        # Ticker format is authoritative — covers NULL and wrong asset_type="EQUITY" DB rows
+        is_crypto_wl = w.ticker.endswith(("-AUD", "-USD", "-USDT"))
         if is_crypto_wl:
             live_cache_key = f"live_price:{w.ticker}"
             live_cached = cache.get(live_cache_key)
@@ -3346,11 +3343,12 @@ def _trader_watchlist_data_inner(request: Request, db):
             "display_ticker": _disp(w.ticker),
             "name": stock_names.get(w.ticker, _disp(w.ticker)),
             "exchange_key": w.exchange_key or "ASX",
+            # Ticker format is authoritative for crypto detection — covers DB rows where
+            # asset_type was stored as "EQUITY" due to the Jun 2026 screener bug.
+            # ASX/US equities never use -AUD/-USD/-USDT suffixes, so this is safe.
             "asset_type": (
-                w.asset_type
-                if w.asset_type
-                else "CRYPTO" if w.ticker.endswith(("-AUD", "-USD", "-USDT"))
-                else "EQUITY"
+                "CRYPTO" if w.ticker.endswith(("-AUD", "-USD", "-USDT"))
+                else w.asset_type or "EQUITY"
             ),
             "currency": w.currency or "AUD",
             "flag": _flag(w.exchange_key or "ASX"),
@@ -3407,11 +3405,8 @@ def _trader_watchlist_data_inner(request: Request, db):
         })
 
     def _is_crypto(w) -> bool:
-        if w.asset_type == "CRYPTO":
-            return True
-        if not w.asset_type and w.ticker.endswith(("-AUD", "-USD", "-USDT")):
-            return True
-        return False
+        # Ticker format is authoritative — covers DB rows with wrong asset_type="EQUITY"
+        return w.ticker.endswith(("-AUD", "-USD", "-USDT"))
 
     equity_count = sum(1 for w in wl_items if not _is_crypto(w))
     crypto_count = sum(1 for w in wl_items if _is_crypto(w))
@@ -3990,6 +3985,11 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
                                   "hint_extra": "Exchange API secret. Keep this private — never share it."},
         "crypto_testnet":        {"hint_extra": "Enable sandbox/testnet mode. "
                                                "Note: MEXC does not have a testnet — enabling this for MEXC forces simulation mode (no real orders)."},
+        "mexc_trading_pairs":    {"control": "text",
+                                  "placeholder": "BTC-USD,ETH-USD,SOL-USD,XRP-USD",
+                                  "hint_extra": "MEXC only: comma-separated list of up to 30 pairs your API key can trade "
+                                                "(e.g. BTC-USD,ETH-USD,SOL-USD). Leave blank to use the default top-300 list. "
+                                                "After saving, click 'Re-seed Crypto Universe' on the Health page to apply."},
     }
 
     # ── Enabled exchanges (for multiselect chip UI) ───────────────────────────

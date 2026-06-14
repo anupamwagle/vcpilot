@@ -91,9 +91,14 @@ def _safe_int(val):
 def refresh_crypto_universe(self, exchange_key: str = "CRYPTO_INDEPENDENTRESERVE", organization_id: int = None):
     """
     Bootstrap (or refresh) the crypto stock universe for a given exchange.
-    Seeds the top-200 crypto tokens as Stock records so that refresh_price_data
-    and the screener have something to work with.
-    Called automatically by refresh_price_data when the crypto universe is empty.
+
+    Seeds Stock records for all coins supported by the exchange, then deactivates
+    and purges watchlist/signal entries for any coin that is no longer listed on the
+    exchange — ensuring we never try to trade a coin that can't be executed.
+
+    For IR  → exactly the ~41 AUD pairs from IR's live public API
+    For MEXC → top-300 USD pairs, filtered by 'mexc_trading_pairs' SystemConfig if set
+    For others → generic top-300 USD list
     """
     logger.info(f"Refreshing crypto universe for {exchange_key}...")
     try:
@@ -101,8 +106,27 @@ def refresh_crypto_universe(self, exchange_key: str = "CRYPTO_INDEPENDENTRESERVE
         from app.models.account import Organization
         currency = "AUD" if exchange_key in CRYPTO_AUD_EXCHANGES else "USD"
         tickers = get_top_crypto_tickers(exchange_key)
+
+        # ── MEXC: apply user-configured pair whitelist if set ────────────────
+        if exchange_key == "CRYPTO_MEXC":
+            with get_db() as _db:
+                pair_cfg = _db.query(SystemConfig).filter(
+                    SystemConfig.key == "mexc_trading_pairs",
+                    SystemConfig.organization_id == organization_id if organization_id else True,
+                ).first()
+                if pair_cfg and pair_cfg.value and pair_cfg.value.strip():
+                    # e.g. "BTC-USD,ETH-USD,SOL-USD"
+                    allowed = {p.strip().upper() for p in pair_cfg.value.split(",") if p.strip()}
+                    tickers = [t for t in tickers if t.upper() in allowed]
+                    logger.info(f"MEXC: filtered to {len(tickers)} configured trading pairs")
+
+        supported_set = set(tickers)
         seeded = 0
+        deactivated = 0
+        purged_wl = 0
+
         with get_db() as db:
+            # ── Seed / update supported coins ────────────────────────────────
             for yf_ticker in tickers:
                 norm = normalize_ticker(yf_ticker, exchange_key)
                 stock = db.query(Stock).filter(Stock.ticker == norm["yfinance_ticker"]).first()
@@ -121,7 +145,8 @@ def refresh_crypto_universe(self, exchange_key: str = "CRYPTO_INDEPENDENTRESERVE
                     ))
                     seeded += 1
                 else:
-                    # Ensure exchange metadata is set
+                    # Ensure metadata correct and mark active
+                    stock.is_active = True
                     if not stock.exchange_key:
                         stock.exchange_key = exchange_key
                     if not stock.asset_type:
@@ -129,8 +154,63 @@ def refresh_crypto_universe(self, exchange_key: str = "CRYPTO_INDEPENDENTRESERVE
                     if not stock.currency:
                         stock.currency = currency
 
-            summary = f"[{exchange_key}] Crypto universe seeded: {seeded} new / {len(tickers)} total tokens"
-            # Write one TASK_RUN log per active org so it appears in every org's audit/task log
+            # ── Deactivate orphaned coins (exchange_key matches but not in new list) ─
+            orphaned_stocks = (
+                db.query(Stock)
+                .filter(
+                    Stock.exchange_key == exchange_key,
+                    Stock.asset_type == "CRYPTO",
+                    ~Stock.ticker.in_(supported_set),
+                    Stock.is_active == True,
+                )
+                .all()
+            )
+            orphaned_tickers = {s.ticker for s in orphaned_stocks}
+            for s in orphaned_stocks:
+                s.is_active = False
+                deactivated += 1
+
+            # ── Purge watchlist entries for orphaned tickers (per-org or all orgs) ─
+            if orphaned_tickers:
+                wl_query = db.query(Watchlist).filter(
+                    Watchlist.ticker.in_(orphaned_tickers),
+                    Watchlist.status.in_([WatchlistStatus.WATCHING, WatchlistStatus.ALERTED]),
+                )
+                if organization_id:
+                    wl_query = wl_query.filter(Watchlist.organization_id == organization_id)
+                orphaned_wl = wl_query.all()
+                for wl in orphaned_wl:
+                    db.add(AuditLog(
+                        action=AuditAction.TASK_RUN,
+                        organization_id=wl.organization_id,
+                        message=(
+                            f"Watchlist: removed {wl.ticker} — no longer listed on {exchange_key}. "
+                            f"Re-add via watchlist if the exchange re-lists this coin."
+                        ),
+                    ))
+                    db.delete(wl)
+                    purged_wl += 1
+
+                # Also cancel any pending signals for orphaned tickers
+                from app.models.signal import SignalStatus
+                orphaned_signals = db.query(Signal).filter(
+                    Signal.ticker.in_(orphaned_tickers),
+                    Signal.status == SignalStatus.PENDING,
+                )
+                if organization_id:
+                    orphaned_signals = orphaned_signals.filter(Signal.organization_id == organization_id)
+                for sig in orphaned_signals.all():
+                    sig.status = SignalStatus.EXPIRED
+                    db.add(AuditLog(
+                        action=AuditAction.TASK_RUN,
+                        organization_id=sig.organization_id,
+                        message=f"Signal: expired {sig.ticker} — coin no longer listed on {exchange_key}",
+                    ))
+
+            summary = (
+                f"[{exchange_key}] Universe refreshed: {seeded} new / {len(tickers)} supported "
+                f"| {deactivated} deactivated | {purged_wl} watchlist entries purged"
+            )
             orgs = db.query(Organization).filter(Organization.is_active == True).all()
             for org in orgs:
                 db.add(AuditLog(
@@ -1767,12 +1847,7 @@ def screen_single_ticker(
 def recategorise_watchlist_labels(self, organization_id: int = None, force: bool = False):
     """
     Bulk-assign sector labels to all WATCHING watchlist items for the given org
-    based on each stock's sector/industry data.
-
-    Args:
-        organization_id: Org to process. Loops all active orgs if None.
-        force: If True, overwrites existing non-default labels too.
-               If False (default), only fills in unlabelled items.
+    based on each stock/coin sector/industry data.
     """
     from app.models.account import Organization
     from app.models.signal import Watchlist, WatchlistStatus
@@ -1808,4 +1883,3 @@ def recategorise_watchlist_labels(self, organization_id: int = None, force: bool
 
     except Exception as exc:
         logger.error(f"Watchlist re-categorisation failed: {exc}")
-

@@ -113,32 +113,22 @@ def test_ir_live_price_rejects_equity_ticker():
 # 3. _get_ir_live_price — coin not in IR_SYMBOL_MAP falls back to base.lower()
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_ir_live_price_unknown_coin_uses_base_lowercase():
-    """A new IR-listed coin not yet in IR_SYMBOL_MAP should be tried via base.lower()."""
+def test_ir_live_price_unknown_coin_returns_none_immediately():
+    """
+    A coin not in IR_SYMBOL_MAP must return None immediately — no API call.
+
+    Rationale: IR_SYMBOL_MAP is the authoritative list of IR-listed coins.
+    Coins not in the map (NEAR, LOOM, STRK, PYUSD, NEWCOIN...) are not
+    tradeable on IR, so we must never call IR's API for them — this was
+    causing 400-flood spam every 10 s from the /trader/prices poll.
+    """
     from app.data.fetcher import _get_ir_live_price
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    # Simulate IR returning data for a hypothetical new coin "NEWCOIN"
-    mock_resp.json.return_value = {
-        "LastPrice": 0.55,
-        "CurrentHighestBidPrice": 0.551,
-        "CurrentLowestOfferPrice": 0.549,
-        "DayVolumXbt": 100.0,
-        "DayVolumXbtInSecondaryAmount": 55.0,
-        "PrimaryCurrencyCode": "newcoin",
-        "SecondaryCurrencyCode": "aud",
-        "CreatedTimestampUtc": "2026-06-15T10:00:00Z",
-    }
-    with patch("requests.get", return_value=mock_resp) as mock_get:
+    with patch("requests.get") as mock_get:
         result = _get_ir_live_price("NEWCOIN-AUD")
 
-    # Should have tried the call (not returned None early)
-    mock_get.assert_called_once()
-    # URL should contain "newcoin" (the base.lower() fallback)
-    url_called = mock_get.call_args[0][0]
-    assert "newcoin" in url_called
-    assert result is not None
-    assert result["price"] == pytest.approx(0.55, rel=1e-3)
+    # Must return None without ever touching the network
+    mock_get.assert_not_called()
+    assert result is None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

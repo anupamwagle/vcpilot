@@ -602,13 +602,20 @@ The WAHA webhook routes incoming messages to `http://api:8501/webhook/whatsapp`.
 
 **Current operational state (pick up here in next session):**
 
+- **Exchange-scoped crypto universe + IR API spam fix (15 Jun 2026 — Session 2):**
+  - **`_get_ir_live_price` — no more fallback for unknown coins** (`app/data/fetcher.py`): Removed the `base.lower()` fallback that was firing an IR API call for every coin not in `IR_SYMBOL_MAP` (NEAR, LOOM, STRK, PYUSD etc.). `IR_SYMBOL_MAP` is now authoritative — if a coin isn't in it, return `None` immediately with zero network calls. Eliminates the 400-flood log spam.
+  - **`refresh_crypto_universe` — orphan cleanup** (`app/tasks/screening.py`): After seeding the exchange's supported coins, now marks `is_active=False` on any Stock row with that `exchange_key` NOT in the new list, deletes their `WATCHING`/`ALERTED` watchlist entries, and expires their `PENDING` signals — with audit log entries per removal. Run "Re-seed Crypto Universe" from Health page to purge NEAR/LOOM/STRK/PYUSD from the DB.
+  - **MEXC pair whitelist** (`app/tasks/screening.py` + `dashboard/main.py`): New `mexc_trading_pairs` SystemConfig key (comma-separated, e.g. `BTC-USD,ETH-USD,SOL-USD`). If set, `refresh_crypto_universe` for MEXC filters the 300-coin list down to only those pairs before seeding. Shown in `/admin/config` under Crypto with usage hint. Leave blank to use full list.
+  - **Trader Watchlist `asset_type` inference** (`dashboard/main.py`): `_build_item` now uses ticker suffix as authoritative override — any `-AUD/-USD/-USDT` ticker returns `asset_type="CRYPTO"` regardless of DB column value (covers rows stored as `"EQUITY"` due to Jun 2026 screener bug). `crypto_count`/`equity_count` stats use the same logic. Crypto section now shows all coins.
+  - **Stablecoin TradingView chart** (`trader_watchlist.html`): Expanded `STABLECOINS` set (`USDT`, `USDC`, `PYUSD`, `RLUSD`, `DAI`, `BUSD`, `TUSD`, `FRAX`, `LUSD`, `GUSD`) routes to `KRAKEN:XXXUSD` instead of `BINANCE:XXXUSDT` (which doesn't exist for stablecoins).
+  - **70 regression tests passing** (28 IR + 42 MEXC). Test `test_ir_live_price_unknown_coin_uses_base_lowercase` → renamed `test_ir_live_price_unknown_coin_returns_none_immediately` to reflect correct no-API-call behaviour.
+
 - **Independent Reserve (IR) Live Price Pipeline — Full Fix (15 Jun 2026):**
   - **`refresh_live_prices_cache_task` NULL asset_type fix** (`app/tasks/trading.py`): tickers with `asset_type=NULL` or `asset_type="EQUITY"` but `-AUD`/`-USD`/`-USDT` format are now correctly inferred as CRYPTO and included in the 5-min cache refresh. Previously these were silently skipped.
   - **Inline live fetch on cache miss** (`dashboard/main.py`): `/trader/prices` (10s poll) and `/trader/watchlist/data` (30s poll) now call `get_intraday_price(ticker, asset_type="CRYPTO")` inline on cache miss instead of silently falling to EOD. The `/watchlist` HTML route pre-fetches all cold-cache crypto tickers in parallel via `ThreadPoolExecutor(max_workers=8)` before rendering.
-  - **`is_crypto_item` / `is_crypto_wl` inference**: all three route handlers now detect CRYPTO from ticker format (`endswith("-AUD"/-USD/-USDT)`) in addition to explicit `asset_type` check — covers NULL rows from the Jun 2026 DB bug.
+  - **`is_crypto_wl` inference**: all three route handlers detect CRYPTO from ticker format (`endswith("-AUD"/-USD/-USDT)`) — covers NULL rows from the Jun 2026 DB bug.
   - **TradingView chart fix** (`dashboard/templates/trading/trader_watchlist.html`): `BINANCE:BTCAUD` (non-existent) → `BINANCE:BTCUSDT`. Stablecoins → `KRAKEN:USDTUSD`. Matches the working logic in `trader.html`.
-  - **`_get_ir_live_price` fallback** (`app/data/fetcher.py`): coins not in `IR_SYMBOL_MAP` now try `base.lower()` as the IR primary currency code instead of immediately returning None. API returns 400 for unknown coins which is already handled gracefully.
-  - **28 regression tests** in `tests/test_ir_integration.py` — all pass. 78 total across MEXC + IR + prior suites, 0 failures.
+  - **28 regression tests** in `tests/test_ir_integration.py` — all pass. 70 total across MEXC + IR suites, 0 failures.
 
 - **MEXC Exchange Integration & 5-Min Price Refresh Fix (15 Jun 2026):**
   - `_get_mexc_live_price(ticker)` in `app/data/fetcher.py` — MEXC public REST API, no auth, 0-delay, converts `BTC-USD` → `BTCUSDT`.
@@ -660,11 +667,12 @@ The WAHA webhook routes incoming messages to `http://api:8501/webhook/whatsapp`.
 | Crypto rules | 11 ON (6 original + 5 enhanced: RSI/MACD/vol/RR/BTC-RS) |
 | Equity rules | 45 ON |
 | IR universe | ⚠️ Needs re-seed via Central Ops (code now uses IR live API ~40 AUD pairs) |
-| IR live prices | ✅ Fixed & confirmed working — all 3 UI price endpoints now fetch live on cache miss |
-| IR charts | ✅ Fixed — TradingView uses `BINANCE:BTCUSDT` (not `BINANCE:BTCAUD`) |
+| IR live prices | ✅ Fixed — all 3 UI endpoints live, no more 400-spam for unlisted coins |
+| IR charts | ✅ Fixed — TV uses `BINANCE:BTCUSDT`; stablecoins → `KRAKEN:XXXUSD` |
+| IR universe | ⚠️ Run "Re-seed Crypto Universe" on Health page to purge NEAR/LOOM/STRK/PYUSD |
 | Market regime | CAUTION (BTC -21% vs 200MA) — no signals, correct |
 | Celery beat | 5-min entry/exit/stop/P&L crypto; 4× daily screener |
-| Test coverage | 78 tests passing (28 IR + 42 MEXC + 8 prior) |
+| Test coverage | 70 tests passing (28 IR + 42 MEXC) |
 
 ### Step 2 Pre-flight Checklist
 
@@ -681,11 +689,10 @@ Before the next session can begin trading, complete ALL of:
 ### Next Session Prompt
 
 > "AstraTrade — continuing from 15 Jun 2026. AW org (id=10). Trader Terminal + Watchlist Terminal live.  
-> IR crypto price pipeline fully fixed (all 3 UI endpoints, TradingView charts, cache-miss inline fetch).  
-> MEXC exchange integrated (public API for live prices, CryptoBroker via ccxt).  
-> 78 regression tests passing (28 IR + 42 MEXC + 8 prior).  
-> Run `get_portfolio_stats()` and `get_market_regime('CRYPTO_INDEPENDENTRESERVE')`  
-> then let's review any pending signals and decide on entries."
+> IR crypto pipeline fully fixed: live prices, TV charts, exchange-scoped universe (purges non-IR coins on re-seed).  
+> MEXC integrated. 70 regression tests passing (28 IR + 42 MEXC).  
+> ⚠️ Action needed: go to Health page → 'Re-seed Crypto Universe' to purge NEAR/LOOM/STRK/PYUSD from DB.  
+> Then: `get_portfolio_stats()` and `get_market_regime('CRYPTO_INDEPENDENTRESERVE')` to review state."
 
 ### Recovery Watchlist (when to expect first signals)
 

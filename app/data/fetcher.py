@@ -896,22 +896,13 @@ def _get_ir_live_price(ticker: str) -> dict | None:
     import requests as _req
     from datetime import datetime as _dt
 
-    # Use the module-level IR_SYMBOL_MAP (kept in sync with IR's live coin list)
+    # Only fetch from IR if the coin is in our authoritative symbol map.
+    # Coins not in IR_SYMBOL_MAP simply aren't listed on IR — no API call needed.
+    # IR_SYMBOL_MAP is kept in sync with IR's live API via get_ir_supported_tickers().
     base = ticker.replace("-AUD", "").upper()
     ir_code = IR_SYMBOL_MAP.get(base)
     if not ir_code:
-        # Not in our static map — try using the base directly (lowercase) as the IR code.
-        # IR uses lowercase primary currency codes (e.g. "xbt", "eth"). For newer coins
-        # added to IR after the last map update, the base itself is the code (e.g. "sol" → "SOL").
-        # If the coin truly isn't on IR the API returns 400, caught below, and we cache the
-        # negative result for 24h so we don't hammer IR on every 10s price poll.
-        ir_code = base.lower()
-
-    # Check negative cache — coins that previously returned 400 are skipped for 24h
-    from app.utils.cache import cache as _cache
-    _neg_key = f"ir_unsupported:{ir_code}"
-    if _cache.get(_neg_key):
-        return None  # Confirmed not on IR — skip silently
+        return None  # Coin not listed on Independent Reserve — skip immediately
 
     import time as _time
     url = (
@@ -924,11 +915,6 @@ def _get_ir_live_price(ticker: str) -> dict | None:
         try:
             resp = _req.get(url, timeout=6, headers=headers)
             if resp.status_code != 200:
-                if resp.status_code == 400:
-                    # Coin not on IR — cache negative result for 24h to stop spam
-                    _cache.set(_neg_key, True, expire_seconds=86400)
-                    logger.info(f"IR: {ticker} ({ir_code}) not supported — cached negative for 24h")
-                    return None
                 logger.warning(
                     f"IR API attempt {attempt}: {resp.status_code} for {ticker} ({ir_code}): {resp.text[:120]}"
                 )

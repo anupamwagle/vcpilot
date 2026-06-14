@@ -1127,9 +1127,10 @@ function wlApp() {
         tvSymbol = 'ASX:' + ticker.replace('.AX', '');
       } else if (ticker.endsWith('-AUD') || ticker.endsWith('-USD') || ticker.endsWith('-USDT')) {
         const base = ticker.split('-')[0].toUpperCase();
-        // Stablecoins → KRAKEN; everything else → BINANCE USDT pair
-        // Note: Binance has no AUD pairs, so IR -AUD tickers map to BINANCE:BTCUSDT etc.
-        if (base === 'USDT' || base === 'USDC') {
+        // Stablecoins → KRAKEN:XXXUSD; everything else → BINANCE:XXXUSDT
+        // Note: Binance has no AUD pairs, so IR -AUD tickers map to BINANCE:XXXUSDT
+        const STABLECOINS = new Set(['USDT', 'USDC', 'PYUSD', 'RLUSD', 'DAI', 'BUSD', 'TUSD', 'FRAX', 'LUSD', 'GUSD']);
+        if (STABLECOINS.has(base)) {
           tvSymbol = 'KRAKEN:' + base + 'USD';
         } else {
           tvSymbol = 'BINANCE:' + base + 'USDT';
