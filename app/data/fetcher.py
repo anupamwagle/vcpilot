@@ -903,8 +903,15 @@ def _get_ir_live_price(ticker: str) -> dict | None:
         # Not in our static map — try using the base directly (lowercase) as the IR code.
         # IR uses lowercase primary currency codes (e.g. "xbt", "eth"). For newer coins
         # added to IR after the last map update, the base itself is the code (e.g. "sol" → "SOL").
-        # If the coin truly isn't on IR the API returns 400, caught below, and returns None.
+        # If the coin truly isn't on IR the API returns 400, caught below, and we cache the
+        # negative result for 24h so we don't hammer IR on every 10s price poll.
         ir_code = base.lower()
+
+    # Check negative cache — coins that previously returned 400 are skipped for 24h
+    from app.utils.cache import cache as _cache
+    _neg_key = f"ir_unsupported:{ir_code}"
+    if _cache.get(_neg_key):
+        return None  # Confirmed not on IR — skip silently
 
     import time as _time
     url = (
@@ -917,11 +924,14 @@ def _get_ir_live_price(ticker: str) -> dict | None:
         try:
             resp = _req.get(url, timeout=6, headers=headers)
             if resp.status_code != 200:
+                if resp.status_code == 400:
+                    # Coin not on IR — cache negative result for 24h to stop spam
+                    _cache.set(_neg_key, True, expire_seconds=86400)
+                    logger.info(f"IR: {ticker} ({ir_code}) not supported — cached negative for 24h")
+                    return None
                 logger.warning(
                     f"IR API attempt {attempt}: {resp.status_code} for {ticker} ({ir_code}): {resp.text[:120]}"
                 )
-                if resp.status_code == 400:
-                    return None  # Invalid coin on IR — retrying won't help
                 if attempt < 3:
                     _time.sleep(1.5 * attempt)
                     continue

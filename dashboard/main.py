@@ -3346,7 +3346,12 @@ def _trader_watchlist_data_inner(request: Request, db):
             "display_ticker": _disp(w.ticker),
             "name": stock_names.get(w.ticker, _disp(w.ticker)),
             "exchange_key": w.exchange_key or "ASX",
-            "asset_type": w.asset_type or "EQUITY",
+            "asset_type": (
+                w.asset_type
+                if w.asset_type
+                else "CRYPTO" if w.ticker.endswith(("-AUD", "-USD", "-USDT"))
+                else "EQUITY"
+            ),
             "currency": w.currency or "AUD",
             "flag": _flag(w.exchange_key or "ASX"),
             "label_id": w.label_id,
@@ -3401,8 +3406,15 @@ def _trader_watchlist_data_inner(request: Request, db):
             "items": unlabelled,
         })
 
-    equity_count = sum(1 for w in wl_items if (w.asset_type or "EQUITY") != "CRYPTO")
-    crypto_count = sum(1 for w in wl_items if (w.asset_type or "EQUITY") == "CRYPTO")
+    def _is_crypto(w) -> bool:
+        if w.asset_type == "CRYPTO":
+            return True
+        if not w.asset_type and w.ticker.endswith(("-AUD", "-USD", "-USDT")):
+            return True
+        return False
+
+    equity_count = sum(1 for w in wl_items if not _is_crypto(w))
+    crypto_count = sum(1 for w in wl_items if _is_crypto(w))
 
     regime_keys = [
         "last_market_regime_ASX", "last_market_regime_NYSE",
@@ -6434,10 +6446,9 @@ async def superadmin_mcp_generate(
 
     cred = MCPCredential(
         organization_id       = org_id,
-        name                  = name or "Default",
+        name                  = name,
         client_id             = client_id,
         client_secret_hash    = hash_secret(plain_secret),
-        client_secret_preview = plain_secret[-8:],
         scopes                = selected_scopes,
         expires_at            = datetime.utcnow() + timedelta(days=MCP_CREDENTIAL_VALIDITY_DAYS),
         is_active             = True,
@@ -6536,7 +6547,7 @@ async def superadmin_mcp_renew(
 
 
 # ===========================================================================
-# MCP — Mount MCP server ASGI app
+# MCP -- Mount MCP server ASGI app
 # ===========================================================================
 
 try:
