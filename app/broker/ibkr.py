@@ -11,6 +11,8 @@ from loguru import logger
 try:
     from ib_insync import IB, Stock, Order, LimitOrder, MarketOrder, StopOrder, BracketOrder
     IB_AVAILABLE = True
+    import logging
+    logging.getLogger("ib_insync").setLevel(logging.CRITICAL)
 except ImportError:
     IB_AVAILABLE = False
     logger.warning("ib_insync not installed — broker in simulation mode")
