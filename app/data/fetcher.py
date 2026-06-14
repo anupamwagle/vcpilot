@@ -15,6 +15,8 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from loguru import logger
+import logging
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 
 # ---------------------------------------------------------------------------
@@ -1017,7 +1019,7 @@ def get_intraday_price(
     except Exception as e:
         logger.debug(f"yfinance intraday fetch failed for {ticker}: {e}")
 
-    logger.warning(f"No intraday data for {ticker} — all sources failed")
+    logger.info(f"No intraday data for {ticker} — all sources failed")
     return {"price": None, "volume": None, "bid": None, "ask": None,
             "data_source": "eod_fallback", "delay_mins": None, "bar_timestamp": None, "ok": False}
 
