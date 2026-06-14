@@ -248,6 +248,24 @@
       display: inline-block; font-size: 8px; font-weight: 800;
       color: var(--accent); margin-left: 4px;
     }
+    /* ── Watchlist label filter ──────────────────────────────────── */
+    .wl-label-bar {
+      display: flex; align-items: center; gap: 3px;
+      padding: 4px 8px; border-bottom: 1px solid var(--border);
+      overflow-x: auto; flex-shrink: 0; background: var(--surface);
+    }
+    .wl-label-bar::-webkit-scrollbar { height: 2px; }
+    .wl-label-bar::-webkit-scrollbar-thumb { background: var(--border); }
+    .wlp {
+      display: inline-flex; align-items: center; gap: 3px;
+      padding: 1px 7px; border-radius: 20px; cursor: pointer; white-space: nowrap;
+      font-size: 8px; font-weight: 700; letter-spacing: 0.04em;
+      color: var(--muted); border: 1px solid var(--border);
+      background: none; font-family: inherit; transition: all .15s;
+    }
+    .wlp:hover   { color: var(--text); border-color: var(--accent); }
+    .wlp.active  { background: var(--accent); color: #000; border-color: var(--accent); }
+    .wlp-dot { width: 5px; height: 5px; border-radius: 50%; }
 
     .empty-msg { padding: 20px; text-align: center; color: var(--muted); font-size: 11px; }
 
@@ -457,37 +475,53 @@
     </div>
 
     <!-- ── Watchlist ── -->
-    <div class="tv-scroll" x-show="tab==='watchlist'">
-      <div class="empty-msg" x-show="watchlist.length===0">Watchlist is empty</div>
-      <template x-for="item in watchlist" :key="item.ticker">
-        <div class="item-card"
-             :class="{active: selectedTicker===item.ticker}"
-             @click="selectWatchlist(item)">
-          <div class="card-row">
-            <div style="display:flex;align-items:center;gap:6px">
-              <span class="mkt" :class="mktClass(item.exchange_key)" x-text="mktLabel(item.exchange_key)"></span>
-              <div>
-                <span class="card-ticker" x-text="item.display_ticker"></span>
-                <div class="card-name" x-text="item.name"></div>
-              </div>
-            </div>
-            <div style="text-align:right">
-              <div class="card-price" :class="flash[item.ticker]"
-                   x-text="fmtPrice(livePrice(item.ticker) ?? item.close, item.currency)"></div>
-              <div :class="liveChange(item.ticker) >= 0 ? 'up' : 'down'"
-                   style="font-size:9px"
-                   x-text="(liveChange(item.ticker) >= 0 ? '+' : '') + liveChange(item.ticker).toFixed(2) + '%'"></div>
-            </div>
-          </div>
-          <div style="margin-top:3px;display:flex;align-items:center;gap:4px">
-            <span x-show="item.label_name"
-                  class="label-chip"
-                  :style="`background:${item.label_color}22;color:${item.label_color};border:1px solid ${item.label_color}44`"
-                  x-text="item.label_name"></span>
-            <span class="signal-badge" x-show="item.has_signal">⚡ SIGNAL</span>
-          </div>
+    <div class="tv-scroll" x-show="tab==='watchlist'" style="display:flex;flex-direction:column;overflow:hidden">
+      <!-- Label filter pills (only shown when there are labels) -->
+      <template x-if="allWlLabels.length > 1">
+        <div class="wl-label-bar">
+          <button class="wlp" :class="{active: wlLabelFilter === null}" @click="wlLabelFilter = null">All</button>
+          <template x-for="lbl in allWlLabels" :key="lbl.name">
+            <button class="wlp"
+                    :class="{active: wlLabelFilter === lbl.name}"
+                    @click="wlLabelFilter = (wlLabelFilter === lbl.name ? null : lbl.name)">
+              <span class="wlp-dot" :style="`background:${lbl.color}`"></span>
+              <span x-text="lbl.name"></span>
+            </button>
+          </template>
         </div>
       </template>
+      <div style="flex:1;overflow-y:auto">
+        <div class="empty-msg" x-show="filteredWatchlist.length===0">No watchlist matches</div>
+        <template x-for="item in filteredWatchlist" :key="item.ticker">
+          <div class="item-card"
+               :class="{active: selectedTicker===item.ticker}"
+               @click="selectWatchlist(item)">
+            <div class="card-row">
+              <div style="display:flex;align-items:center;gap:6px">
+                <span class="mkt" :class="mktClass(item.exchange_key)" x-text="mktLabel(item.exchange_key)"></span>
+                <div>
+                  <span class="card-ticker" x-text="item.display_ticker"></span>
+                  <div class="card-name" x-text="item.name"></div>
+                </div>
+              </div>
+              <div style="text-align:right">
+                <div class="card-price" :class="flash[item.ticker]"
+                     x-text="fmtPrice(livePrice(item.ticker) ?? item.close, item.currency)"></div>
+                <div :class="liveChange(item.ticker) >= 0 ? 'up' : 'down'"
+                     style="font-size:9px"
+                     x-text="(liveChange(item.ticker) >= 0 ? '+' : '') + liveChange(item.ticker).toFixed(2) + '%'"></div>
+              </div>
+            </div>
+            <div style="margin-top:3px;display:flex;align-items:center;gap:4px">
+              <span x-show="item.label_name"
+                    class="label-chip"
+                    :style="`background:${item.label_color}22;color:${item.label_color};border:1px solid ${item.label_color}44`"
+                    x-text="item.label_name"></span>
+              <span class="signal-badge" x-show="item.has_signal">⚡ SIGNAL</span>
+            </div>
+          </div>
+        </template>
+      </div>
     </div>
 
     <!-- ── Positions ── -->
@@ -833,6 +867,7 @@ function traderApp() {
     asxOpen: false,
     nyseOpen: false,
     tapeHtml: '<span class="tape-item"><span class="tape-ticker">Loading…</span></span>',
+    wlLabelFilter: null,  // null = all labels; string = label_name to filter watchlist by
 
     // ── Exit monitor ──────────────────────────────────────────────────────
     exitPositions: [],
@@ -1166,6 +1201,24 @@ function traderApp() {
     selectPosition(pos) {
       this.selectedSignal = this.signals.find(s => s.ticker === pos.ticker) ?? null;
       this._select(pos);
+    },
+
+    // ── Watchlist label filter helpers ────────────────────────────────────
+    get allWlLabels() {
+      const seen = new Set();
+      const labels = [];
+      for (const item of this.watchlist) {
+        if (item.label_name && !seen.has(item.label_name)) {
+          seen.add(item.label_name);
+          labels.push({ name: item.label_name, color: item.label_color });
+        }
+      }
+      return labels;
+    },
+
+    get filteredWatchlist() {
+      if (!this.wlLabelFilter) return this.watchlist;
+      return this.watchlist.filter(i => i.label_name === this.wlLabelFilter);
     },
 
     // ── Live price helpers ────────────────────────────────────────────────

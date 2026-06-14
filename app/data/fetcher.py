@@ -603,7 +603,7 @@ _SECTOR_LABEL_RULES: list[tuple[list[str], str | None, str]] = [
     (["pharmaceutical", "pharma"],      None,           "Healthcare / Pharma"),
     (["medical", "hospital", "health"], None,           "Healthcare / Pharma"),
     # ── Technology ──────────────────────────────────────────────────────────
-    (["fintech", "payment", "neobank"], None,           "FinTech"),
+    (["fintech", "payment", "neobank", "financial technology", "financial tech"], None, "FinTech"),
     (["software", "saas", "cloud"],     None,           "Technology"),
     (["semiconductor", "chip"],         None,           "Technology"),
     (["technology", "tech", "data"],    None,           "Technology"),

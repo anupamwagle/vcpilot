@@ -153,6 +153,27 @@
     .left-search:focus { border-color: var(--accent); }
     .left-stats { font-size: 9px; color: var(--muted); flex-shrink: 0; }
 
+    /* ── Label filter row ────────────────────────────────────────────────── */
+    .label-filter-row {
+      display: flex; align-items: center; gap: 4px;
+      padding: 4px 8px; border-bottom: 1px solid var(--border);
+      overflow-x: auto; flex-shrink: 0;
+    }
+    .label-filter-row::-webkit-scrollbar { height: 2px; }
+    .label-filter-row::-webkit-scrollbar-thumb { background: var(--border); border-radius: 1px; }
+    .lbl-pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 8px; border-radius: 20px; cursor: pointer; white-space: nowrap;
+      font-size: 9px; font-weight: 700; letter-spacing: 0.04em;
+      color: var(--muted); border: 1px solid var(--border);
+      background: var(--surf2); font-family: inherit;
+      transition: all .15s;
+    }
+    .lbl-pill:hover { color: var(--text); border-color: var(--accent); }
+    .lbl-pill.active { color: #000; background: var(--accent); border-color: var(--accent); }
+    .lbl-pill.active .lbl-dot { background: rgba(0,0,0,0.4) !important; }
+    .lbl-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+
     .left-scroll { flex: 1; overflow-y: auto; }
     .left-scroll::-webkit-scrollbar { width: 3px; }
     .left-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
@@ -414,7 +435,7 @@
     <div class="tape-track" x-ref="tape">
       <template x-for="item in tapeItems" :key="item.ticker">
         <span class="tape-item">
-          <span class="tape-ticker" x-text="item.display"></span>
+          <span class="tape-ticker" x-text="item.display_ticker"></span>
           <span class="tape-price" x-text="fmtPrice(livePrices[item.ticker]?.price ?? item.close, item.currency)"></span>
           <span :class="(livePrices[item.ticker]?.change_pct ?? item.change_pct) >= 0 ? 'tape-up' : 'tape-down'"
                 x-text="fmtChg(livePrices[item.ticker]?.change_pct ?? item.change_pct)"></span>
@@ -423,7 +444,7 @@
       <!-- Duplicate for seamless loop -->
       <template x-for="item in tapeItems" :key="'d-'+item.ticker">
         <span class="tape-item">
-          <span class="tape-ticker" x-text="item.display"></span>
+          <span class="tape-ticker" x-text="item.display_ticker"></span>
           <span class="tape-price" x-text="fmtPrice(livePrices[item.ticker]?.price ?? item.close, item.currency)"></span>
           <span :class="(livePrices[item.ticker]?.change_pct ?? item.change_pct) >= 0 ? 'tape-up' : 'tape-down'"
                 x-text="fmtChg(livePrices[item.ticker]?.change_pct ?? item.change_pct)"></span>
@@ -438,6 +459,21 @@
       <input class="left-search" type="text" x-model="search" placeholder="Search ticker / name…" />
       <span class="left-stats" x-text="stats ? `${filteredTotal} / ${stats.total}` : ''"></span>
     </div>
+
+    <!-- Label filter pills -->
+    <template x-if="data && allLabels.length > 1">
+      <div class="label-filter-row">
+        <button class="lbl-pill" :class="{active: labelFilter === null}" @click="labelFilter = null">All Labels</button>
+        <template x-for="lbl in allLabels" :key="lbl.id">
+          <button class="lbl-pill"
+                  :class="{active: labelFilter === lbl.id}"
+                  @click="labelFilter = (labelFilter === lbl.id ? null : lbl.id)">
+            <span class="lbl-dot" :style="`background:${lbl.color}`"></span>
+            <span x-text="lbl.name"></span>
+          </button>
+        </template>
+      </div>
+    </template>
     <div class="left-scroll">
       <!-- Empty / loading -->
       <template x-if="!data">
@@ -911,6 +947,7 @@ function wlApp() {
     selectedItem: null,
     selectedId:   null,
     assetFilter:  'ALL',
+    labelFilter:  null,   // null = all labels; set to label_id to filter by that label
     search:       '',
     chartWidget:  null,
     chartTf:      '1Y',
@@ -968,7 +1005,7 @@ function wlApp() {
       } catch (e) { /* silent */ }
     },
 
-    // ── Computed: all items flat (filtered by search + assetFilter) ─────────
+    // ── Computed: all items flat (filtered by search + assetFilter + labelFilter) ─────
     get filteredItems() {
       if (!this.data?.groups) return [];
       const q = this.search.toLowerCase().trim();
@@ -976,37 +1013,56 @@ function wlApp() {
         const assetOk = this.assetFilter === 'ALL'
           || (this.assetFilter === 'EQUITY' && item.asset_type !== 'CRYPTO')
           || (this.assetFilter === 'CRYPTO' && item.asset_type === 'CRYPTO');
+        const labelOk = this.labelFilter === null || item.label_id === this.labelFilter;
         const searchOk = !q || item.display_ticker.toLowerCase().includes(q) || (item.name||'').toLowerCase().includes(q);
-        return assetOk && searchOk;
+        return assetOk && labelOk && searchOk;
       });
     },
 
     get filteredTotal() { return this.filteredItems.length; },
 
+    // All unique labels across all groups (for label filter pills)
+    get allLabels() {
+      if (!this.data?.groups) return [];
+      const seen = new Set();
+      const labels = [];
+      for (const g of this.data.groups) {
+        if (g.label_id && !seen.has(g.label_id)) {
+          seen.add(g.label_id);
+          labels.push({ id: g.label_id, name: g.label_name, color: g.label_color });
+        }
+      }
+      return labels;
+    },
+
     // Groups for equity section
     get equityGroups() {
       if (!this.data?.groups) return [];
       const q = this.search.toLowerCase().trim();
-      return this.data.groups.map(g => ({
-        ...g,
-        items: g.items.filter(i =>
-          i.asset_type !== 'CRYPTO' &&
-          (!q || i.display_ticker.toLowerCase().includes(q) || (i.name||'').toLowerCase().includes(q))
-        )
-      })).filter(g => g.items.length > 0);
+      return this.data.groups
+        .filter(g => this.labelFilter === null || g.label_id === this.labelFilter)
+        .map(g => ({
+          ...g,
+          items: g.items.filter(i =>
+            i.asset_type !== 'CRYPTO' &&
+            (!q || i.display_ticker.toLowerCase().includes(q) || (i.name||'').toLowerCase().includes(q))
+          )
+        })).filter(g => g.items.length > 0);
     },
 
     // Groups for crypto section
     get cryptoGroups() {
       if (!this.data?.groups) return [];
       const q = this.search.toLowerCase().trim();
-      return this.data.groups.map(g => ({
-        ...g,
-        items: g.items.filter(i =>
-          i.asset_type === 'CRYPTO' &&
-          (!q || i.display_ticker.toLowerCase().includes(q) || (i.name||'').toLowerCase().includes(q))
-        )
-      })).filter(g => g.items.length > 0);
+      return this.data.groups
+        .filter(g => this.labelFilter === null || g.label_id === this.labelFilter)
+        .map(g => ({
+          ...g,
+          items: g.items.filter(i =>
+            i.asset_type === 'CRYPTO' &&
+            (!q || i.display_ticker.toLowerCase().includes(q) || (i.name||'').toLowerCase().includes(q))
+          )
+        })).filter(g => g.items.length > 0);
     },
 
     // Tape items = all items from current data

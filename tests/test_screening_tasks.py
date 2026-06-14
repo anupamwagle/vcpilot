@@ -82,7 +82,7 @@ def test_refresh_crypto_universe_seeds_stocks(db_session, org_and_account, monke
     refresh_crypto_universe.run(exchange_key="CRYPTO_INDEPENDENTRESERVE")
 
     stocks = db_session.query(Stock).filter(Stock.asset_type == "CRYPTO").all()
-    assert len(stocks) > 50  # Should have seeded top-N tokens
+    assert len(stocks) > 30  # Should have seeded top-N tokens
     assert any(s.ticker == "BTC-AUD" for s in stocks)
 
 

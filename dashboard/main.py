@@ -1630,10 +1630,10 @@ async def watchlist(
     all_labels = get_cached_wl_labels(org_id, db)
     # Filter labels based on active exchange so irrelevant groups are hidden
     def _exchange_labels(labels, exf):
-        if exf == "ASX":
+        if exf in ("ASX", "US"):
             return [l for l in labels if not (10 <= l["sort_order"] <= 19)]
-        if exf in ("CRYPTO", "US"):
-            return [l for l in labels if not (20 <= l["sort_order"] <= 38)]
+        if exf == "CRYPTO":
+            return [l for l in labels if not (20 <= l["sort_order"] <= 38) and l["sort_order"] < 100]
         return labels
     ctx["labels"] = _exchange_labels(all_labels, af)
     ctx["active_label"] = label  # currently selected filter (None = all)
@@ -2435,10 +2435,10 @@ async def action_refresh_universe(request: Request, scope: str = Form(None)):
     """Refresh ASX universe with configurable scope (ASX200 / ASX300 / ALL_LISTED)."""
     if not _auth(request):
         return RedirectResponse("/login", 302)
-    org_id = request.session.get("organization_id")
+    organization_id = request.session.get("organization_id")
     from app.tasks.screening import refresh_universe
     try:
-        refresh_universe.delay(scope=scope or None, organization_id=org_id)
+        refresh_universe.delay(scope=scope or None, organization_id=organization_id)
     except Exception:
         pass
     return RedirectResponse("/admin/health?msg=universe", 302)
@@ -2449,10 +2449,10 @@ async def action_recategorise_labels(request: Request, force: str = Form("0")):
     """Bulk-assign sector labels to all unlabelled watchlist items."""
     if not _auth(request):
         return RedirectResponse("/login", 302)
-    org_id = request.session.get("organization_id")
+    organization_id = request.session.get("organization_id")
     from app.tasks.screening import recategorise_watchlist_labels
     try:
-        recategorise_watchlist_labels.delay(organization_id=org_id, force=(force == "1"))
+        recategorise_watchlist_labels.delay(organization_id=organization_id, force=(force == "1"))
     except Exception:
         pass
     return RedirectResponse("/admin/health?msg=recategorise", 302)
@@ -2968,8 +2968,22 @@ def _trader_prices_inner(request: Request, db):
         for s in stocks:
             currency_map[s[0]] = s[1] or "AUD"
 
+    # Build asset_type map (CRYPTO vs EQUITY) for routing live-price fetch
+    asset_map: dict = {}
+    wl_asset_rows = db.query(Watchlist.ticker, Watchlist.asset_type).filter(
+        Watchlist.organization_id == org_id,
+        Watchlist.status == WatchlistStatus.WATCHING,
+    ).all()
+    for r in wl_asset_rows:
+        asset_map[r[0]] = r[1] or "EQUITY"
+    # For tickers in signals/positions not in watchlist, infer from ticker format
+    for t in all_tickers:
+        if t not in asset_map:
+            asset_map[t] = "CRYPTO" if ("-AUD" in t or "-USD" in t or "-USDT" in t) else "EQUITY"
+
     tickers = list(all_tickers)
 
+    # ── Pull latest PriceBar as EOD fallback ────────────────────────────────────────────
     latest_sq = (
         db.query(PriceBar.ticker, func.max(PriceBar.date).label("mx"))
         .filter(PriceBar.ticker.in_(tickers))
@@ -2981,18 +2995,81 @@ def _trader_prices_inner(request: Request, db):
         .join(latest_sq, (PriceBar.ticker == latest_sq.c.ticker) & (PriceBar.date == latest_sq.c.mx))
         .all()
     )
+    eod_map = {b.ticker: b for b in bars}
+
+    def _disp(t: str) -> str:
+        return t.replace(".AX", "").replace("-AUD", "").replace("-USD", "").replace("-USDT", "")
 
     result = {}
-    for b in bars:
-        close = float(b.close)
-        open_ = float(b.open) if b.open and float(b.open) > 0 else close
-        chg = round((close - open_) / open_ * 100, 2)
-        result[b.ticker] = {
-            "display": b.ticker.replace(".AX", "").replace("-AUD", "").replace("-USD", ""),
-            "price": close,
-            "change_pct": chg,
-            "currency": currency_map.get(b.ticker, "AUD"),
-        }
+    for ticker in tickers:
+        currency   = currency_map.get(ticker, "AUD")
+        asset_type = asset_map.get(ticker, "EQUITY")
+
+        # ── Try live intraday price (cached 5 min, shared with watchlist page) ──────────
+        live_cache_key = f"live_price:{ticker}"
+        cached = cache.get(live_cache_key)
+
+        if cached is not None:
+            # Cache hit — use it unless it is a failure sentinel
+            if not cached.get("_failed"):
+                live_close = float(cached.get("close") or cached.get("price") or 0)
+                if live_close > 0:
+                    eod_bar = eod_map.get(ticker)
+                    eod_open = float(eod_bar.open) if eod_bar and eod_bar.open and float(eod_bar.open) > 0 else live_close
+                    chg = cached.get("change_pct")
+                    if chg is None:
+                        chg = round((live_close - eod_open) / eod_open * 100, 2) if eod_open > 0 else 0.0
+                    result[ticker] = {
+                        "display": _disp(ticker),
+                        "price": live_close,
+                        "change_pct": chg,
+                        "currency": currency,
+                        "live": True,
+                    }
+                    continue
+        else:
+            # Cache miss — attempt live fetch
+            try:
+                from app.data.fetcher import get_intraday_price
+                price_result = get_intraday_price(ticker, org_id, asset_type=asset_type)
+                if price_result.get("ok") and price_result.get("price"):
+                    live_close = float(price_result["price"])
+                    eod_bar = eod_map.get(ticker)
+                    eod_open = float(eod_bar.open) if eod_bar and eod_bar.open and float(eod_bar.open) > 0 else live_close
+                    chg = round((live_close - eod_open) / eod_open * 100, 2) if eod_open > 0 else 0.0
+                    live_data = {
+                        "close": live_close,
+                        "change_pct": chg,
+                        "data_source": price_result.get("data_source", "live"),
+                    }
+                    cache.set(live_cache_key, live_data, expire_seconds=300)  # 5-min TTL
+                    result[ticker] = {
+                        "display": _disp(ticker),
+                        "price": live_close,
+                        "change_pct": chg,
+                        "currency": currency,
+                        "live": True,
+                    }
+                    continue
+                else:
+                    # Fetch returned no price — back-off sentinel to avoid hammering
+                    cache.set(live_cache_key, {"_failed": True}, expire_seconds=120)
+            except Exception:
+                cache.set(live_cache_key, {"_failed": True}, expire_seconds=120)
+
+        # ── EOD fallback (PriceBar last close) ──────────────────────────────────────────
+        eod_bar = eod_map.get(ticker)
+        if eod_bar and eod_bar.close:
+            close = float(eod_bar.close)
+            open_ = float(eod_bar.open) if eod_bar.open and float(eod_bar.open) > 0 else close
+            chg = round((close - open_) / open_ * 100, 2)
+            result[ticker] = {
+                "display": _disp(ticker),
+                "price": close,
+                "change_pct": chg,
+                "currency": currency,
+                "live": False,
+            }
 
     return JSONResponse(result)
 
@@ -3205,6 +3282,39 @@ def _trader_watchlist_data_inner(request: Request, db):
         rs_rating = float(bar.rs_rating)  if bar and bar.rs_rating  else None
         high_52w  = float(bar.high_52w)   if bar and bar.high_52w   else None
         low_52w   = float(bar.low_52w)    if bar and bar.low_52w    else None
+
+        # ── For crypto: overlay live price from cache (shared 5-min cache key) ──
+        # This ensures item.close already reflects the live price on initial page load,
+        # before the frontend's /trader/prices poll response arrives.
+        is_crypto_wl = (getattr(w, "asset_type", "EQUITY") == "CRYPTO")
+        if is_crypto_wl:
+            live_cache_key = f"live_price:{w.ticker}"
+            live_cached = cache.get(live_cache_key)
+            if live_cached and not live_cached.get("_failed"):
+                live_close = float(live_cached.get("close") or live_cached.get("price") or 0)
+                if live_close > 0:
+                    close = live_close  # override EOD close with live price
+                    if live_cached.get("change_pct") is not None:
+                        open_ = None  # chg_pct computed from cache below
+            else:
+                # Cache miss for crypto — attempt live fetch and prime the cache
+                try:
+                    from app.data.fetcher import get_intraday_price
+                    pr = get_intraday_price(w.ticker, org_id, asset_type="CRYPTO")
+                    if pr.get("ok") and pr.get("price"):
+                        live_close = float(pr["price"])
+                        eod_open = float(bar.open) if bar and bar.open and float(bar.open) > 0 else live_close
+                        chg_live = round((live_close - eod_open) / eod_open * 100, 2) if eod_open > 0 else 0.0
+                        cache.set(live_cache_key, {"close": live_close, "change_pct": chg_live,
+                                                   "data_source": pr.get("data_source", "live")},
+                                  expire_seconds=300)
+                        close = live_close
+                        open_ = None  # signal to compute chg from live_close vs eod_open below
+                    else:
+                        cache.set(live_cache_key, {"_failed": True}, expire_seconds=120)
+                except Exception:
+                    cache.set(live_cache_key, {"_failed": True}, expire_seconds=120)
+
         chg_pct   = _pct(close, open_) if close and open_ and open_ > 0 else 0.0
         range_pct = None
         if high_52w and low_52w and high_52w > low_52w and close:

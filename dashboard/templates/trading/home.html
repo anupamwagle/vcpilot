@@ -601,10 +601,10 @@ function _swFinish(finalMsg) {
        {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
       All <span style="background:rgba(255,255,255,.22);border-radius:999px;padding:0 .4rem;font-size:.65rem">{{ wl_total_watching }}</span>
     </a>
-    {# Filter labels based on active exchange: hide crypto labels for ASX, hide ASX sector labels for Crypto #}
+    {# Filter labels based on active exchange: hide crypto labels for ASX/US, hide ASX sector labels and custom sector labels for Crypto #}
     {% for lbl in wl_labels %}
-    {% if not (wl_active_exchange == 'ASX' and lbl.sort_order >= 10 and lbl.sort_order <= 19)
-       and not (wl_active_exchange in ('CRYPTO', 'US') and lbl.sort_order >= 20 and lbl.sort_order <= 38) %}
+    {% if not (wl_active_exchange in ('ASX', 'US') and lbl.sort_order >= 10 and lbl.sort_order <= 19)
+       and not (wl_active_exchange == 'CRYPTO' and ((lbl.sort_order >= 20 and lbl.sort_order <= 38) or lbl.sort_order >= 100)) %}
     <a href="javascript:void(0)" onclick="wlFilter('label={{ lbl.id }}{% if wl_only_custom %}&custom=true{% endif %}{% if wl_active_exchange and wl_active_exchange != "ALL" %}&exchange={{ wl_active_exchange }}{% endif %}')"
        style="display:inline-flex;align-items:center;gap:.3rem;padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
        {% if wl_active_label == lbl.id %}background:{{ lbl.color }};color:white;border-color:{{ lbl.color }}

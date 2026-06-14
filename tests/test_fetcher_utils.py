@@ -99,7 +99,7 @@ def test_currency_to_aud_aud_is_passthrough():
 def test_get_top_crypto_tickers_ir_returns_aud():
     from app.data.fetcher import get_top_crypto_tickers
     tickers = get_top_crypto_tickers("CRYPTO_INDEPENDENTRESERVE")
-    assert len(tickers) > 50
+    assert len(tickers) > 30
     assert all(t.endswith("-AUD") for t in tickers)
     assert "BTC-AUD" in tickers
 

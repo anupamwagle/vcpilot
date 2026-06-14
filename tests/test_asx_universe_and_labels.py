@@ -29,6 +29,7 @@ def _seed_stock(db, ticker: str, sector: str = "", industry: str = "", exchange_
     from app.models.market import Stock
     s = Stock(
         ticker=ticker,
+        exchange_code=ticker.split(".")[0],
         exchange_key=exchange_key,
         asset_type="EQUITY",
         currency="AUD",
@@ -565,7 +566,7 @@ class TestRefreshUniverse:
         org, _ = org_and_account
         # Pre-seed with minimal data (no name/sector)
         db_session.add(Stock(
-            ticker="BHP.AX", exchange_key="ASX", asset_type="EQUITY",
+            ticker="BHP.AX", exchange_code="BHP", exchange_key="ASX", asset_type="EQUITY",
             currency="AUD", in_asx200=False, is_active=True,
             name="BHP",  # old abbreviated name
         ))

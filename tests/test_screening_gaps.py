@@ -82,6 +82,7 @@ def test_refresh_price_data_upserts_bar(db_session, org_and_account, monkeypatch
     monkeypatch.setattr("app.tasks.screening.get_current_date", lambda: date.today())
     monkeypatch.setattr("app.tasks.screening._write_task_heartbeat", lambda *a, **kw: None)
     monkeypatch.setattr("app.data.calendar.today_is_trading_day", lambda *a, **kw: True)
+    monkeypatch.setattr("app.tasks.screening.today_is_trading_day", lambda *a, **kw: True)
 
     refresh_price_data.run("ASX")
 
@@ -113,6 +114,7 @@ def test_refresh_price_data_updates_existing_bar(db_session, org_and_account, mo
     monkeypatch.setattr("app.tasks.screening.get_current_date", lambda: today)
     monkeypatch.setattr("app.tasks.screening._write_task_heartbeat", lambda *a, **kw: None)
     monkeypatch.setattr("app.data.calendar.today_is_trading_day", lambda *a, **kw: True)
+    monkeypatch.setattr("app.tasks.screening.today_is_trading_day", lambda *a, **kw: True)
 
     refresh_price_data.run("ASX")
 
@@ -128,6 +130,7 @@ def test_refresh_price_data_no_tickers_aborts(db_session, org_and_account, monke
     monkeypatch.setattr("app.tasks.screening.get_batch_prices",
                         lambda *a, **kw: {})
     monkeypatch.setattr("app.data.calendar.today_is_trading_day", lambda *a, **kw: True)
+    monkeypatch.setattr("app.tasks.screening.today_is_trading_day", lambda *a, **kw: True)
 
     # Should not raise
     refresh_price_data.run("NYSE")
@@ -177,6 +180,7 @@ def test_run_daily_screen_fund_fail_adds_watchlist(db_session, org_and_account, 
     monkeypatch.setattr("app.tasks.screening.compute_rs_ratings", lambda p: {})
     monkeypatch.setattr("app.tasks.screening.get_current_date", lambda: today)
     monkeypatch.setattr("app.data.calendar.today_is_trading_day", lambda *a, **kw: True)
+    monkeypatch.setattr("app.tasks.screening.today_is_trading_day", lambda *a, **kw: True)
     monkeypatch.setattr("app.tasks.screening._write_task_heartbeat", lambda *a, **kw: None)
     monkeypatch.setattr("app.tasks.screening.get_notifier",
                         lambda organization_id=None: MagicMock())
