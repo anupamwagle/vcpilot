@@ -442,6 +442,7 @@ async def login_post(
 
     email_clean = email.strip().lower()
 
+    from app.models.audit import AuditLog, AuditAction
     # 1. Check Super Admin from .env
     if email_clean == settings.superadmin_email.strip().lower() and password == settings.superadmin_password:
         default_org = db.query(Organization).order_by(Organization.id).first()
@@ -450,6 +451,8 @@ async def login_post(
         request.session["organization_id"] = default_org.id if default_org else 1
         request.session["organization_name"] = default_org.name if default_org else "Default Org"
         request.session["email"] = settings.superadmin_email
+        db.add(AuditLog(action=AuditAction.CONFIG_CHANGED, actor=settings.superadmin_email, message="Super Admin logged in from web dashboard", organization_id=default_org.id if default_org else 1))
+        db.commit()
         if next:
             return RedirectResponse(next, 302)
         return RedirectResponse("/", 302)
@@ -458,6 +461,8 @@ async def login_post(
     user = db.query(User).filter(User.email == email_clean).first()
     if user and verify_password(password, user.password_hash):
         if not user.is_active:
+            db.add(AuditLog(action=AuditAction.TASK_ERROR, actor=email_clean, message="Failed login attempt - user account is disabled"))
+            db.commit()
             return templates.TemplateResponse("login.html", {"request": request, "error": "User account is disabled", "next": next}, status_code=401)
         
         # Check if user has "Super Admin" role in DB
@@ -469,15 +474,26 @@ async def login_post(
         request.session["organization_id"] = user.organization_id
         request.session["organization_name"] = user.organization.name
         request.session["email"] = user.email
+        db.add(AuditLog(action=AuditAction.CONFIG_CHANGED, actor=user.email, user_id=user.id, organization_id=user.organization_id, message=f"User {user.email} logged in from web dashboard"))
+        db.commit()
         if next:
             return RedirectResponse(next, 302)
         return RedirectResponse("/", 302)
 
+    db.add(AuditLog(action=AuditAction.TASK_ERROR, actor=email_clean, message=f"Failed login attempt for email {email_clean}"))
+    db.commit()
     return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid email or password", "next": next}, status_code=401)
 
 
 @app.get("/logout")
-async def logout(request: Request):
+async def logout(request: Request, db: Session = Depends(get_db)):
+    email = request.session.get("email")
+    user_id = request.session.get("user_id")
+    org_id = request.session.get("organization_id")
+    if email:
+        from app.models.audit import AuditLog, AuditAction
+        db.add(AuditLog(action=AuditAction.CONFIG_CHANGED, actor=email, user_id=user_id, organization_id=org_id, message=f"User {email} logged out"))
+        db.commit()
     request.session.clear()
     return RedirectResponse("/login", 302)
 
@@ -509,6 +525,8 @@ async def login_request_otp(
     otp = f"{secrets.randbelow(900000) + 100000}"
     user.otp_code = otp
     user.otp_expires_at = datetime.utcnow() + timedelta(minutes=10)
+    from app.models.audit import AuditLog, AuditAction
+    db.add(AuditLog(action=AuditAction.CONFIG_CHANGED, actor=user.email, user_id=user.id, organization_id=user.organization_id, message=f"OTP passcode requested for login"))
     db.commit()
 
     # Send email
@@ -561,12 +579,16 @@ async def login_verify_otp_post(
     if not user:
         return templates.TemplateResponse("verify_otp.html", {"request": request, "email": email, "error": "User session expired. Please request a new OTP.", "next": next}, status_code=400)
     
+    from app.models.audit import AuditLog, AuditAction
     if not user.otp_code or user.otp_code != otp_code.strip() or not user.otp_expires_at or user.otp_expires_at < datetime.utcnow():
+        db.add(AuditLog(action=AuditAction.TASK_ERROR, actor=user.email, user_id=user.id, organization_id=user.organization_id, message=f"Failed OTP passcode verification attempt"))
+        db.commit()
         return templates.TemplateResponse("verify_otp.html", {"request": request, "email": email, "error": "Invalid or expired OTP code", "next": next}, status_code=400)
 
     # Clear OTP
     user.otp_code = None
     user.otp_expires_at = None
+    db.add(AuditLog(action=AuditAction.CONFIG_CHANGED, actor=user.email, user_id=user.id, organization_id=user.organization_id, message=f"OTP passcode verified successfully"))
     db.commit()
 
     is_super = any(r.name == "Super Admin" for r in user.roles)
@@ -596,6 +618,15 @@ async def superadmin_switch_org(request: Request, organization_id: int = Form(..
     if org:
         request.session["organization_id"] = org.id
         request.session["organization_name"] = org.name
+        from app.models.audit import AuditLog, AuditAction
+        db.add(AuditLog(
+            action=AuditAction.CONFIG_CHANGED,
+            actor=request.session.get("email", "superadmin"),
+            user_id=request.session.get("user_id"),
+            organization_id=org.id,
+            message=f"Super Admin switched active organization context to {org.name}"
+        ))
+        db.commit()
 
     referer = request.headers.get("referer", "/")
     return RedirectResponse(referer, 303)
@@ -2472,6 +2503,16 @@ async def watchlist_add(
         asset_type=asset_type,
         currency=currency,
     )
+    from app.models.audit import AuditLog, AuditAction
+    db.add(AuditLog(
+        action=AuditAction.CONFIG_CHANGED,
+        actor=request.session.get("email", "user"),
+        user_id=request.session.get("user_id"),
+        organization_id=org_id,
+        ticker=t,
+        message=f"Added {t} to watchlist"
+    ))
+    db.commit()
     return RedirectResponse("/watchlist?msg=added", 302)
 
 
@@ -2507,6 +2548,16 @@ async def watchlist_promote(request: Request, item_id: int, db: Session = Depend
             request.session.get("email", "dashboard"),
             request.session.get("user_id")
         )
+        from app.models.audit import AuditLog, AuditAction
+        db.add(AuditLog(
+            action=AuditAction.CONFIG_CHANGED,
+            actor=request.session.get("email", "dashboard"),
+            user_id=request.session.get("user_id"),
+            organization_id=org_id,
+            ticker=w.ticker,
+            message=f"Manual promotion of {w.ticker} queued successfully"
+        ))
+        db.commit()
     except Exception as e:
         from loguru import logger
         from app.models.signal import Watchlist as _Watchlist
@@ -2541,6 +2592,15 @@ async def watchlist_remove(request: Request, item_id: int, db: Session = Depends
     item = db.query(Watchlist).filter(Watchlist.id == item_id, Watchlist.organization_id == org_id).first()
     if item:
         item.status = WatchlistStatus.REMOVED
+        from app.models.audit import AuditLog, AuditAction
+        db.add(AuditLog(
+            action=AuditAction.CONFIG_CHANGED,
+            actor=request.session.get("email", "user"),
+            user_id=request.session.get("user_id"),
+            organization_id=org_id,
+            ticker=item.ticker,
+            message=f"Removed {item.ticker} from watchlist"
+        ))
         db.commit()
     return RedirectResponse("/watchlist", 302)
 
@@ -3801,6 +3861,15 @@ async def trader_watchlist_promote(request: Request, item_id: int, db: Session =
             request.session.get("email", "dashboard"),
             request.session.get("user_id"),
         )
+        db.add(AuditLog(
+            action=AuditAction.CONFIG_CHANGED,
+            actor=request.session.get("email", "dashboard"),
+            user_id=request.session.get("user_id"),
+            organization_id=org_id,
+            ticker=ticker,
+            message=f"Trader WL terminal: manual promotion of {ticker} queued successfully"
+        ))
+        db.commit()
         return JSONResponse({"ok": True, "ticker": ticker, "message": f"{ticker} queued for promotion"})
     except Exception as e:
         from loguru import logger
@@ -5153,6 +5222,7 @@ async def superadmin_organizations_create(
     if request.session.get("user_role") != "superadmin":
         return RedirectResponse("/", 302)
 
+    from app.config import settings
     from app.models.account import Organization, OrganizationTier, Account, AccountTier
     from app.models.auth import User, Role, hash_password
     from app.models.config import SystemConfig, ConfigValueType
@@ -5273,6 +5343,14 @@ async def superadmin_organizations_create(
             updated_by="superadmin"
         ))
 
+    from app.models.audit import AuditLog, AuditAction
+    db.add(AuditLog(
+        action=AuditAction.CONFIG_CHANGED,
+        actor=request.session.get("email", "superadmin"),
+        user_id=request.session.get("user_id"),
+        organization_id=org.id,
+        message=f"Super Admin created organization {org.name} (Tier: {tier})"
+    ))
     db.commit()
 
     # Welcome email sending flow for Organization Admin
@@ -5710,6 +5788,13 @@ async def superadmin_users_create(
     role = db.query(Role).filter(Role.id == role_id).first()
     if role:
         user.roles.append(role)
+    from app.models.audit import AuditLog, AuditAction
+    db.add(AuditLog(
+        action=AuditAction.CONFIG_CHANGED,
+        actor=request.session.get("email", "superadmin"),
+        user_id=request.session.get("user_id"),
+        message=f"Super Admin created user account {user.email} with role {role.name if role else 'None'}"
+    ))
     db.commit()
 
     import urllib.parse
@@ -5752,6 +5837,13 @@ async def superadmin_user_update_role(user_id: int, request: Request, role_id: i
     role = db.query(Role).filter(Role.id == role_id).first()
     if user and role:
         user.roles = [role]
+        from app.models.audit import AuditLog, AuditAction
+        db.add(AuditLog(
+            action=AuditAction.CONFIG_CHANGED,
+            actor=request.session.get("email", "superadmin"),
+            user_id=request.session.get("user_id"),
+            message=f"Super Admin updated role of user {user.email} to {role.name}"
+        ))
         db.commit()
     return RedirectResponse("/superadmin/users?saved=1", 302)
 
@@ -5775,6 +5867,13 @@ async def superadmin_user_reset_password(user_id: int, request: Request, db: Ses
     token = secrets.token_urlsafe(32)
     user.reset_token = token
     user.reset_token_expires = datetime.utcnow() + timedelta(hours=1)
+    from app.models.audit import AuditLog, AuditAction
+    db.add(AuditLog(
+        action=AuditAction.CONFIG_CHANGED,
+        actor=request.session.get("email", "superadmin"),
+        user_id=request.session.get("user_id"),
+        message=f"Super Admin triggered password reset for user {user.email}"
+    ))
     db.commit()
 
     host = request.headers.get("host", "localhost:8501")
@@ -6237,6 +6336,76 @@ async def superadmin_exchange_update(request: Request, exchange_key: str, displa
 
 
 # ===========================================================================
+# SUPER ADMIN — USER ACTIVITY LOG
+# ===========================================================================
+
+@app.get("/superadmin/activity", response_class=HTMLResponse)
+async def superadmin_activity(
+    request: Request,
+    org_id: str = None,
+    action: str = None,
+    search: str = None,
+    db: Session = Depends(get_db)
+):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    if not _is_superadmin(request):
+        return RedirectResponse("/?error=access_denied", 302)
+
+    from app.models.audit import AuditLog, AuditAction
+    from app.models.account import Organization
+    from sqlalchemy import desc, or_
+
+    q = db.query(AuditLog).order_by(desc(AuditLog.created_at))
+
+    if org_id:
+        q = q.filter(AuditLog.organization_id == int(org_id))
+    
+    if action and action != "ALL":
+        q = q.filter(AuditLog.action == action)
+
+    if search:
+        s_term = f"%{search.strip()}%"
+        q = q.filter(
+            or_(
+                AuditLog.message.ilike(s_term),
+                AuditLog.actor.ilike(s_term),
+                AuditLog.ticker.ilike(s_term)
+            )
+        )
+
+    logs = q.limit(200).all()
+
+    organizations = db.query(Organization).order_by(Organization.name).all()
+    actions = sorted([a.value for a in AuditAction])
+
+    display_tz = _get_display_tz(None, db)
+    formatted_logs = []
+    for l in logs:
+        formatted_logs.append({
+            "id": l.id,
+            "time": _fmt_dt(str(l.created_at), display_tz),
+            "action": str(l.action).replace("AuditAction.", ""),
+            "actor": l.actor,
+            "ticker": l.ticker or "—",
+            "message": l.message or "",
+            "org_name": l.organization.name if l.organization else "System",
+            "before": l.before_value or "—",
+            "after": l.after_value or "—",
+        })
+
+    ctx = _global(request, db)
+    ctx.update({
+        "logs": formatted_logs,
+        "organizations": organizations,
+        "actions": actions,
+        "selected_org_id": org_id,
+        "selected_action": action,
+        "search": search,
+    })
+    return templates.TemplateResponse("superadmin/activity.html", ctx)
+
+
 # SUPER ADMIN — CENTRAL OPERATIONS
 # ===========================================================================
 
@@ -6900,6 +7069,13 @@ async def superadmin_users_create(
     role = db.query(Role).filter(Role.id == role_id).first()
     if role:
         user.roles.append(role)
+    from app.models.audit import AuditLog, AuditAction
+    db.add(AuditLog(
+        action=AuditAction.CONFIG_CHANGED,
+        actor=request.session.get("email", "superadmin"),
+        user_id=request.session.get("user_id"),
+        message=f"Super Admin created user account {user.email} with role {role.name if role else 'None'}"
+    ))
     db.commit()
 
     import urllib.parse
@@ -6942,6 +7118,13 @@ async def superadmin_user_update_role(user_id: int, request: Request, role_id: i
     role = db.query(Role).filter(Role.id == role_id).first()
     if user and role:
         user.roles = [role]
+        from app.models.audit import AuditLog, AuditAction
+        db.add(AuditLog(
+            action=AuditAction.CONFIG_CHANGED,
+            actor=request.session.get("email", "superadmin"),
+            user_id=request.session.get("user_id"),
+            message=f"Super Admin updated role of user {user.email} to {role.name}"
+        ))
         db.commit()
     return RedirectResponse("/superadmin/users?saved=1", 302)
 
@@ -6965,6 +7148,13 @@ async def superadmin_user_reset_password(user_id: int, request: Request, db: Ses
     token = secrets.token_urlsafe(32)
     user.reset_token = token
     user.reset_token_expires = datetime.utcnow() + timedelta(hours=1)
+    from app.models.audit import AuditLog, AuditAction
+    db.add(AuditLog(
+        action=AuditAction.CONFIG_CHANGED,
+        actor=request.session.get("email", "superadmin"),
+        user_id=request.session.get("user_id"),
+        message=f"Super Admin triggered password reset for user {user.email}"
+    ))
     db.commit()
 
     host = request.headers.get("host", "localhost:8501")

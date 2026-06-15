@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Super Admin · User Activity{% endblock %}
+{% block page_title %}Global User Activity Log{% endblock %}
+
+{% block content %}
+
+<!-- Filters -->
+<div class="card p-4 mb-6">
+  <form method="get" action="/superadmin/activity" class="flex flex-wrap items-end gap-3">
+    <div class="flex-1 min-w-[150px]">
+      <label class="field-label mb-1.5">Organisation</label>
+      <select name="org_id" class="input w-full text-xs">
+        <option value="">All Organisations</option>
+        {% for org in organizations %}
+          <option value="{{ org.id }}" {% if selected_org_id|string == org.id|string %}selected{% endif %}>{{ org.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    
+    <div class="flex-1 min-w-[150px]">
+      <label class="field-label mb-1.5">Action</label>
+      <select name="action" class="input w-full text-xs">
+        <option value="ALL">All Actions</option>
+        {% for act in actions %}
+          <option value="{{ act }}" {% if act == selected_action %}selected{% endif %}>{{ act }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="flex-[2] min-w-[200px]">
+      <label class="field-label mb-1.5">Search Message / Actor / Ticker</label>
+      <input type="text" name="search" value="{{ search or '' }}" placeholder="Search log entries..." class="input w-full text-xs" />
+    </div>
+
+    <div class="flex gap-2">
+      <button type="submit" class="btn-primary text-xs py-1.5 px-4">Apply Filters</button>
+      <a href="/superadmin/activity" class="btn-ghost text-xs py-1.5 px-3">Clear</a>
+    </div>
+  </form>
+</div>
+
+<!-- Log table -->
+<div class="card overflow-hidden">
+  <div class="section-head px-4 py-3">
+    <p class="section-title">📊 User & System Activity Events</p>
+    <span class="text-xs" style="color:var(--text-subtle)">{{ logs|length }} events showing · showing latest 200</span>
+  </div>
+  {% if logs %}
+  <div class="overflow-x-auto">
+    <table class="w-full text-left border-collapse">
+      <thead>
+        <tr style="background:var(--surface-alt);border-bottom:1px solid var(--border)">
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted);width:9rem">Time</th>
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted);width:9rem">Organisation</th>
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted);width:8rem">Action</th>
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted);width:10rem">Actor</th>
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted);width:5rem">Ticker</th>
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Message</th>
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted);width:5rem">Before</th>
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted);width:5rem">After</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in logs %}
+        <tr class="tbl-row border-b last:border-0" style="border-color:var(--border)">
+          <td class="p-3 text-xs font-mono" style="color:var(--text-subtle)">{{ log.time }}</td>
+          <td class="p-3 text-xs font-semibold">
+            <span class="badge-xs" style="background:var(--surface-alt);color:var(--text)" title="{{ log.org_name }}">
+              {{ log.org_name }}
+            </span>
+          </td>
+          <td class="p-3 text-xs">
+            <span class="tag-admin" style="font-size:.7rem;text-transform:uppercase">{{ log.action }}</span>
+          </td>
+          <td class="p-3 text-xs font-mono" style="color:var(--text-muted)" title="{{ log.actor }}">{{ log.actor }}</td>
+          <td class="p-3 text-xs font-mono">{{ log.ticker }}</td>
+          <td class="p-3 text-xs" style="color:var(--text-muted);max-width:25rem;word-wrap:break-word">{{ log.message }}</td>
+          <td class="p-3 text-xs font-mono" style="color:var(--text-subtle)">{{ log.before }}</td>
+          <td class="p-3 text-xs font-mono" style="color:{% if log.after not in ('—','') %}var(--pos){% else %}var(--text-subtle){% endif %}">{{ log.after }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="p-8 text-center text-xs" style="color:var(--text-subtle)">
+    No activity log records matched the filter criteria.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

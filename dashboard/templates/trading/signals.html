@@ -129,8 +129,8 @@
       {% if s.is_promoted_manual %}
       <span style="font-size:.65rem;padding:.15rem .5rem;border-radius:.3rem;font-weight:600;background:rgba(245,158,11,.12);color:#d97706;border:1px solid rgba(245,158,11,.35)">👤 Manual Promotion</span>
       {% endif %}
-      <span class="tag">Trend {{ s.trend_score }}/9</span>
-      <span class="tag">Fund {{ s.fund_score }}/7</span>
+      <span class="tag">Trend {{ s.trend_score }}/{{ 8 if s.asset_type == 'CRYPTO' else 9 }}</span>
+      {% if s.asset_type != 'CRYPTO' %}<span class="tag">Fund {{ s.fund_score }}/7</span>{% endif %}
       {% if s.has_overrides %}
       <span style="font-size:.65rem;padding:.15rem .5rem;border-radius:.3rem;font-weight:600;background:var(--warn-bg);color:var(--warn);border:1px solid var(--caution-border)">⚙ Overrides active</span>
       {% endif %}

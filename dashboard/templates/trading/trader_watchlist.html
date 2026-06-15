@@ -795,84 +795,47 @@
         <!-- Rule results (scrollable) -->
         <div class="right-scroll">
 
-          <!-- TREND TEMPLATE rules -->
-          <template x-if="hasCat('trend_')">
+          <!-- Waiting to be Completed -->
+          <template x-if="promotionRules.pending.length > 0">
             <div>
-              <div class="rule-cat">Trend Template</div>
-              <template x-for="r in catRules('trend_')" :key="r.key">
+              <div class="rule-cat" style="color:var(--warn); border-left: 2px solid var(--warn); padding-left: 8px">
+                Waiting to be Completed (<span x-text="promotionRules.pending.length"></span>)
+              </div>
+              <template x-for="r in promotionRules.pending" :key="r.key">
                 <div class="rule-row">
-                  <span class="rule-icon" x-text="r.overridden ? '→' : r.passed ? '✓' : r.na ? '–' : '✗'"
-                        :class="r.overridden ? 'rule-ovr' : r.passed ? 'rule-pass' : r.na ? 'rule-na' : 'rule-fail'"></span>
-                  <span class="rule-name" :class="r.passed ? '' : r.overridden ? 'rule-ovr' : r.na ? 'rule-na' : 'rule-fail'"
-                        x-text="r.label"></span>
-                  <span class="rule-val" :class="r.passed ? 'up' : r.overridden ? 'rule-ovr' : 'muted'"
-                        x-text="r.msg || ''"></span>
-                </div>
-              </template>
-            </div>
-          </template>
-
-          <!-- VCP rules -->
-          <template x-if="hasCat('vcp_')">
-            <div>
-              <div class="rule-cat">VCP Pattern</div>
-              <template x-for="r in catRules('vcp_')" :key="r.key">
-                <div class="rule-row">
-                  <span class="rule-icon" x-text="r.overridden ? '→' : r.passed ? '✓' : r.na ? '–' : '✗'"
-                        :class="r.overridden ? 'rule-ovr' : r.passed ? 'rule-pass' : r.na ? 'rule-na' : 'rule-fail'"></span>
-                  <span class="rule-name" :class="r.passed ? '' : r.overridden ? 'rule-ovr' : r.na ? 'rule-na' : 'rule-fail'"
-                        x-text="r.label"></span>
-                  <span class="rule-val" :class="r.passed ? 'up' : r.overridden ? 'rule-ovr' : 'muted'"
-                        x-text="r.msg || ''"></span>
-                </div>
-              </template>
-            </div>
-          </template>
-
-          <!-- FUNDAMENTAL rules -->
-          <template x-if="hasCat('fundamental_')">
-            <div>
-              <div class="rule-cat">Fundamentals</div>
-              <template x-for="r in catRules('fundamental_')" :key="r.key">
-                <div class="rule-row">
-                  <span class="rule-icon" x-text="r.overridden ? '→' : r.passed ? '✓' : r.na ? '–' : '✗'"
-                        :class="r.overridden ? 'rule-ovr' : r.passed ? 'rule-pass' : r.na ? 'rule-na' : 'rule-fail'"></span>
-                  <span class="rule-name" :class="r.passed ? '' : r.overridden ? 'rule-ovr' : r.na ? 'rule-na' : 'rule-fail'"
-                        x-text="r.label"></span>
-                  <span class="rule-val" :class="r.passed ? 'up' : r.overridden ? 'rule-ovr' : 'muted'"
-                        x-text="r.msg || ''"></span>
-                </div>
-              </template>
-            </div>
-          </template>
-
-          <!-- CRYPTO rules -->
-          <template x-if="hasCat('crypto_')">
-            <div>
-              <div class="rule-cat" style="color:#f7931a">₿ Crypto Rules</div>
-              <template x-for="r in catRules('crypto_')" :key="r.key">
-                <div class="rule-row">
-                  <span class="rule-icon" x-text="r.overridden ? '→' : r.passed ? '✓' : r.na ? '–' : '✗'"
-                        :class="r.overridden ? 'rule-ovr' : r.passed ? 'rule-pass' : r.na ? 'rule-na' : 'rule-fail'"></span>
-                  <span class="rule-name" :class="r.passed ? '' : r.overridden ? 'rule-ovr' : r.na ? 'rule-na' : 'rule-fail'"
-                        x-text="r.label"></span>
-                  <span class="rule-val" :class="r.passed ? 'up' : r.overridden ? 'rule-ovr' : 'muted'"
-                        x-text="r.msg || ''"></span>
-                </div>
-              </template>
-            </div>
-          </template>
-
-          <!-- Any remaining / unknown rules -->
-          <template x-if="hasCat('other')">
-            <div>
-              <div class="rule-cat">Other</div>
-              <template x-for="r in catRules('other')" :key="r.key">
-                <div class="rule-row">
-                  <span class="rule-icon" x-text="r.passed ? '✓' : '✗'"
-                        :class="r.passed ? 'rule-pass' : 'rule-fail'"></span>
-                  <span class="rule-name" x-text="r.label"></span>
+                  <span class="rule-icon rule-fail">✗</span>
+                  <span class="rule-name rule-fail">
+                    <span style="font-size:8px; font-weight:800; opacity:0.6; margin-right:4px; text-transform:uppercase" x-text="`[${r.cat}]`"></span>
+                    <span x-text="r.label"></span>
+                  </span>
                   <span class="rule-val muted" x-text="r.msg || ''"></span>
+                </div>
+              </template>
+            </div>
+          </template>
+
+          <!-- All Passed / Promotion Ready Banner -->
+          <template x-if="promotionRules.pending.length === 0 && promotionRules.completed.length > 0">
+            <div style="margin: 10px; padding: 12px; background: rgba(74, 222, 128, 0.1); border: 1px solid var(--up); border-radius: 6px; text-align: center">
+              <div style="color: var(--up); font-weight: 800; font-size: 11px; margin-bottom: 4px">🎉 Ready for Promotion</div>
+              <div style="color: var(--muted); font-size: 9px">All screening criteria met. Ready to be promoted to signal.</div>
+            </div>
+          </template>
+
+          <!-- Completed -->
+          <template x-if="promotionRules.completed.length > 0">
+            <div style="margin-top:10px">
+              <div class="rule-cat" style="color:var(--up); border-left: 2px solid var(--up); padding-left: 8px">
+                Completed (<span x-text="promotionRules.completed.length"></span>)
+              </div>
+              <template x-for="r in promotionRules.completed" :key="r.key">
+                <div class="rule-row">
+                  <span class="rule-icon" :class="r.na ? 'rule-na' : 'rule-pass'" x-text="r.na ? '–' : '✓'"></span>
+                  <span class="rule-name" :class="r.na ? 'rule-na' : ''">
+                    <span style="font-size:8px; font-weight:800; opacity:0.6; margin-right:4px; text-transform:uppercase" x-text="`[${r.cat}]`"></span>
+                    <span x-text="r.label"></span>
+                  </span>
+                  <span class="rule-val" :class="r.na ? 'muted' : 'up'" x-text="r.msg || ''"></span>
                 </div>
               </template>
             </div>
@@ -884,6 +847,7 @@
               No rule data — screener hasn't run for this ticker yet
             </div>
           </template>
+
         </div>
 
         <!-- Actions -->
@@ -1282,6 +1246,39 @@ function wlApp() {
         const rank = r => r.na ? 2 : r.passed ? 0 : 1;
         return rank(a) - rank(b);
       });
+    },
+
+    get promotionRules() {
+      if (!this.selectedItem?.rule_results) return { pending: [], completed: [] };
+      const rules = this.selectedItem.rule_results;
+      const pending = [];
+      const completed = [];
+      for (const [k, v] of Object.entries(rules)) {
+        const passed = typeof v === 'object' ? !!v?.passed : !!v;
+        const na = typeof v === 'object' && v?.value === null && v?.message === null;
+        const cat = ruleCat(k);
+        const catLabel = cat === 'trend_' ? 'Trend' :
+                         cat === 'vcp_' ? 'VCP' :
+                         cat === 'fundamental_' ? 'Fund' :
+                         cat === 'crypto_' ? 'Crypto' :
+                         cat === 'regime_' ? 'Regime' : 'Other';
+        const ruleObj = {
+          key: k,
+          cat: catLabel,
+          label: RULE_LABELS[k] || k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+          passed,
+          na,
+          msg: typeof v === 'object' ? fmtRuleMsg(v) : '',
+        };
+        if (na) {
+          completed.push(ruleObj);
+        } else if (passed) {
+          completed.push(ruleObj);
+        } else {
+          pending.push(ruleObj);
+        }
+      }
+      return { pending, completed };
     },
 
     // ── Promote to signal ─────────────────────────────────────────────────────
