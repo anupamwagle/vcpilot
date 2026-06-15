@@ -1628,29 +1628,38 @@ async def watchlist(
 
     # Load labels from Redis cache — invalidated by label create/edit routes
     all_labels = get_cached_wl_labels(org_id, db)
-    # Filter labels based on active exchange so irrelevant groups are hidden
-    def _exchange_labels(labels, exf):
-        if exf in ("ASX", "US"):
-            return [l for l in labels if not (10 <= l["sort_order"] <= 19)]
-        if exf == "CRYPTO":
-            return [l for l in labels if not (20 <= l["sort_order"] <= 38) and l["sort_order"] < 100]
-        return labels
-    ctx["labels"] = _exchange_labels(all_labels, af)
-    ctx["active_label"] = label  # currently selected filter (None = all)
 
-    # Label counts: one GROUP BY query → {label_id: count} for badge display on chips
+    # ── Label counts: scoped to the active exchange filter ─────────────────────
+    # Build the exchange filter predicate (same logic as the main item query below)
     from sqlalchemy import func as _sqf
-    _cnt_rows = (
+    from sqlalchemy import or_ as _or_cnt
+    _label_cnt_q = (
         db.query(Watchlist.label_id, _sqf.count(Watchlist.id))
         .filter(
             Watchlist.organization_id == org_id,
             Watchlist.status == WatchlistStatus.WATCHING,
             Watchlist.label_id.isnot(None),
         )
-        .group_by(Watchlist.label_id)
-        .all()
     )
+    if af == "ASX":
+        _label_cnt_q = _label_cnt_q.filter(Watchlist.exchange_key == "ASX")
+    elif af == "US":
+        _label_cnt_q = _label_cnt_q.filter(Watchlist.exchange_key.in_(["NYSE", "NASDAQ"]))
+    elif af == "CRYPTO":
+        _label_cnt_q = _label_cnt_q.filter(_or_cnt(
+            Watchlist.asset_type == "CRYPTO",
+            Watchlist.ticker.like("%-AUD"),
+            Watchlist.ticker.like("%-USD"),
+            Watchlist.ticker.like("%-USDT"),
+        ))
+    _cnt_rows = _label_cnt_q.group_by(Watchlist.label_id).all()
     ctx["label_counts"] = {row[0]: row[1] for row in _cnt_rows}
+
+    # Only show labels that have at least one item in the current exchange view
+    _active_label_ids = set(ctx["label_counts"].keys())
+    ctx["labels"] = [l for l in all_labels if l["id"] in _active_label_ids]
+    ctx["active_label"] = label  # currently selected filter (None = all)
+
     ctx["total_watching"] = (
         db.query(_sqf.count(Watchlist.id))
         .filter(Watchlist.organization_id == org_id, Watchlist.status == WatchlistStatus.WATCHING)

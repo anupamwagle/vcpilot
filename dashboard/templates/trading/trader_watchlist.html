@@ -969,7 +969,7 @@ function wlApp() {
     livePrices:   {},
     selectedItem: null,
     selectedId:   null,
-    assetFilter:  'ALL',
+    _assetFilter: 'ALL',
     labelFilter:  null,   // null = all labels; set to label_id to filter by that label
     search:       '',
     chartWidget:  null,
@@ -983,6 +983,20 @@ function wlApp() {
     _clockTimer:  null,
     _priceTimer:  null,
     _dataTimer:   null,
+
+    // assetFilter getter/setter \u2014 resets labelFilter when switching asset type
+    // so the user doesn't end up with a selected label that has zero items visible.
+    get assetFilter() { return this._assetFilter; },
+    set assetFilter(val) {
+      this._assetFilter = val;
+      // If the active labelFilter has no items in the new asset view, reset it
+      if (this.labelFilter !== null) {
+        const labels = this.allLabels; // already asset-filter-aware
+        if (!labels.some(l => l.id === this.labelFilter)) {
+          this.labelFilter = null;
+        }
+      }
+    },
 
     // ── Init ────────────────────────────────────────────────────────────────
     async init() {
@@ -1053,7 +1067,7 @@ function wlApp() {
 
     get filteredTotal() { return this.filteredItems.length; },
 
-    // All unique labels across all groups (for label filter pills) — includes item count
+    // All unique labels across all groups (for label filter pills) — counts respect current assetFilter
     get allLabels() {
       if (!this.data?.groups) return [];
       const seen = new Set();
@@ -1061,7 +1075,16 @@ function wlApp() {
       for (const g of this.data.groups) {
         if (g.label_id && !seen.has(g.label_id)) {
           seen.add(g.label_id);
-          labels.push({ id: g.label_id, name: g.label_name, color: g.label_color, count: g.items.length });
+          // Count only items matching the current assetFilter so pills reflect the filtered view
+          const count = g.items.filter(i =>
+            this.assetFilter === 'ALL' ||
+            (this.assetFilter === 'EQUITY' && !this.isCrypto(i)) ||
+            (this.assetFilter === 'CRYPTO' && this.isCrypto(i))
+          ).length;
+          // Only show labels that have at least one item in the current asset view
+          if (count > 0) {
+            labels.push({ id: g.label_id, name: g.label_name, color: g.label_color, count });
+          }
         }
       }
       return labels;
