@@ -476,7 +476,7 @@
                 @change="labelFilter = ($event.target.value === 'null' ? null : parseInt($event.target.value))">
           <option value="null">⚡ All Labels (Show All Groups)</option>
           <template x-for="lbl in allLabels" :key="lbl.id">
-            <option :value="lbl.id" x-text="lbl.name"></option>
+            <option :value="lbl.id" :text="lbl.name + ' (' + lbl.count + ')'"></option>
           </template>
         </select>
       </template>
@@ -492,6 +492,7 @@
                   @click="labelFilter = (labelFilter === lbl.id ? null : lbl.id)">
             <span class="lbl-dot" :style="`background:${lbl.color}`"></span>
             <span x-text="lbl.name"></span>
+            <span x-text="lbl.count" style="opacity:.6;font-size:8px;margin-left:1px"></span>
           </button>
         </template>
       </div>
@@ -1027,14 +1028,23 @@ function wlApp() {
       } catch (e) { /* silent */ }
     },
 
+    // ── Crypto detection — ticker suffix is authoritative (same logic as backend) ────────
+    // Handles DB rows where asset_type was stored as NULL/"EQUITY" due to Jun 2026 bug.
+    isCrypto(item) {
+      return item.asset_type === 'CRYPTO'
+        || item.ticker?.endsWith('-AUD')
+        || item.ticker?.endsWith('-USD')
+        || item.ticker?.endsWith('-USDT');
+    },
+
     // ── Computed: all items flat (filtered by search + assetFilter + labelFilter) ─────
     get filteredItems() {
       if (!this.data?.groups) return [];
       const q = this.search.toLowerCase().trim();
       return this.data.groups.flatMap(g => g.items).filter(item => {
         const assetOk = this.assetFilter === 'ALL'
-          || (this.assetFilter === 'EQUITY' && item.asset_type !== 'CRYPTO')
-          || (this.assetFilter === 'CRYPTO' && item.asset_type === 'CRYPTO');
+          || (this.assetFilter === 'EQUITY' && !this.isCrypto(item))
+          || (this.assetFilter === 'CRYPTO' && this.isCrypto(item));
         const labelOk = this.labelFilter === null || item.label_id === this.labelFilter;
         const searchOk = !q || item.display_ticker.toLowerCase().includes(q) || (item.name||'').toLowerCase().includes(q);
         return assetOk && labelOk && searchOk;
@@ -1043,7 +1053,7 @@ function wlApp() {
 
     get filteredTotal() { return this.filteredItems.length; },
 
-    // All unique labels across all groups (for label filter pills)
+    // All unique labels across all groups (for label filter pills) — includes item count
     get allLabels() {
       if (!this.data?.groups) return [];
       const seen = new Set();
@@ -1051,7 +1061,7 @@ function wlApp() {
       for (const g of this.data.groups) {
         if (g.label_id && !seen.has(g.label_id)) {
           seen.add(g.label_id);
-          labels.push({ id: g.label_id, name: g.label_name, color: g.label_color });
+          labels.push({ id: g.label_id, name: g.label_name, color: g.label_color, count: g.items.length });
         }
       }
       return labels;
@@ -1066,7 +1076,7 @@ function wlApp() {
         .map(g => ({
           ...g,
           items: g.items.filter(i =>
-            i.asset_type !== 'CRYPTO' &&
+            !this.isCrypto(i) &&
             (!q || i.display_ticker.toLowerCase().includes(q) || (i.name||'').toLowerCase().includes(q))
           )
         })).filter(g => g.items.length > 0);
@@ -1081,7 +1091,7 @@ function wlApp() {
         .map(g => ({
           ...g,
           items: g.items.filter(i =>
-            i.asset_type === 'CRYPTO' &&
+            this.isCrypto(i) &&
             (!q || i.display_ticker.toLowerCase().includes(q) || (i.name||'').toLowerCase().includes(q))
           )
         })).filter(g => g.items.length > 0);

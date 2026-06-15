@@ -486,6 +486,7 @@
                     @click="wlLabelFilter = (wlLabelFilter === lbl.name ? null : lbl.name)">
               <span class="wlp-dot" :style="`background:${lbl.color}`"></span>
               <span x-text="lbl.name"></span>
+              <span x-text="lbl.count" style="opacity:.6;font-size:8px;margin-left:1px"></span>
             </button>
           </template>
         </div>
@@ -1209,12 +1210,16 @@ function traderApp() {
 
     // ── Watchlist label filter helpers ────────────────────────────────────
     get allWlLabels() {
+      const counts = {};
+      for (const item of this.watchlist) {
+        if (item.label_name) counts[item.label_name] = (counts[item.label_name] || 0) + 1;
+      }
       const seen = new Set();
       const labels = [];
       for (const item of this.watchlist) {
         if (item.label_name && !seen.has(item.label_name)) {
           seen.add(item.label_name);
-          labels.push({ name: item.label_name, color: item.label_color });
+          labels.push({ name: item.label_name, color: item.label_color, count: counts[item.label_name] || 0 });
         }
       }
       return labels;
