@@ -1629,6 +1629,15 @@ async def watchlist(
     # Load labels from Redis cache — invalidated by label create/edit routes
     all_labels = get_cached_wl_labels(org_id, db)
 
+    # Filter labels based on active exchange so irrelevant groups are hidden
+    def _exchange_labels(labels, exf):
+        if exf in ("ASX", "US"):
+            return [l for l in labels if not (10 <= l["sort_order"] <= 19)]
+        if exf == "CRYPTO":
+            return [l for l in labels if not (20 <= l["sort_order"] <= 38) and l["sort_order"] < 100]
+        return labels
+    filtered_labels = _exchange_labels(all_labels, af)
+
     # ── Label counts: scoped to the active exchange filter ─────────────────────
     # Build the exchange filter predicate (same logic as the main item query below)
     from sqlalchemy import func as _sqf
@@ -1657,7 +1666,7 @@ async def watchlist(
 
     # Only show labels that have at least one item in the current exchange view
     _active_label_ids = set(ctx["label_counts"].keys())
-    ctx["labels"] = [l for l in all_labels if l["id"] in _active_label_ids]
+    ctx["labels"] = [l for l in filtered_labels if l["id"] in _active_label_ids]
     ctx["active_label"] = label  # currently selected filter (None = all)
 
     ctx["total_watching"] = (
@@ -3330,7 +3339,7 @@ def _trader_watchlist_data_inner(request: Request, db):
         return (c.flag_emoji if c and c.flag_emoji else "")
 
     def _disp(ticker: str) -> str:
-        return ticker.replace(".AX", "").replace("-AUD", "").replace("-USD", "")
+        return ticker.replace(".AX", "").replace("-AUD", "").replace("-USD", "").replace("-USDT", "")
 
     stock_names = get_cached_stock_names(db)
 
@@ -3779,6 +3788,8 @@ async def admin_health(request: Request, db: Session = Depends(get_db)):
         "entry_crypto": _lr(["Entry check"], "CRYPTO") if has_crypto else None,
         "exit_asx":    _lr(["Exit check", "exit rule"], "ASX"),
         "exit_crypto": _lr(["Exit check"], "CRYPTO") if has_crypto else None,
+        # Live price cache refresh — every 5 min for crypto watchlist tickers
+        "live_prices_crypto": _lr(["Live price cache", "live price cache"], "CRYPTO") if has_crypto else None,
     }
     ctx.update({"capital":float(account.capital_aud) if account else 0,"is_paper_account":account.is_paper if account else True,
         "recent_logs":[{"action":str(l.action).replace("AuditAction.",""),"ticker":l.ticker or "—","message":(l.message or "")[:80],"actor":l.actor,"time":_fmt_dt(str(l.created_at),display_tz)} for l in logs],

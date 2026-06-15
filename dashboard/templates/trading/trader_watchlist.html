@@ -476,7 +476,7 @@
                 @change="labelFilter = ($event.target.value === 'null' ? null : parseInt($event.target.value))">
           <option value="null">⚡ All Labels (Show All Groups)</option>
           <template x-for="lbl in allLabels" :key="lbl.id">
-            <option :value="lbl.id" :text="lbl.name + ' (' + lbl.count + ')'"></option>
+            <option :value="lbl.id" x-text="lbl.name + ' (' + lbl.count + ')'"></option>
           </template>
         </select>
       </template>

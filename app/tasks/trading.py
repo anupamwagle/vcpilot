@@ -1115,6 +1115,17 @@ def refresh_live_prices_cache_task(self):
 
     logger.debug(f"refresh_live_prices_cache_task: refreshed {updated}/{len(crypto_tickers)} crypto tickers")
 
+    # Write audit log so the health page can display last-run time for this task.
+    try:
+        with get_db() as _db:
+            _db.add(AuditLog(
+                action=AuditAction.TASK_RUN,
+                message=f"[CRYPTO] Live price cache: refreshed {updated}/{len(crypto_tickers)} watchlist tickers",
+                detail={"updated": updated, "total": len(crypto_tickers)},
+            ))
+    except Exception:
+        pass
+
 
 @app.task(name="app.tasks.trading.promote_watchlist_item_task", bind=True)
 def promote_watchlist_item_task(self, item_id: int, organization_id: int, user_email: str, user_id: int):

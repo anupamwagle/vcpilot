@@ -263,35 +263,27 @@ app.conf.update(
             "schedule": crontab(minute="*/5"),
             "options": {"queue": "trading_crypto"},
         },
-        # Crypto data refresh — every 6 hours, 24/7 (price bars stay fresh)
+        # Crypto data refresh — every 4 hours, 24/7 (price bars stay fresh)
+        # Sequence per cycle: :30 price data → :45 market regime → :55 screener
         "refresh-price-data-crypto": {
             "task": "app.tasks.screening.refresh_price_data",
-            "schedule": crontab(hour="0,6,12,18", minute=30),
+            "schedule": crontab(hour="0,4,8,12,16,20", minute=30),
             "kwargs": {"exchange_key": "CRYPTO"},
             "options": {"queue": "screening_equities"},
         },
-        # Crypto screener — 4× daily: after each data refresh (catches intraday VCP completions)
-        "run-screen-crypto-midnight": {
-            "task": "app.tasks.screening.run_daily_screen",
-            "schedule": crontab(hour=0, minute=45),
+        # Crypto market regime — 15 min after price data (gives refresh time to finish)
+        # Runs at :45 so the screener at :55 has a fresh regime decision to gate entries.
+        "evaluate-market-regime-crypto": {
+            "task": "app.tasks.screening.evaluate_market_regime_task",
+            "schedule": crontab(hour="0,4,8,12,16,20", minute=45),
             "kwargs": {"exchange_key": "CRYPTO"},
             "options": {"queue": "screening_equities"},
         },
-        "run-screen-crypto-6am": {
+        # Crypto screener — 6× daily: 25 min after data refresh, 10 min after regime
+        # :30 price → :45 regime → :55 screener (catches intraday VCP completions)
+        "run-screen-crypto": {
             "task": "app.tasks.screening.run_daily_screen",
-            "schedule": crontab(hour=6, minute=45),
-            "kwargs": {"exchange_key": "CRYPTO"},
-            "options": {"queue": "screening_equities"},
-        },
-        "run-screen-crypto-noon": {
-            "task": "app.tasks.screening.run_daily_screen",
-            "schedule": crontab(hour=12, minute=45),
-            "kwargs": {"exchange_key": "CRYPTO"},
-            "options": {"queue": "screening_equities"},
-        },
-        "run-screen-crypto-6pm": {
-            "task": "app.tasks.screening.run_daily_screen",
-            "schedule": crontab(hour=18, minute=45),
+            "schedule": crontab(hour="0,4,8,12,16,20", minute=55),
             "kwargs": {"exchange_key": "CRYPTO"},
             "options": {"queue": "screening_equities"},
         },

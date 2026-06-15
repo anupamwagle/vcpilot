@@ -390,36 +390,45 @@
       <tr class="tbl-row border-b" style="border-color:var(--border)">
         <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Refresh Price Data</td>
         <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">Crypto</td>
-        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Daily 10:30am (0:30 UTC)</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Every 4h &middot; 12:30am&sol;4:30am&sol;8:30am&sol;12:30pm&sol;4:30pm&sol;8:30pm</td>
         <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
-        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Daily OHLCV for all tracked crypto pairs</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">OHLCV bars for all tracked crypto pairs &mdash; 24/7</td>
       </tr>
 
       {% set r = task_runs.get('regime_crypto') %}
       <tr class="tbl-row border-b" style="border-color:var(--border)">
         <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Market Regime</td>
         <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">Crypto</td>
-        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Daily 10:30am</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Every 4h &middot; 12:45am&sol;4:45am&sol;8:45am&sol;12:45pm&sol;4:45pm&sol;8:45pm</td>
         <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
-        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">BTC above 200-day MA &rarr; BULL / BEAR for crypto entries</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">BTC above 200-day MA &rarr; BULL / BEAR &mdash; runs 15min after price refresh</td>
       </tr>
 
       {% set r = task_runs.get('screen_crypto') %}
       <tr class="tbl-row border-b" style="border-color:var(--border)">
         <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">VCP Screener</td>
         <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">Crypto</td>
-        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Daily 11:00am</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Every 4h &middot; 12:55am&sol;4:55am&sol;8:55am&sol;12:55pm&sol;4:55pm&sol;8:55pm</td>
         <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
-        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Momentum + VCP screen on crypto watchlist</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Momentum + VCP screen on crypto watchlist &mdash; 6&times; daily</td>
+      </tr>
+
+      {% set r = task_runs.get('live_prices_crypto') %}
+      <tr class="tbl-row border-b" style="border-color:var(--border)">
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Live Price Cache</td>
+        <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">Crypto</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Every 5 min &middot; 24/7</td>
+        <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Refreshes live prices for crypto watchlist items &mdash; drives trader terminal</td>
       </tr>
 
       {% set r = task_runs.get('entry_crypto') %}
       <tr class="tbl-row" style="">
         <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Entry + Exit Checks</td>
         <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">Crypto</td>
-        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Every 5 min · 24/7</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Every 5 min &middot; 24/7</td>
         <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
-        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Continuous — crypto markets never close</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Continuous &mdash; crypto markets never close</td>
       </tr>
 
       {% endif %}
