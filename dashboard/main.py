@@ -2847,6 +2847,43 @@ async def _trader_data_inner(request: Request, db):
     from app.models.exchange import ExchangeConfig
 
     org_id = request.session.get("organization_id")
+    display_tz = _get_display_tz(org_id, db)
+
+    def _get_next_entry_check(exk: str, tz_name: str) -> str:
+        import pytz
+        from datetime import datetime as dt_class, timedelta
+        try:
+            sydney_tz = pytz.timezone("Australia/Sydney")
+            now_sydney = dt_class.now(sydney_tz)
+            candidate = now_sydney.replace(second=0, microsecond=0)
+            limit = 10080
+            found = False
+            for _ in range(limit):
+                candidate += timedelta(minutes=1)
+                if candidate.minute % 5 != 0:
+                    continue
+                if exk == "CRYPTO":
+                    found = True
+                    break
+                elif exk == "NYSE":
+                    day = candidate.weekday()
+                    hour = candidate.hour
+                    if (hour == 23 and day in (0, 1, 2, 3, 4)) or (hour in (0, 1, 2, 3, 4, 5, 6) and day in (1, 2, 3, 4, 5)):
+                        found = True
+                        break
+                else: # ASX
+                    day = candidate.weekday()
+                    hour = candidate.hour
+                    if hour in range(10, 17) and day in (0, 1, 2, 3, 4):
+                        found = True
+                        break
+            if found:
+                display_tz_obj = pytz.timezone(tz_name)
+                candidate_display = candidate.astimezone(display_tz_obj)
+                return candidate_display.strftime("%Y-%m-%d %H:%M %Z")
+        except Exception:
+            pass
+        return "TBD"
 
     # ── Watchlist ──
     wl_items = (
@@ -2998,12 +3035,13 @@ async def _trader_data_inner(request: Request, db):
             "breakout_confirmed": bool(chk.breakout_confirmed) if chk else False,
             "vs_pivot_pct": float(chk.price_vs_pivot) if chk and chk.price_vs_pivot else None,
             "vol_ratio": float(chk.vol_ratio) if chk and chk.vol_ratio else None,
-            "rs_rating": float(chk.rs_rating) if chk and chk.rs_rating else None,
-            "ma_50": float(chk.ma_50) if chk and chk.ma_50 else None,
-            "ma_200": float(chk.ma_200) if chk and chk.ma_200 else None,
+            "rs_rating": float(chk.rs_rating) if chk and chk.rs_rating is not None else (float(bar.rs_rating) if bar and bar.rs_rating is not None else (float(s.rs_rating) if s and s.rs_rating is not None else None)),
+            "ma_50": float(chk.ma_50) if chk and chk.ma_50 is not None else (float(bar.ma_50) if bar and bar.ma_50 is not None else None),
+            "ma_200": float(chk.ma_200) if chk and chk.ma_200 is not None else (float(bar.ma_200) if bar and bar.ma_200 is not None else None),
             "data_source": chk.data_source if chk else None,
             "data_delay_mins": chk.data_delay_mins if chk else None,
             "rule_results": chk.rule_results if chk else {},
+            "next_check_at": _get_next_entry_check(s.exchange_key or "ASX", display_tz),
         })
 
     # ── Build positions payload ──

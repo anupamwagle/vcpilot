@@ -361,6 +361,29 @@
     }
     .quick-link:hover { color: var(--text); background: var(--surf2); }
     .quick-link.accent { color: var(--accent); }
+
+    /* ── Rule categories & rows (copied from trader_watchlist.html) ──── */
+    .rule-cat {
+      padding: 5px 10px 3px;
+      font-size: 8px; font-weight: 800; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      background: var(--surf2);
+      position: sticky; top: 0; z-index: 1;
+    }
+    .rule-row {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 10px; border-bottom: 1px solid #1a1a2e;
+      transition: background .1s;
+    }
+    .rule-row:hover { background: var(--surf2); }
+    .rule-icon { width: 14px; height: 14px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 9px; }
+    .rule-name { flex: 1; font-size: 10px; color: var(--text); }
+    .rule-val  { font-size: 9px; font-family: monospace; color: var(--muted); text-align: right; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rule-pass { color: var(--up); }
+    .rule-fail { color: var(--down); }
+    .rule-ovr  { color: var(--warn); }
+    .rule-na   { color: var(--subtle); }
   </style>
 </head>
 
@@ -665,70 +688,168 @@
     <!-- ── ENTRY MONITOR (signals tab) ───────────────────────────────── -->
     <template x-if="tab==='signals'">
       <div style="display:contents">
-        <div class="panel-header">
-          <span>Entry Monitor</span>
-          <span style="font-size:9px;color:var(--muted)">live · 10s</span>
-        </div>
-        <div class="tv-scroll" style="flex:1">
-          <div class="empty-msg" x-show="signals.length===0">No pending signals</div>
-          <template x-for="sig in signals" :key="sig.id">
-            <div style="border-bottom:1px solid var(--border);padding:8px 10px;cursor:pointer"
-                 @click="selectSignal(sig)">
-              <!-- Ticker + breakout badge -->
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                <span style="font-weight:700;font-size:11px;display:inline-flex;align-items:center;gap:4px">
-                  <span class="mkt" :class="mktClass(sig.exchange_key)" x-text="mktLabel(sig.exchange_key)"></span>
-                  <span x-text="sig.display_ticker"></span>
-                  <span class="break-badge" x-show="sig.breakout_confirmed" style="font-size:8px">● BREAK</span>
-                </span>
-                <span :class="liveChangePct(sig.ticker, sig.pivot) >= 0 ? 'up' : 'down'"
-                      style="font-size:10px;font-weight:700"
-                      x-text="(liveChangePct(sig.ticker, sig.pivot) >= 0 ? '+' : '') + liveChangePct(sig.ticker, sig.pivot).toFixed(1) + '% vs pivot'"></span>
-              </div>
-              <!-- Price row -->
-              <div style="display:flex;gap:10px;font-size:9px;color:var(--muted);margin-bottom:5px">
-                <span>Now <span :class="flash[sig.ticker]" style="color:var(--text)"
-                      x-text="fmtPrice(livePrice(sig.ticker) ?? sig.last_check_price ?? sig.close, sig.currency)"></span></span>
-                <span>Pivot <span style="color:var(--warn)" x-text="fmtPrice(sig.pivot, sig.currency)"></span></span>
-                <span>Stop <span style="color:var(--down)" x-text="fmtPrice(sig.stop, sig.currency)"></span></span>
-              </div>
-              <!-- Entry check stats -->
-              <template x-if="sig.last_check_at">
-                <div style="font-size:9px">
-                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:3px">
-                    <span style="color:var(--muted)">Checked <span style="color:var(--text)" x-text="fmtTime(sig.last_check_at)"></span></span>
-                    <span x-show="sig.vol_ratio !== null">
-                      Vol <span :style="sig.vol_ratio >= 1.5 ? 'color:#26a69a;font-weight:700' : 'color:var(--text)'"
-                                x-text="sig.vol_ratio ? sig.vol_ratio.toFixed(1) + '×' : '—'"></span>
+        
+        <!-- List View (when no signal is selected) -->
+        <template x-if="!selectedSignal">
+          <div style="display:contents">
+            <div class="panel-header">
+              <span>Entry Monitor</span>
+              <span style="font-size:9px;color:var(--muted)">live · 10s</span>
+            </div>
+            <div class="tv-scroll" style="flex:1">
+              <div class="empty-msg" x-show="signals.length===0">No pending signals</div>
+              <template x-for="sig in signals" :key="sig.id">
+                <div style="border-bottom:1px solid var(--border);padding:8px 10px;cursor:pointer"
+                     @click="selectSignal(sig)">
+                  <!-- Ticker + breakout badge -->
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                    <span style="font-weight:700;font-size:11px;display:inline-flex;align-items:center;gap:4px">
+                      <span class="mkt" :class="mktClass(sig.exchange_key)" x-text="mktLabel(sig.exchange_key)"></span>
+                      <span x-text="sig.display_ticker"></span>
+                      <span class="break-badge" x-show="sig.breakout_confirmed" style="font-size:8px">● BREAK</span>
                     </span>
-                    <span x-show="sig.rs_rating !== null">
-                      RS <span :style="sig.rs_rating >= 70 ? 'color:#22d3ee;font-weight:700' : 'color:var(--muted)'"
-                                x-text="sig.rs_rating ? sig.rs_rating.toFixed(0) : '—'"></span>
-                    </span>
-                    <span x-show="sig.data_source" style="color:var(--muted)"
-                          x-text="sig.data_source + (sig.data_delay_mins ? ' ~' + sig.data_delay_mins + 'm' : '')"></span>
+                    <span :class="liveChangePct(sig.ticker, sig.pivot) >= 0 ? 'up' : 'down'"
+                          style="font-size:10px;font-weight:700"
+                          x-text="(liveChangePct(sig.ticker, sig.pivot) >= 0 ? '+' : '') + liveChangePct(sig.ticker, sig.pivot).toFixed(1) + '% vs pivot'"></span>
                   </div>
-                  <!-- Above/below MAs -->
-                  <template x-if="sig.ma_50 !== null || sig.ma_200 !== null">
-                    <div style="display:flex;gap:6px">
-                      <template x-if="sig.ma_50">
-                        <span :style="(livePrice(sig.ticker) ?? sig.last_check_price) > sig.ma_50 ? 'color:#22d3ee' : 'color:#ef5350'">
-                          <span x-text="(livePrice(sig.ticker) ?? sig.last_check_price) > sig.ma_50 ? '▲ 50MA' : '▼ 50MA'"></span>
+                  <!-- Price row -->
+                  <div style="display:flex;gap:10px;font-size:9px;color:var(--muted);margin-bottom:5px">
+                    <span>Now <span :class="flash[sig.ticker]" style="color:var(--text)"
+                          x-text="fmtPrice(livePrice(sig.ticker) ?? sig.last_check_price ?? sig.close, sig.currency)"></span></span>
+                    <span>Pivot <span style="color:var(--warn)" x-text="fmtPrice(sig.pivot, sig.currency)"></span></span>
+                    <span>Stop <span style="color:var(--down)" x-text="fmtPrice(sig.stop, sig.currency)"></span></span>
+                  </div>
+                  <!-- Entry check stats -->
+                  <template x-if="sig.last_check_at">
+                    <div style="font-size:9px">
+                      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:3px">
+                        <span style="color:var(--muted)">Checked <span style="color:var(--text)" x-text="fmtTime(sig.last_check_at)"></span></span>
+                        <span x-show="sig.vol_ratio !== null">
+                          Vol <span :style="sig.vol_ratio >= 1.5 ? 'color:#26a69a;font-weight:700' : 'color:var(--text)'"
+                                    x-text="sig.vol_ratio ? sig.vol_ratio.toFixed(1) + '×' : '—'"></span>
                         </span>
-                      </template>
-                      <template x-if="sig.ma_200">
-                        <span :style="(livePrice(sig.ticker) ?? sig.last_check_price) > sig.ma_200 ? 'color:#22d3ee' : 'color:#ef5350'">
-                          <span x-text="(livePrice(sig.ticker) ?? sig.last_check_price) > sig.ma_200 ? '▲ 200MA' : '▼ 200MA'"></span>
+                        <span x-show="sig.rs_rating !== null">
+                          RS <span :style="sig.rs_rating >= 70 ? 'color:#22d3ee;font-weight:700' : 'color:var(--muted)'"
+                                    x-text="sig.rs_rating ? sig.rs_rating.toFixed(0) : '—'"></span>
                         </span>
+                        <span x-show="sig.data_source" style="color:var(--muted)"
+                              x-text="sig.data_source + (sig.data_delay_mins ? ' ~' + sig.data_delay_mins + 'm' : '')"></span>
+                      </div>
+                      <!-- Above/below MAs -->
+                      <template x-if="sig.ma_50 !== null || sig.ma_200 !== null">
+                        <div style="display:flex;gap:6px">
+                          <template x-if="sig.ma_50">
+                            <span :style="(livePrice(sig.ticker) ?? sig.last_check_price) > sig.ma_50 ? 'color:#22d3ee' : 'color:#ef5350'">
+                              <span x-text="(livePrice(sig.ticker) ?? sig.last_check_price) > sig.ma_50 ? '▲ 50MA' : '▼ 50MA'"></span>
+                            </span>
+                          </template>
+                          <template x-if="sig.ma_200">
+                            <span :style="(livePrice(sig.ticker) ?? sig.last_check_price) > sig.ma_200 ? 'color:#22d3ee' : 'color:#ef5350'">
+                              <span x-text="(livePrice(sig.ticker) ?? sig.last_check_price) > sig.ma_200 ? '▲ 200MA' : '▼ 200MA'"></span>
+                            </span>
+                          </template>
+                        </div>
                       </template>
                     </div>
                   </template>
+                  <div x-show="!sig.last_check_at" class="empty-msg" style="font-size:9px;padding:2px 0;color:var(--muted)">Entry check not yet run</div>
                 </div>
               </template>
-              <div x-show="!sig.last_check_at" class="empty-msg" style="font-size:9px;padding:2px 0;color:var(--muted)">Entry check not yet run</div>
             </div>
-          </template>
-        </div>
+          </div>
+        </template>
+
+        <!-- Detail View (when a signal is selected) -->
+        <template x-if="selectedSignal">
+          <div style="display:contents">
+            <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center">
+              <span style="font-weight:800;color:var(--accent)" x-text="selectedSignal.display_ticker + ' Details'"></span>
+              <button @click="selectedSignal = null" style="background:none;border:1px solid var(--accent);border-radius:3px;color:var(--accent);font-size:9px;padding:2px 6px;cursor:pointer;font-family:inherit">← List</button>
+            </div>
+            
+            <!-- Quick Summary Panel -->
+            <div style="background:var(--surf2); border-bottom:1px solid var(--border); padding:8px 10px; display:flex; flex-direction:column; gap:4px; font-size:10px">
+              <div style="display:flex; justify-content:space-between; align-items:center">
+                <span style="color:var(--muted)">Last Checked:</span>
+                <span style="color:var(--text); font-family:monospace; font-weight:700" x-text="selectedSignal.last_check_at ? fmtTime(selectedSignal.last_check_at) : 'Never'"></span>
+              </div>
+              <div style="display:flex; justify-content:space-between; align-items:center">
+                <span style="color:var(--muted)">Next Check:</span>
+                <span style="color:var(--warn); font-family:monospace; font-weight:700" x-text="selectedSignal.next_check_at || 'TBD'"></span>
+              </div>
+              <div style="display:flex; justify-content:space-between; align-items:center">
+                <span style="color:var(--muted)">Current Price:</span>
+                <span style="color:var(--text); font-family:monospace; font-weight:700" x-text="fmtPrice(livePrice(selectedSignal.ticker) ?? selectedSignal.last_check_price ?? selectedSignal.close, selectedSignal.currency)"></span>
+              </div>
+              <div style="display:flex; justify-content:space-between; align-items:center">
+                <span style="color:var(--muted)">Pivot Price:</span>
+                <span style="color:var(--warn); font-family:monospace; font-weight:700" x-text="fmtPrice(selectedSignal.pivot, selectedSignal.currency)"></span>
+              </div>
+            </div>
+
+            <!-- Conditions & Status list -->
+            <div class="tv-scroll" style="flex:1">
+              <div class="rule-cat">Breakout Entry Rules</div>
+              
+              <!-- Rule: Price at/above pivot -->
+              <div class="rule-row">
+                <span class="rule-icon" 
+                      x-text="selectedSignal.rule_results?.vcp_breakout_price ? (selectedSignal.rule_results.vcp_breakout_price.passed ? '✓' : '✗') : '·'"
+                      :class="selectedSignal.rule_results?.vcp_breakout_price ? (selectedSignal.rule_results.vcp_breakout_price.passed ? 'rule-pass' : 'rule-fail') : 'rule-na'"></span>
+                <span class="rule-name"
+                      :class="selectedSignal.rule_results?.vcp_breakout_price ? (selectedSignal.rule_results.vcp_breakout_price.passed ? '' : 'rule-fail') : 'rule-na'">Price vs Pivot</span>
+                <span class="rule-val" 
+                      :class="selectedSignal.rule_results?.vcp_breakout_price?.passed ? 'up' : 'muted'"
+                      x-text="selectedSignal.rule_results?.vcp_breakout_price ? selectedSignal.rule_results.vcp_breakout_price.value.toFixed(1) + '% (max ' + selectedSignal.rule_results.vcp_breakout_price.threshold + '%)' : 'Pending price cross'"></span>
+              </div>
+
+              <!-- Rule: Volume confirmed -->
+              <div class="rule-row">
+                <span class="rule-icon" 
+                      x-text="selectedSignal.rule_results?.vcp_breakout_volume ? (selectedSignal.rule_results.vcp_breakout_volume.passed ? '✓' : '✗') : '·'"
+                      :class="selectedSignal.rule_results?.vcp_breakout_volume ? (selectedSignal.rule_results.vcp_breakout_volume.passed ? 'rule-pass' : 'rule-fail') : 'rule-na'"></span>
+                <span class="rule-name"
+                      :class="selectedSignal.rule_results?.vcp_breakout_volume ? (selectedSignal.rule_results.vcp_breakout_volume.passed ? '' : 'rule-fail') : 'rule-na'">Volume Confirmation</span>
+                <span class="rule-val" 
+                      :class="selectedSignal.rule_results?.vcp_breakout_volume?.passed ? 'up' : 'muted'"
+                      x-text="selectedSignal.rule_results?.vcp_breakout_volume ? selectedSignal.rule_results.vcp_breakout_volume.value.toFixed(0) + '% (min ' + selectedSignal.rule_results.vcp_breakout_volume.threshold + '%)' : 'Pending vol spike'"></span>
+              </div>
+
+              <!-- Technical checks summary -->
+              <div class="rule-cat">Technical Thresholds</div>
+              
+              <div class="rule-row" x-show="selectedSignal.ma_50">
+                <span class="rule-icon" 
+                      x-text="(livePrice(selectedSignal.ticker) ?? selectedSignal.last_check_price ?? selectedSignal.close) > selectedSignal.ma_50 ? '✓' : '✗'"
+                      :class="(livePrice(selectedSignal.ticker) ?? selectedSignal.last_check_price ?? selectedSignal.close) > selectedSignal.ma_50 ? 'rule-pass' : 'rule-fail'"></span>
+                <span class="rule-name">Above 50 MA</span>
+                <span class="rule-val" x-text="'50MA: ' + fmtPrice(selectedSignal.ma_50, selectedSignal.currency)"></span>
+              </div>
+
+              <div class="rule-row" x-show="selectedSignal.ma_200">
+                <span class="rule-icon" 
+                      x-text="(livePrice(selectedSignal.ticker) ?? selectedSignal.last_check_price ?? selectedSignal.close) > selectedSignal.ma_200 ? '✓' : '✗'"
+                      :class="(livePrice(selectedSignal.ticker) ?? selectedSignal.last_check_price ?? selectedSignal.close) > selectedSignal.ma_200 ? 'rule-pass' : 'rule-fail'"></span>
+                <span class="rule-name">Above 200 MA</span>
+                <span class="rule-val" x-text="'200MA: ' + fmtPrice(selectedSignal.ma_200, selectedSignal.currency)"></span>
+              </div>
+
+              <div class="rule-row" x-show="selectedSignal.rs_rating">
+                <span class="rule-icon" 
+                      x-text="selectedSignal.rs_rating >= 70 ? '✓' : '✗'"
+                      :class="selectedSignal.rs_rating >= 70 ? 'rule-pass' : 'rule-fail'"></span>
+                <span class="rule-name">RS Rating ≥ 70</span>
+                <span class="rule-val" x-text="'RS: ' + selectedSignal.rs_rating.toFixed(0)"></span>
+              </div>
+              
+              <!-- Empty checks fallback -->
+              <div x-show="!selectedSignal.last_check_at" style="padding:16px 10px;text-align:center;color:var(--muted);font-size:10px">
+                Waiting for the next entry check run to evaluate conditions.
+              </div>
+            </div>
+          </div>
+        </template>
+
       </div>
     </template>
 
