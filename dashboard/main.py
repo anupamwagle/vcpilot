@@ -1608,6 +1608,152 @@ async def signal_toggle_rule(
     return RedirectResponse("/signals", 302)
 
 
+def _enrich_watchlist_vcp_and_sizing(items: list[dict], db, org_id: int):
+    """
+    Enriches a list of watchlist items with pivot price, stop loss, target, contractions,
+    base weeks, suggested size, and risk in AUD. Runs in-memory VCP detection and
+    sizing using PriceBar records.
+    """
+    from app.models.market import PriceBar
+    from app.models.account import Organization, Account
+    from app.models.config import SystemConfig
+    from app.screener.rules import RuleEngine
+    from app.screener.vcp import detect_vcp
+    from app.risk.manager import calculate_position_size
+    import pandas as pd
+    import collections
+    from loguru import logger
+
+    if not items:
+        return
+
+    # Load organization and account parameters
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    tier = org.tier.value if org else "GOLD"
+
+    account = db.query(Account).filter(
+        Account.organization_id == org_id,
+        Account.is_active == True
+    ).first()
+    capital = float(account.capital_aud) if account else 1000.0
+
+    currency_cfg = db.query(SystemConfig).filter(
+        SystemConfig.key == "working_capital_currency",
+        SystemConfig.organization_id == org_id
+    ).first()
+    base_currency = currency_cfg.value if currency_cfg else "AUD"
+
+    # Query price history for all tickers in one query
+    tickers = [w["ticker"] for w in items]
+    _all_history = (
+        db.query(PriceBar)
+        .filter(PriceBar.ticker.in_(tickers))
+        .order_by(PriceBar.date.asc())
+        .all()
+    )
+    bars_by_ticker = collections.defaultdict(list)
+    for b in _all_history:
+        bars_by_ticker[b.ticker].append(b)
+
+    for w in items:
+        ticker = w["ticker"]
+        asset_type = w["asset_type"]
+        exchange_key = w["exchange_key"]
+        
+        # Determine native currency
+        currency = w.get("currency")
+        if not currency:
+            if exchange_key == "ASX":
+                currency = "AUD"
+            elif exchange_key == "CRYPTO_INDEPENDENTRESERVE":
+                currency = "AUD"
+            else:
+                currency = "USD"
+
+        bars_list = bars_by_ticker[ticker]
+        if not bars_list:
+            w.update({
+                "pivot": None,
+                "stop": None,
+                "target": None,
+                "vcp_contractions": None,
+                "vcp_weeks": None,
+                "size": None,
+                "risk_aud": None,
+            })
+            continue
+
+        # Convert to DataFrame
+        df_data = []
+        for b in bars_list:
+            df_data.append({
+                "high": float(b.high or 0),
+                "low": float(b.low or 0),
+                "close": float(b.close or 0),
+                "volume": int(b.volume or 0),
+                "avg_vol_50": float(b.avg_vol_50 or 0),
+            })
+        df = pd.DataFrame(df_data)
+
+        # Run detect_vcp
+        engine = RuleEngine(organization_id=org_id, tier=tier, asset_type=asset_type)
+        avg_vol = float(df["avg_vol_50"].iloc[-1]) if not df.empty and "avg_vol_50" in df.columns else 0.0
+        vcp_result, _ = detect_vcp(ticker, df, engine, avg_vol)
+
+        pivot_price = vcp_result.pivot_price
+        stop_price = vcp_result.stop_price
+        contraction_count = vcp_result.contraction_count
+        base_weeks = vcp_result.base_weeks
+
+        # Fallback if VCP was not detected or did not calculate pivot/stop
+        if not pivot_price:
+            high_52w = float(bars_list[-1].high_52w or 0)
+            pivot_price = high_52w if high_52w > 0 else float(bars_list[-1].close or 0)
+            
+            atr = float(bars_list[-1].atr_14 or 0)
+            if atr > 0:
+                stop_price = pivot_price - 2 * atr
+            else:
+                stop_price = pivot_price * 0.92
+                
+            if stop_price <= 0 or stop_price >= pivot_price:
+                stop_price = pivot_price * 0.92
+                
+            contraction_count = 0
+            base_weeks = 0
+
+        target_price = pivot_price * 1.20 if pivot_price else None
+
+        # Sizing
+        shares = None
+        risk_aud = None
+        if pivot_price and stop_price and pivot_price > stop_price:
+            try:
+                sizing = calculate_position_size(
+                    capital_aud=capital,
+                    entry_price=pivot_price,
+                    stop_price=stop_price,
+                    engine=engine,
+                    currency=currency,
+                    base_currency=base_currency,
+                    is_crypto=(asset_type == "CRYPTO"),
+                )
+                shares = sizing.shares
+                risk_aud = sizing.risk_aud
+            except Exception as e:
+                logger.error(f"Sizing failed for watchlist {ticker}: {e}")
+
+        w.update({
+            "pivot": pivot_price,
+            "stop": stop_price,
+            "target": target_price,
+            "vcp_contractions": contraction_count,
+            "vcp_weeks": base_weeks,
+            "size": shares,
+            "risk_aud": risk_aud,
+        })
+
+
 @app.get("/watchlist", response_class=HTMLResponse)
 async def watchlist(
     request: Request,
@@ -1871,6 +2017,8 @@ async def watchlist(
             "label": lbl,
         })
 
+    _enrich_watchlist_vcp_and_sizing(watchlist_data, db, org_id)
+
     # Exchange filter already applied at DB level above — no Python-level re-filter needed.
     ef = _get_exchange_filters(org_id, db)
     ee = []
@@ -2017,6 +2165,8 @@ async def watchlist_rows(
             "rule_results": _enrich_rule_results(w.ticker, rr, db, _bar_data=_bar_lookup_dict.get(w.ticker)),
             "label": lbl,
         })
+
+    _enrich_watchlist_vcp_and_sizing(watchlist_data, db, org_id)
 
     # Favourites — same query as _global()
     try:

@@ -78,11 +78,66 @@
   {% set pct200 = ((st.close - st.ma_200) / st.ma_200 * 100) if st.ma_200 and st.ma_200 > 0 else none %}
   {% set pct52 = ((st.close - st.high_52w) / st.high_52w * 100) if st.high_52w and st.high_52w > 0 else none %}
   {% set rs_v = (st.rs_rating|default(0))|int %}
-  <div class="metrics-grid">
+  {% set pct_from_pivot = ((st.close - w.pivot) / w.pivot * 100) if w.pivot and w.pivot > 0 else none %}
+  {% set rr_ratio = ((w.target - w.pivot) / (w.pivot - w.stop)) if w.target and w.pivot and w.stop and (w.pivot - w.stop) > 0 else none %}
+
+  <!-- Primary price & sizing metrics (like signals page) -->
+  <div class="metrics-grid" style="border-bottom:1px solid var(--border); background:var(--surface-alt)">
     <div class="metric-cell" style="padding:.6rem .75rem;border-right:1px solid var(--border)">
       <p class="field-label" style="font-size:.6rem">Close</p>
-      <p class="mono font-bold" style="font-size:.82rem;color:var(--text)">${{ "%.2f"|format(st.close) }}</p>
+      <p class="mono font-bold" style="font-size:.82rem;color:var(--text)">${{ "%.3f"|format(st.close) if st.close else '—' }}</p>
+      {% if pct_from_pivot is not none %}
+      <p class="dist-pill {% if pct_from_pivot <= 0 %}chip-pos{% elif pct_from_pivot <= 3 %}chip-warn{% else %}chip-neg{% endif %}" style="margin-top:.18rem;font-size:.62rem;padding:.05rem .3rem;display:inline-block">
+        {{ "{:+.1f}".format(pct_from_pivot) }}% vs pivot
+      </p>
+      {% endif %}
     </div>
+    <div class="metric-cell" style="padding:.6rem .75rem;border-right:1px solid var(--border)">
+      <p class="field-label" style="font-size:.6rem">Pivot</p>
+      <p class="mono-pos" style="font-size:.82rem">{% if w.pivot %}${{ "%.3f"|format(w.pivot) }}{% else %}—{% endif %}</p>
+    </div>
+    <div class="metric-cell" style="padding:.6rem .75rem;border-right:1px solid var(--border)">
+      <p class="field-label" style="font-size:.6rem">Stop</p>
+      <p class="mono-neg" style="font-size:.82rem">{% if w.stop %}${{ "%.3f"|format(w.stop) }}{% else %}—{% endif %}</p>
+      {% if w.pivot and w.stop %}
+      <p class="mono-dim" style="font-size:.62rem;margin-top:.18rem">{{ "%.1f"|format((w.pivot - w.stop) / w.pivot * 100) }}% risk</p>
+      {% endif %}
+    </div>
+    <div class="metric-cell" style="padding:.6rem .75rem;border-right:1px solid var(--border)">
+      <p class="field-label" style="font-size:.6rem">Target 1</p>
+      <p class="mono-pos" style="font-size:.82rem">{% if w.target %}${{ "%.3f"|format(w.target) }}{% else %}—{% endif %}</p>
+      {% if rr_ratio is not none %}
+      <p style="margin-top:.18rem"><span class="chip chip-blue chip-sm">R:R {{ "%.1f"|format(rr_ratio) }}×</span></p>
+      {% endif %}
+    </div>
+    <div class="metric-cell" style="padding:.6rem .75rem;border-right:1px solid var(--border)">
+      <p class="field-label" style="font-size:.6rem">VCP</p>
+      {% if w.vcp_contractions is not none and w.vcp_contractions > 0 %}
+      <p class="mono" style="font-size:.8rem;color:var(--text)">{{ w.vcp_contractions }}c</p>
+      <p class="mono-dim" style="font-size:.68rem;margin-top:.1rem">{{ w.vcp_weeks }}w base</p>
+      {% else %}
+      <p class="mono-dim" style="font-size:.8rem">—</p>
+      {% endif %}
+    </div>
+    <div class="metric-cell" style="padding:.6rem .75rem">
+      <p class="field-label" style="font-size:.6rem">Position</p>
+      {% if w.size %}
+      <p class="mono" style="font-size:.8rem;color:var(--text)">
+        {% if w.asset_type == 'CRYPTO' %}
+          {{ "%.4f"|format(w.size) }} units
+        {% else %}
+          {{ w.size|int }} sh
+        {% endif %}
+      </p>
+      <p class="mono-warn" style="font-size:.68rem;margin-top:.1rem">R ${{ w.risk_aud|int }}</p>
+      {% else %}
+      <p class="mono-dim" style="font-size:.8rem">—</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Secondary MA & technical metrics (symmetrical 6 columns) -->
+  <div class="metrics-grid">
     <div class="metric-cell" style="padding:.6rem .75rem;border-right:1px solid var(--border)">
       <p class="field-label" style="font-size:.6rem">vs 50d MA</p>
       {% if pct50 is not none %}
