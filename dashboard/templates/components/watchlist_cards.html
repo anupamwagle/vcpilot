@@ -77,7 +77,7 @@
   {% set pct150 = ((st.close - st.ma_150) / st.ma_150 * 100) if st.ma_150 and st.ma_150 > 0 else none %}
   {% set pct200 = ((st.close - st.ma_200) / st.ma_200 * 100) if st.ma_200 and st.ma_200 > 0 else none %}
   {% set pct52 = ((st.close - st.high_52w) / st.high_52w * 100) if st.high_52w and st.high_52w > 0 else none %}
-  {% set rs_v = st.rs_rating|int %}
+  {% set rs_v = (st.rs_rating|default(0))|int %}
   <div class="metrics-grid">
     <div class="metric-cell" style="padding:.6rem .75rem;border-right:1px solid var(--border)">
       <p class="field-label" style="font-size:.6rem">Close</p>

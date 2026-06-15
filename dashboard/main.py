@@ -807,7 +807,7 @@ async def home(
             "is_custom": is_custom,
             "label": {"id": w.label.id, "name": w.label.name, "color": w.label.color} if w.label else None,
             "exchange_key": getattr(w, "exchange_key", "ASX") or "ASX",
-            "asset_type": getattr(w, "asset_type", "EQUITY") or "EQUITY",
+            "asset_type": ("CRYPTO" if w.ticker.endswith(("-AUD","-USD","-USDT")) else getattr(w, "asset_type", "EQUITY") or "EQUITY"),
             "close": float(bar.close) if bar and bar.close else None,
             "volume": int(bar.volume) if bar and bar.volume else None,
             "ma_50": float(bar.ma_50) if bar and bar.ma_50 else None,
@@ -1670,7 +1670,14 @@ async def watchlist(
     elif af == "US":
         q = q.filter(Watchlist.exchange_key.in_(["NYSE", "NASDAQ"]))
     elif af == "CRYPTO":
-        q = q.filter(Watchlist.asset_type == "CRYPTO")
+        # Also match tickers stored with wrong asset_type (NULL/"EQUITY") due to Jun 2026 bug
+        from sqlalchemy import or_ as _or_wl
+        q = q.filter(_or_wl(
+            Watchlist.asset_type == "CRYPTO",
+            Watchlist.ticker.like("%-AUD"),
+            Watchlist.ticker.like("%-USD"),
+            Watchlist.ticker.like("%-USDT"),
+        ))
     _WL_PER_PAGE = 20
     total = q.count()
     items = q.order_by(desc(Watchlist.created_at)).offset((page - 1) * _WL_PER_PAGE).limit(_WL_PER_PAGE).all()
@@ -1743,8 +1750,11 @@ async def watchlist(
                         "price": pv, "close": pv, "live_price": pv,
                         "data_source": r.get("data_source", ""), "_failed": False,
                     }, expire_seconds=360)
+                else:
+                    # Unsupported coin — cache failure sentinel (120s) to avoid re-fetching every page load
+                    cache.set(f"live_price:{t}", {"_failed": True}, expire_seconds=120)
             except Exception:
-                pass
+                cache.set(f"live_price:{t}", {"_failed": True}, expire_seconds=120)
         with ThreadPoolExecutor(max_workers=min(8, len(_crypto_miss))) as _wex:
             list(_wex.map(_warm_one, _crypto_miss))
 
@@ -1772,45 +1782,51 @@ async def watchlist(
         )
         live_price_used = False
 
+        # ── Build EOD bar dict (MA / RS / 52W fields) ───────────────────────
+        # Always fetch this first — it provides rs_rating, ma_50/150/200 etc.
+        # For crypto, the live price will then overlay the close price only.
+        eod_data: dict = {}
+        cache_key = f"latest_price_bar:{w.ticker}"
+        cached_eod = cache.get(cache_key)
+        if cached_eod is not None:
+            eod_data = cached_eod
+        else:
+            bar = _bar_lookup.get(w.ticker)
+            if bar:
+                eod_data = {
+                    "close":      float(bar.close or 0),
+                    "ma_50":      float(bar.ma_50 or 0),
+                    "ma_150":     float(bar.ma_150 or 0),
+                    "ma_200":     float(bar.ma_200 or 0),
+                    "high_52w":   float(bar.high_52w or 0),
+                    "low_52w":    float(bar.low_52w or 0),
+                    "rs_rating":  float(bar.rs_rating or 0),
+                    "bar_date":   str(bar.date) if bar.date else None,
+                    "live_price": False,
+                }
+                cache.set(cache_key, eod_data, expire_seconds=300)
+            else:
+                eod_data = {
+                    "close": 0, "ma_50": 0, "ma_150": 0, "ma_200": 0,
+                    "high_52w": 0, "low_52w": 0, "rs_rating": 0,
+                    "bar_date": None, "live_price": False,
+                }
+                cache.set(cache_key, {}, expire_seconds=3600)
+
+        bar_data = eod_data.copy() if eod_data else {}
+
         if is_crypto_item:
             live_cache_key = f"live_price:{w.ticker}"
-            cached = cache.get(live_cache_key)
-            if cached is not None:
-                # Cache hit — could be real data or a failure sentinel
-                bar_data = None if cached.get("_failed") else cached
-            else:
-                # Cache miss — batch pre-fetch above should have populated it;
-                # fall back to EOD via PriceBar below
-                bar_data = None
+            live_cached = cache.get(live_cache_key)
+            if live_cached and not live_cached.get("_failed"):
+                live_close = float(live_cached.get("close") or live_cached.get("price") or 0)
+                if live_close > 0:
+                    # Overlay live close onto EOD data — preserves MA/RS/52W fields
+                    bar_data["close"] = live_close
+                    bar_data["live_price"] = live_close
+                    live_price_used = True
 
-            if bar_data and bar_data.get("live_price"):
-                live_price_used = True
-
-        # Fall back to PriceBar (EOD) for equities or when live fetch fails
-        if not bar_data:
-            cache_key = f"latest_price_bar:{w.ticker}"
-            bar_data = cache.get(cache_key)
-            if bar_data is None:
-                # Use pre-fetched bar from bulk lookup — no per-item DB hit
-                bar = _bar_lookup.get(w.ticker)
-                if bar:
-                    bar_data = {
-                        "close":     float(bar.close or 0),
-                        "ma_50":     float(bar.ma_50 or 0),
-                        "ma_150":    float(bar.ma_150 or 0),
-                        "ma_200":    float(bar.ma_200 or 0),
-                        "high_52w":  float(bar.high_52w or 0),
-                        "low_52w":   float(bar.low_52w  or 0),
-                        "rs_rating": float(bar.rs_rating or 0),
-                        "bar_date":  str(bar.date) if bar.date else None,
-                        "live_price": False,
-                    }
-                    cache.set(cache_key, bar_data, expire_seconds=300)
-                else:
-                    bar_data = {}
-                    cache.set(cache_key, {}, expire_seconds=3600)
-
-        stats_data = bar_data if bar_data else None
+        stats_data = bar_data if any(bar_data.values()) else None
 
         rr = w.rule_results or {}
         passed = sum(1 for v in rr.values() if v.get("passed"))
@@ -1824,7 +1840,8 @@ async def watchlist(
             "id": w.id,
             "ticker": w.ticker,
             "exchange_key": getattr(w,"exchange_key","ASX") or "ASX",
-            "asset_type":   getattr(w,"asset_type","EQUITY") or "EQUITY",
+            # Ticker suffix is authoritative for crypto — covers DB rows with NULL/"EQUITY" asset_type
+            "asset_type":   ("CRYPTO" if w.ticker.endswith(("-AUD","-USD","-USDT")) else getattr(w,"asset_type","EQUITY") or "EQUITY"),
             "company_name": company_name,
             "added": str(w.added_date),
             "by": w.added_by,
@@ -1885,7 +1902,13 @@ async def watchlist_rows(
     elif af == "US":
         q = q.filter(Watchlist.exchange_key.in_(["NYSE", "NASDAQ"]))
     elif af == "CRYPTO":
-        q = q.filter(Watchlist.asset_type == "CRYPTO")
+        from sqlalchemy import or_ as _or_wlr
+        q = q.filter(_or_wlr(
+            Watchlist.asset_type == "CRYPTO",
+            Watchlist.ticker.like("%-AUD"),
+            Watchlist.ticker.like("%-USD"),
+            Watchlist.ticker.like("%-USDT"),
+        ))
 
     total = q.count()
     items = q.order_by(desc(Watchlist.created_at)).offset((page - 1) * _WL_PER_PAGE).limit(_WL_PER_PAGE).all()
@@ -1932,8 +1955,28 @@ async def watchlist_rows(
             if not cache.get(_nck):
                 cache.set(_nck, "attempted", expire_seconds=86400)
 
-        bar_data = cache.get(f"latest_price_bar:{w.ticker}") or {}
-        stats_data = bar_data if bar_data else None
+        # Build EOD bar dict — same two-step pattern as main route
+        is_crypto_row = w.ticker.endswith(("-AUD", "-USD", "-USDT"))
+        _eod = cache.get(f"latest_price_bar:{w.ticker}")
+        if _eod is None:
+            _b = _bar_lookup.get(w.ticker)
+            _eod = {
+                "close": float(_b.close or 0), "ma_50": float(_b.ma_50 or 0),
+                "ma_150": float(_b.ma_150 or 0), "ma_200": float(_b.ma_200 or 0),
+                "high_52w": float(_b.high_52w or 0), "low_52w": float(_b.low_52w or 0),
+                "rs_rating": float(_b.rs_rating or 0),
+                "bar_date": str(_b.date) if _b.date else None, "live_price": False,
+            } if _b else {}
+        bar_data = dict(_eod) if _eod else {}
+        # Overlay live price for crypto (preserves MA/RS/52W from EOD)
+        if is_crypto_row and bar_data:
+            _lc = cache.get(f"live_price:{w.ticker}")
+            if _lc and not _lc.get("_failed"):
+                _lv = float(_lc.get("close") or _lc.get("price") or 0)
+                if _lv > 0:
+                    bar_data["close"] = _lv
+                    bar_data["live_price"] = _lv
+        stats_data = bar_data if any(bar_data.values()) else None
 
         rr = w.rule_results or {}
         passed = sum(1 for v in rr.values() if v.get("passed"))
@@ -1945,7 +1988,7 @@ async def watchlist_rows(
             "id": w.id,
             "ticker": w.ticker,
             "exchange_key": getattr(w, "exchange_key", "ASX") or "ASX",
-            "asset_type":   getattr(w, "asset_type", "EQUITY") or "EQUITY",
+            "asset_type":   ("CRYPTO" if w.ticker.endswith(("-AUD","-USD","-USDT")) else getattr(w, "asset_type", "EQUITY") or "EQUITY"),
             "company_name": company_name,
             "added": str(w.added_date),
             "by": w.added_by,
@@ -2983,7 +3026,11 @@ def _trader_prices_inner(request: Request, db):
         Watchlist.status == WatchlistStatus.WATCHING,
     ).all()
     for r in wl_asset_rows:
-        asset_map[r[0]] = r[1] or "EQUITY"
+        # Ticker suffix is authoritative — covers DB rows with NULL/"EQUITY" asset_type
+        asset_map[r[0]] = (
+            "CRYPTO" if r[0].endswith(("-AUD", "-USD", "-USDT"))
+            else r[1] or "EQUITY"
+        )
     # For tickers in signals/positions not in watchlist, infer from ticker format
     for t in all_tickers:
         if t not in asset_map:
@@ -3061,8 +3108,13 @@ def _trader_prices_inner(request: Request, db):
                             "currency": currency, "live": True,
                         }
                         continue
+                    else:
+                        # Coin unsupported by all sources (e.g. not in IR_SYMBOL_MAP) —
+                        # cache a failure sentinel so we don't retry every 10s.
+                        # TTL=120s means one retry per 2 min instead of every 10s.
+                        cache.set(live_cache_key, {"_failed": True}, expire_seconds=120)
                 except Exception:
-                    pass
+                    cache.set(live_cache_key, {"_failed": True}, expire_seconds=120)
 
         # ── EOD fallback (PriceBar last close) ──────────────────────────────────────────
         eod_bar = eod_map.get(ticker)
@@ -3316,8 +3368,10 @@ def _trader_watchlist_data_inner(request: Request, db):
                             "data_source": live.get("data_source", ""), "_failed": False,
                         }, expire_seconds=360)
                         close = live_close
+                    else:
+                        cache.set(live_cache_key, {"_failed": True}, expire_seconds=120)
                 except Exception:
-                    pass
+                    cache.set(live_cache_key, {"_failed": True}, expire_seconds=120)
 
         chg_pct   = _pct(close, open_) if close and open_ and open_ > 0 else 0.0
         range_pct = None
@@ -5271,6 +5325,1196 @@ async def superadmin_config_simulation(
     # ibkr_simulate is optional in the form (checkbox — absent = false)
     _upsert("ibkr_simulate", "true" if ibkr_simulate == "true" else "false")
 
+    db.add(AuditLog(
+        action=AuditAction.CONFIG_CHANGED,
+        actor=request.session.get("email", "superadmin"),
+        organization_id=None,
+        message=(
+            f"Simulation config updated: mock_clock={mock_time_enabled}, "
+            f"regime={mock_market_regime}, ibkr_simulate={ibkr_simulate or 'false'}"
+        ),
+        detail={
+            "mock_time_enabled": mock_time_enabled,
+            "mock_current_time": mock_current_time,
+            "mock_market_regime": mock_market_regime,
+            "ibkr_simulate": ibkr_simulate or "false",
+        },
+    ))
+    db.commit()
+    return RedirectResponse("/superadmin/rules?saved=1", 302)
+
+
+@app.get("/superadmin/users", response_class=HTMLResponse)
+async def superadmin_users(request: Request, db: Session = Depends(get_db)):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    if request.session.get("user_role") != "superadmin":
+        return RedirectResponse("/", 302)
+
+    from app.models.auth import User, Role
+    from app.models.account import Organization
+
+    search = request.query_params.get("search", "").strip()
+    selected_org_id = request.query_params.get("org_id", "")
+
+    query = db.query(User)
+    if search:
+        query = query.filter((User.name.ilike(f"%{search}%")) | (User.email.ilike(f"%{search}%")))
+    if selected_org_id:
+        query = query.filter(User.organization_id == int(selected_org_id))
+
+    users = query.order_by(User.email).all()
+    organizations = db.query(Organization).order_by(Organization.name).all()
+    roles = db.query(Role).order_by(Role.name).all()
+
+    ctx = _global(request, db)
+    ctx.update({
+        "users": users, "organizations": organizations, "roles": roles,
+        "search": search, "selected_org_id": selected_org_id,
+        "saved": request.query_params.get("saved", ""),
+        "error": request.query_params.get("error", ""),
+    })
+    return templates.TemplateResponse("superadmin/users.html", ctx)
+
+
+@app.post("/superadmin/users/create")
+async def superadmin_users_create(
+    request: Request,
+    name: str = Form(...),
+    email: str = Form(...),
+    organization_id: int = Form(...),
+    role_id: int = Form(...),
+    send_welcome: str = Form(None),
+    db: Session = Depends(get_db)
+):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    if request.session.get("user_role") != "superadmin":
+        return RedirectResponse("/", 302)
+
+    from app.models.auth import User, Role, hash_password
+    from app.models.account import Organization
+    import secrets
+
+    email_clean = email.strip().lower()
+    existing_user = db.query(User).filter(User.email == email_clean).first()
+    if existing_user:
+        ctx = _global(request, db)
+        users = db.query(User).order_by(User.email).all()
+        organizations = db.query(Organization).order_by(Organization.name).all()
+        roles = db.query(Role).order_by(Role.name).all()
+        ctx.update({
+            "users": users, "organizations": organizations, "roles": roles,
+            "error": f"User with email '{email}' already exists",
+            "search": "", "selected_org_id": "",
+        })
+        return templates.TemplateResponse("superadmin/users.html", ctx, status_code=400)
+
+    dummy_pass = secrets.token_hex(16)
+    hashed_pwd = hash_password(dummy_pass)
+    from datetime import datetime, timedelta
+    token = secrets.token_urlsafe(32)
+    user = User(
+        email=email_clean, password_hash=hashed_pwd,
+        name=name.strip(), organization_id=organization_id, is_active=True,
+        reset_token=token,
+        reset_token_expires=datetime.utcnow() + timedelta(hours=24)
+    )
+    db.add(user)
+    db.flush()
+
+    role = db.query(Role).filter(Role.id == role_id).first()
+    if role:
+        user.roles.append(role)
+    db.commit()
+
+    import urllib.parse
+    encoded_email = urllib.parse.quote(user.email)
+
+    if send_welcome == "1":
+        from app.utils.email import send_email
+        host = request.headers.get("host", "localhost:8501")
+        scheme = "https" if request.url.scheme == "https" else "http"
+        reset_link = f"{scheme}://{host}/reset-password?token={token}"
+        subject = "Welcome to AstraTrade! Set up your account"
+        html_content = (
+            '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px">'
+            '<h2 style="color:#1d4ed8">Welcome to AstraTrade!</h2>'
+            f'<p>Hi {user.name},</p>'
+            '<p>An account has been created for you on AstraTrade. Click the button below to set up your password and log in:</p>'
+            f'<div style="text-align:center;margin:30px 0"><a href="{reset_link}" '
+            'style="background:#1d4ed8;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px">Set Up Password & Log In</a></div>'
+            f'<p style="font-size:12px;color:#6b7280">Or copy: {reset_link}</p>'
+            '<p style="color:#6b7280;font-size:14px">This link expires in 24 hours.</p></div>'
+        )
+        email_sent = send_email(user.email, subject, html_content)
+        if email_sent:
+            return RedirectResponse(f"/superadmin/users?saved=welcome_email&email={encoded_email}", 302)
+        else:
+            return RedirectResponse(f"/superadmin/users?saved=welcome_manual&token={token}&email={encoded_email}", 302)
+    else:
+        return RedirectResponse(f"/superadmin/users?saved=created&email={encoded_email}", 302)
+
+
+@app.post("/superadmin/users/{user_id}/update-role")
+async def superadmin_user_update_role(user_id: int, request: Request, role_id: int = Form(...), db: Session = Depends(get_db)):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    if request.session.get("user_role") != "superadmin":
+        return RedirectResponse("/", 302)
+
+    from app.models.auth import User, Role
+    user = db.query(User).filter(User.id == user_id).first()
+    role = db.query(Role).filter(Role.id == role_id).first()
+    if user and role:
+        user.roles = [role]
+        db.commit()
+    return RedirectResponse("/superadmin/users?saved=1", 302)
+
+
+@app.post("/superadmin/users/{user_id}/reset-password")
+async def superadmin_user_reset_password(user_id: int, request: Request, db: Session = Depends(get_db)):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    if request.session.get("user_role") != "superadmin":
+        return RedirectResponse("/", 302)
+
+    import secrets
+    from datetime import datetime, timedelta
+    from app.models.auth import User
+    from app.utils.email import send_email
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return RedirectResponse("/superadmin/users?error=User+not+found", 302)
+
+    token = secrets.token_urlsafe(32)
+    user.reset_token = token
+    user.reset_token_expires = datetime.utcnow() + timedelta(hours=1)
+    db.commit()
+
+    host = request.headers.get("host", "localhost:8501")
+    scheme = "https" if request.url.scheme == "https" else "http"
+    reset_link = f"{scheme}://{host}/reset-password?token={token}"
+
+    subject = "Reset Your AstraTrade Password"
+    html_content = (
+        '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px">'
+        '<h2 style="color:#1d4ed8">AstraTrade Password Reset</h2>'
+        '<p>Click the button below to set a new password:</p>'
+        f'<div style="text-align:center;margin:30px 0"><a href="{reset_link}" '
+        'style="background:#1d4ed8;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px">Reset Password</a></div>'
+        f'<p style="font-size:12px;color:#6b7280">Or copy: {reset_link}</p>'
+        '<p style="color:#6b7280;font-size:14px">This link expires in 1 hour.</p></div>'
+    )
+    email_sent = send_email(user.email, subject, html_content)
+    if email_sent:
+        return RedirectResponse("/superadmin/users?saved=reset_email", 302)
+    else:
+        import urllib.parse
+        encoded_email = urllib.parse.quote(user.email)
+        return RedirectResponse(f"/superadmin/users?saved=reset_manual&token={token}&email={encoded_email}", 302)
+
+
+@app.post("/superadmin/users/{user_id}/delete")
+async def superadmin_user_delete(user_id: int, request: Request, db: Session = Depends(get_db)):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    if request.session.get("user_role") != "superadmin":
+        return RedirectResponse("/", 302)
+
+    from app.models.auth import User
+    from app.models.audit import AuditLog, AuditAction
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return RedirectResponse("/superadmin/users?error=User+not+found", 302)
+
+    # Prevent self-deletion
+    current_user_id = request.session.get("user_id")
+    current_email = request.session.get("email")
+    if user.id == current_user_id or (current_email and user.email.strip().lower() == current_email.strip().lower()):
+        return RedirectResponse("/superadmin/users?error=Cannot+delete+currently+logged-in+user", 302)
+
+    email_to_delete = user.email
+    db.delete(user)
+    
+    # Audit log
+    db.add(AuditLog(
+        action=AuditAction.CONFIG_CHANGED,
+        actor=request.session.get("email", "superadmin"),
+        organization_id=None,
+        message=f"User '{email_to_delete}' was deleted by superadmin.",
+    ))
+    
+    db.commit()
+    import urllib.parse
+    encoded_email = urllib.parse.quote(email_to_delete)
+    return RedirectResponse(f"/superadmin/users?saved=deleted&email={encoded_email}", 302)
+
+
+# ===========================================================================
+
+# SUPER ADMIN DATA VIEW — universe + price data + custom stocks
+# ===========================================================================
+
+@app.get("/superadmin/data", response_class=HTMLResponse)
+async def superadmin_data(
+    request: Request,
+    db: Session = Depends(get_db),
+    tab: str = Query("universe"),       # universe | us | crypto | custom
+    search: str = Query(""),
+    sector: str = Query(""),
+    exchange: str = Query(""),          # optional exchange_key filter within a tab
+    sort_by: str = Query("ticker"),     # ticker | rs_rating | last_price | market_cap | vol_ratio
+    sort_dir: str = Query("asc"),
+    page: int = Query(1),
+):
+    """
+    Super Admin Data page — exchange-aware tabs:
+      Tab 1 (universe): ASX200 stocks with latest PriceBar metrics.
+      Tab 2 (us):       US equities (NYSE/NASDAQ) tracked in DB.
+      Tab 3 (crypto):   Crypto assets tracked in DB.
+      Tab 4 (custom):   ASX equities manually added by orgs that are not in the ASX200 universe.
+    """
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    if request.session.get("user_role") != "superadmin":
+        return RedirectResponse("/", 302)
+
+    from app.models.market import Stock, PriceBar
+    from app.models.signal import Watchlist
+    from app.models.account import Organization
+    from sqlalchemy import func, and_, text as _text
+
+    ctx = _global(request, db)
+    per_page = 50
+
+    def _build_equity_rows(stocks_page, bar_map):
+        rows = []
+        for s in stocks_page:
+            bar = bar_map.get(s.ticker)
+            rows.append({
+                "ticker":        s.ticker,
+                "display_code":  getattr(s, "asx_code", None) or s.ticker.replace(".AX", "").replace("-USD", ""),
+                "asx_code":      getattr(s, "asx_code", None) or "",
+                "exchange_key":  getattr(s, "exchange_key", "ASX") or "ASX",
+                "name":          s.name or "",
+                "sector":        s.sector or "",
+                "industry":      getattr(s, "industry", None) or "",
+                "in_asx200":     getattr(s, "in_asx200", False) or False,
+                "asset_type":    getattr(s, "asset_type", "EQUITY") or "EQUITY",
+                "currency":      getattr(s, "currency", "AUD") or "AUD",
+                "market_cap":    int(s.market_cap) if s.market_cap else None,
+                "last_price":    float(s.last_price) if s.last_price else None,
+                "last_updated":  str(s.last_updated)[:10] if s.last_updated else "",
+                "bar_date":      str(bar.date) if bar else "",
+                "close":         float(bar.close)          if bar and bar.close          else None,
+                "volume":        int(bar.volume)            if bar and bar.volume         else None,
+                "ma_50":         float(bar.ma_50)           if bar and bar.ma_50          else None,
+                "ma_150":        float(bar.ma_150)          if bar and bar.ma_150         else None,
+                "ma_200":        float(bar.ma_200)          if bar and bar.ma_200         else None,
+                "vol_ratio":     float(bar.vol_ratio)       if bar and bar.vol_ratio      else None,
+                "rs_rating":     float(bar.rs_rating)       if bar and bar.rs_rating      else None,
+                "pct_from_52w_high": float(bar.pct_from_52w_high) if bar and bar.pct_from_52w_high else None,
+                "atr_14":        float(bar.atr_14)          if bar and bar.atr_14         else None,
+                "has_bar":       bar is not None,
+            })
+        return rows
+
+    def _fetch_bar_map(db, tickers):
+        if not tickers:
+            return {}
+        latest_dates = db.query(
+            PriceBar.ticker,
+            func.max(PriceBar.date).label("max_date")
+        ).filter(PriceBar.ticker.in_(tickers)).group_by(PriceBar.ticker).subquery()
+        bars = db.query(PriceBar).join(
+            latest_dates,
+            and_(PriceBar.ticker == latest_dates.c.ticker,
+                 PriceBar.date  == latest_dates.c.max_date)
+        ).all()
+        return {b.ticker: b for b in bars}
+
+    sort_map = {
+        "ticker":     Stock.ticker,
+        "name":       Stock.name,
+        "sector":     Stock.sector,
+        "market_cap": Stock.market_cap,
+        "last_price": Stock.last_price,
+    }
+
+    if tab == "universe":
+        # ── Tab 1: ASX200 universe ─────────────────────────���───────────────────
+        q = db.query(Stock).filter(
+            Stock.is_active == True,
+            Stock.blacklisted == False,
+        )
+        # Try to filter by exchange_key column (added in migration 002)
+        try:
+            q = q.filter(Stock.exchange_key == "ASX")
+        except Exception:
+            pass
+        if search:
+            q = q.filter(
+                (Stock.ticker.ilike(f"%{search.upper()}%")) |
+                (Stock.name.ilike(f"%{search}%"))
+            )
+        if sector:
+            q = q.filter(Stock.sector == sector)
+
+        total_stocks = q.count()
+        sort_col = sort_map.get(sort_by, Stock.ticker)
+        if sort_dir == "desc":
+            q = q.order_by(sort_col.desc().nullslast())
+        else:
+            q = q.order_by(sort_col.asc().nullslast())
+
+        stocks = q.offset((page - 1) * per_page).limit(per_page).all()
+        bar_map = _fetch_bar_map(db, [s.ticker for s in stocks])
+        rows = _build_equity_rows(stocks, bar_map)
+
+        if sort_by in ("rs_rating", "vol_ratio"):
+            rows.sort(key=lambda r: (r[sort_by] is None, r.get(sort_by) or 0), reverse=(sort_dir == "desc"))
+
+        sectors = sorted(set(
+            s.sector for s in db.query(Stock.sector).filter(
+                Stock.is_active == True, Stock.sector != None
+            ).distinct().all() if s.sector
+        ))
+
+        ctx.update({
+            "tab": "universe", "rows": rows, "custom_rows": [], "crypto_rows": [],
+            "search": search, "sector": sector, "sectors": sectors,
+            "sort_by": sort_by, "sort_dir": sort_dir, "page": page, "per_page": per_page,
+            "total": total_stocks, "total_pages": max(1, (total_stocks + per_page - 1) // per_page),
+            "total_with_bars": sum(1 for r in rows if r["has_bar"]),
+            "avg_rs": round(sum(r["rs_rating"] for r in rows if r["rs_rating"]) /
+                            max(1, sum(1 for r in rows if r["rs_rating"])), 1),
+        })
+
+    elif tab == "us":
+        # ── Tab 2: US equities (NYSE/NASDAQ) ──────────────────────────────────
+        q = db.query(Stock).filter(Stock.is_active == True, Stock.blacklisted == False)
+        try:
+            from sqlalchemy import or_
+            q = q.filter(or_(Stock.exchange_key == "NYSE", Stock.exchange_key == "NASDAQ"))
+        except Exception:
+            q = q.filter(Stock.ticker.notlike("%.AX")).filter(Stock.ticker.notlike("%-USD"))
+
+        if search:
+            q = q.filter(
+                (Stock.ticker.ilike(f"%{search.upper()}%")) |
+                (Stock.name.ilike(f"%{search}%"))
+            )
+        if sector:
+            q = q.filter(Stock.sector == sector)
+
+        total_stocks = q.count()
+        sort_col = sort_map.get(sort_by, Stock.ticker)
+        if sort_dir == "desc":
+            q = q.order_by(sort_col.desc().nullslast())
+        else:
+            q = q.order_by(sort_col.asc().nullslast())
+
+        stocks = q.offset((page - 1) * per_page).limit(per_page).all()
+        bar_map = _fetch_bar_map(db, [s.ticker for s in stocks])
+        rows = _build_equity_rows(stocks, bar_map)
+
+        if sort_by in ("rs_rating", "vol_ratio"):
+            rows.sort(key=lambda r: (r[sort_by] is None, r.get(sort_by) or 0), reverse=(sort_dir == "desc"))
+
+        sectors = sorted(set(
+            s.sector for s in db.query(Stock.sector).filter(
+                Stock.is_active == True, Stock.sector != None
+            ).distinct().all() if s.sector
+        ))
+
+        ctx.update({
+            "tab": "us", "rows": rows, "custom_rows": [], "crypto_rows": [],
+            "search": search, "sector": sector, "sectors": sectors,
+            "sort_by": sort_by, "sort_dir": sort_dir, "page": page, "per_page": per_page,
+            "total": total_stocks, "total_pages": max(1, (total_stocks + per_page - 1) // per_page),
+            "total_with_bars": sum(1 for r in rows if r["has_bar"]),
+            "avg_rs": round(sum(r["rs_rating"] for r in rows if r["rs_rating"]) /
+                            max(1, sum(1 for r in rows if r["rs_rating"])), 1),
+        })
+
+    elif tab == "crypto":
+        # ── Tab 3: Crypto assets from DB ──────────────────────────────────────
+        q = db.query(Stock).filter(Stock.is_active == True)
+        try:
+            q = q.filter(Stock.asset_type == "CRYPTO")
+        except Exception:
+            q = q.filter(Stock.ticker.like("%-USD").or_(Stock.ticker.like("%-AUD")))
+
+        if search:
+            q = q.filter(
+                (Stock.ticker.ilike(f"%{search.upper()}%")) |
+                (Stock.name.ilike(f"%{search}%"))
+            )
+
+        total_stocks = q.count()
+        if sort_dir == "desc":
+            q = q.order_by(sort_map.get(sort_by, Stock.ticker).desc().nullslast())
+        else:
+            q = q.order_by(sort_map.get(sort_by, Stock.ticker).asc().nullslast())
+
+        stocks = q.offset((page - 1) * per_page).limit(per_page).all()
+        bar_map = _fetch_bar_map(db, [s.ticker for s in stocks])
+        crypto_rows = _build_equity_rows(stocks, bar_map)
+
+        if sort_by in ("rs_rating", "vol_ratio"):
+            crypto_rows.sort(key=lambda r: (r[sort_by] is None, r.get(sort_by) or 0), reverse=(sort_dir == "desc"))
+
+        ctx.update({
+            "tab": "crypto", "rows": [], "custom_rows": [], "crypto_rows": crypto_rows,
+            "search": search, "sector": "", "sectors": [],
+            "sort_by": sort_by, "sort_dir": sort_dir, "page": page, "per_page": per_page,
+            "total": total_stocks, "total_pages": max(1, (total_stocks + per_page - 1) // per_page),
+            "total_with_bars": sum(1 for r in crypto_rows if r["has_bar"]),
+            "avg_rs": 0,
+        })
+
+    else:
+        # ── Tab 4: Custom stocks per org (not in main universe) ──────────────
+        custom_rows_raw = db.execute(_text("""
+            SELECT
+                w.ticker,
+                w.organization_id,
+                w.exchange_key AS w_exchange_key,
+                o.name AS org_name,
+                COUNT(*) OVER (PARTITION BY w.ticker) AS org_count,
+                s.name AS stock_name,
+                s.sector,
+                s.in_asx200,
+                s.is_active,
+                s.exchange_key AS s_exchange_key,
+                s.asset_type,
+                pb.close,
+                pb.date AS bar_date,
+                pb.rs_rating,
+                pb.vol_ratio,
+                pb.ma_50,
+                pb.ma_200,
+                pb.pct_from_52w_high,
+                w.created_at AS added_at
+            FROM watchlist w
+            JOIN organizations o ON o.id = w.organization_id
+            LEFT JOIN stocks s ON s.ticker = w.ticker
+            LEFT JOIN LATERAL (
+                SELECT close, date, rs_rating, vol_ratio, ma_50, ma_200, pct_from_52w_high
+                FROM price_bars
+                WHERE ticker = w.ticker
+                ORDER BY date DESC
+                LIMIT 1
+            ) pb ON TRUE
+            WHERE (s.in_asx200 IS NULL OR s.in_asx200 = FALSE)
+              AND (s.asset_type IS NULL OR s.asset_type = 'EQUITY')
+              AND (s.exchange_key IS NULL OR s.exchange_key NOT LIKE 'CRYPTO_%')
+              AND (w.exchange_key IS NULL OR w.exchange_key NOT LIKE 'CRYPTO_%')
+              AND (w.exchange_key IS NULL OR w.exchange_key NOT IN ('NYSE', 'NASDAQ'))
+            ORDER BY org_count DESC, w.ticker, o.name
+        """)).fetchall()
+
+        custom_rows = [
+            {
+                "ticker":       r.ticker,
+                "org_id":       r.organization_id,
+                "org_name":     r.org_name,
+                "org_count":    r.org_count,
+                "name":         r.stock_name or "",
+                "sector":       r.sector or "",
+                "in_asx200":    r.in_asx200 or False,
+                "is_active":    r.is_active if r.is_active is not None else True,
+                "exchange_key": r.w_exchange_key or r.s_exchange_key or "ASX",
+                "asset_type":   r.asset_type or "EQUITY",
+                "close":        float(r.close) if r.close else None,
+                "bar_date":     str(r.bar_date) if r.bar_date else "",
+                "rs_rating":    float(r.rs_rating) if r.rs_rating else None,
+                "vol_ratio":    float(r.vol_ratio) if r.vol_ratio else None,
+                "ma_50":        float(r.ma_50) if r.ma_50 else None,
+                "ma_200":       float(r.ma_200) if r.ma_200 else None,
+                "pct_from_52w_high": float(r.pct_from_52w_high) if r.pct_from_52w_high else None,
+                "added_at":     str(r.added_at)[:10] if r.added_at else "",
+            }
+            for r in custom_rows_raw
+        ]
+
+        if search:
+            su = search.upper()
+            custom_rows = [r for r in custom_rows if su in r["ticker"] or search.lower() in r["name"].lower()]
+
+        ctx.update({
+            "tab": "custom", "rows": [], "custom_rows": custom_rows, "crypto_rows": [],
+            "search": search, "sector": "", "sectors": [],
+            "sort_by": sort_by, "sort_dir": sort_dir, "page": 1, "per_page": per_page,
+            "total": len(custom_rows), "total_pages": 1,
+            "total_with_bars": sum(1 for r in custom_rows if r["close"]),
+            "avg_rs": 0,
+        })
+
+    # Global summary stats
+    total_stocks_db   = db.query(Stock).filter(Stock.is_active == True).count()
+    total_bars_db     = db.query(PriceBar).count()
+    latest_bar_date_r = db.query(func.max(PriceBar.date)).scalar()
+
+    # Per-exchange counts for tab badges
+    try:
+        asx_count    = db.query(Stock).filter(Stock.is_active == True, Stock.exchange_key == "ASX").count()
+        us_count     = db.query(Stock).filter(Stock.is_active == True, Stock.exchange_key.in_(["NYSE", "NASDAQ"])).count()
+        crypto_count = db.query(Stock).filter(Stock.is_active == True, Stock.asset_type == "CRYPTO").count()
+    except Exception:
+        asx_count = total_stocks_db; us_count = 0; crypto_count = 0
+
+    ctx.update({
+        "total_stocks_db":  total_stocks_db,
+        "total_bars_db":    total_bars_db,
+        "latest_bar_date":  str(latest_bar_date_r) if latest_bar_date_r else "—",
+        "asx_count":        asx_count,
+        "us_count":         us_count,
+        "crypto_count":     crypto_count,
+        "msg":              request.query_params.get("msg", ""),
+    })
+    return templates.TemplateResponse("superadmin/data.html", ctx)
+
+
+@app.get("/reset-password", response_class=HTMLResponse)
+async def reset_password_get(request: Request, token: str = Query(...), db: Session = Depends(get_db)):
+    from datetime import datetime
+    from app.models.auth import User
+    user = db.query(User).filter(User.reset_token == token, User.reset_token_expires > datetime.utcnow()).first()
+    if not user:
+        return templates.TemplateResponse("reset_password.html", {"request": request, "token": token, "error": "Invalid or expired reset token.", "success": False})
+    return templates.TemplateResponse("reset_password.html", {"request": request, "token": token, "error": None, "success": False})
+
+
+@app.post("/reset-password")
+async def reset_password_post(request: Request, token: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+    from datetime import datetime
+    from app.models.auth import User, hash_password as hash_p
+
+    user = db.query(User).filter(User.reset_token == token, User.reset_token_expires > datetime.utcnow()).first()
+    if not user:
+        return templates.TemplateResponse("reset_password.html", {"request": request, "token": token, "error": "Invalid or expired link.", "success": False})
+
+    user.password_hash = hash_p(password)
+    user.reset_token = None
+    user.reset_token_expires = None
+    db.commit()
+    return templates.TemplateResponse("reset_password.html", {"request": request, "token": token, "error": None, "success": True})
+
+
+# ===========================================================================
+# SUPER ADMIN EXCHANGE MANAGEMENT
+# ===========================================================================
+
+@app.get("/superadmin/exchanges", response_class=HTMLResponse)
+async def superadmin_exchanges(request: Request, db: Session = Depends(get_db)):
+    if not _auth(request): return RedirectResponse("/login", 302)
+    if not _is_superadmin(request): return RedirectResponse("/?error=access_denied", 302)
+    exchanges=[]; migration_needed=False
+    try:
+        from app.models.exchange import ExchangeConfig
+        exchanges=db.query(ExchangeConfig).order_by(ExchangeConfig.sort_order).all()
+    except Exception: db.rollback(); migration_needed=True
+    ctx={**_global(request,db),"exchanges":exchanges,"migration_needed":migration_needed,"msg":request.query_params.get("msg","")}
+    return templates.TemplateResponse("superadmin/exchanges.html", ctx)
+
+
+@app.post("/superadmin/exchanges/{exchange_key}/toggle")
+async def superadmin_exchange_toggle(request: Request, exchange_key: str, db: Session = Depends(get_db)):
+    if not _auth(request) or not _is_superadmin(request): return RedirectResponse("/login", 302)
+    try:
+        from app.models.exchange import ExchangeConfig
+        exc=db.query(ExchangeConfig).filter(ExchangeConfig.exchange_key==exchange_key).first()
+        if exc:
+            exc.is_enabled=not exc.is_enabled; db.commit()
+            from app.models.audit import AuditLog,AuditAction
+            db.add(AuditLog(action=AuditAction.CONFIG_CHANGED,actor=request.session.get("email","superadmin"),message=f"Exchange {exchange_key} enabled={exc.is_enabled}")); db.commit()
+            return RedirectResponse(f"/superadmin/exchanges?msg={'enabled' if exc.is_enabled else 'disabled'}", 302)
+    except Exception: db.rollback()
+    return RedirectResponse("/superadmin/exchanges?msg=error", 302)
+
+
+@app.post("/superadmin/exchanges/{exchange_key}/update")
+async def superadmin_exchange_update(request: Request, exchange_key: str, display_name: str=Form(""), is_enabled: str=Form("false"), ccxt_provider: str=Form(""), ccxt_sandbox: str=Form("false"), db: Session=Depends(get_db)):
+    if not _auth(request) or not _is_superadmin(request): return RedirectResponse("/login", 302)
+    try:
+        from app.models.exchange import ExchangeConfig
+        exc=db.query(ExchangeConfig).filter(ExchangeConfig.exchange_key==exchange_key).first()
+        if exc:
+            if display_name: exc.display_name=display_name
+            exc.is_enabled=is_enabled.lower() in ("true","on","1","yes"); exc.ccxt_sandbox=ccxt_sandbox.lower() in ("true","on","1","yes")
+            if ccxt_provider: exc.ccxt_provider=ccxt_provider.lower()
+            db.commit()
+    except Exception: db.rollback()
+    return RedirectResponse("/superadmin/exchanges?msg=saved", 302)
+
+
+# ===========================================================================
+# SUPER ADMIN — CENTRAL OPERATIONS
+# ===========================================================================
+
+@app.get("/superadmin/operations", response_class=HTMLResponse)
+async def superadmin_operations(request: Request, db: Session = Depends(get_db)):
+    """Central operations hub — global tasks that run on shared price/universe data."""
+    if not _auth(request): return RedirectResponse("/login", 302)
+    if not _is_superadmin(request): return RedirectResponse("/?error=access_denied", 302)
+
+    from app.models.market import Stock, PriceBar
+    from app.models.audit import AuditLog, AuditAction
+    from app.models.exchange import MarketRegimeRecord
+    from app.models.config import SystemConfig
+    from app.models.account import Organization
+    from sqlalchemy import func, or_
+
+    ctx = _global(request, db)
+    msg = request.query_params.get("msg", "")
+
+    # ── Universe & price stats ────────────────────────────────────────────────
+    asx_count    = db.query(func.count(Stock.id)).filter(Stock.exchange_key == "ASX",    Stock.is_active == True).scalar() or 0
+    us_count     = db.query(func.count(Stock.id)).filter(Stock.exchange_key.in_(["NYSE","NASDAQ"]), Stock.is_active == True).scalar() or 0
+    crypto_count = db.query(func.count(Stock.id)).filter(Stock.asset_type == "CRYPTO",   Stock.is_active == True).scalar() or 0
+
+    # Per-exchange crypto breakdown for the universe table
+    crypto_rows = (
+        db.query(Stock.exchange_key, func.count(Stock.id).label("cnt"))
+        .filter(Stock.asset_type == "CRYPTO", Stock.is_active == True)
+        .group_by(Stock.exchange_key)
+        .all()
+    )
+    crypto_by_exchange = [{"key": r.exchange_key or "CRYPTO", "count": r.cnt} for r in crypto_rows]
+
+    # Count crypto stocks that have at least one price bar (active/seeded)
+    seeded_crypto_count = (
+        db.query(func.count(func.distinct(PriceBar.ticker)))
+        .join(Stock, Stock.ticker == PriceBar.ticker)
+        .filter(Stock.asset_type == "CRYPTO")
+        .scalar() or 0
+    )
+
+    total_bars   = db.query(func.count(PriceBar.id)).scalar() or 0
+    latest_bar   = db.query(func.max(PriceBar.date)).scalar()
+    today_bars   = db.query(func.count(PriceBar.id)).filter(PriceBar.date == get_current_date()).scalar() or 0
+
+    # Custom stocks: any org has added manually and NOT in ASX200/300 index
+    custom_count = db.query(func.count(Stock.id)).filter(
+        Stock.is_active == True,
+        Stock.exchange_key == "ASX",
+        Stock.in_index == False,
+    ).scalar() or 0
+
+    # Active exchanges across all orgs (union — so we know what exchanges need refreshing)
+    all_ae_rows = db.query(SystemConfig).filter(SystemConfig.key == "active_exchanges").all()
+    all_exchanges: set[str] = set()
+    for row in all_ae_rows:
+        for e in (row.value or "").split(","):
+            e = e.strip().upper()
+            if e:
+                all_exchanges.add(e)
+
+    has_asx    = "ASX" in all_exchanges
+    has_us     = bool(all_exchanges & {"NYSE", "NASDAQ", "US"})
+    has_crypto = any(e.startswith("CRYPTO") for e in all_exchanges)
+    crypto_keys = sorted(e for e in all_exchanges if e.startswith("CRYPTO_"))
+
+    # ── Latest regime per exchange (from MarketRegimeRecord) ─────────────────
+    regimes: dict[str, dict] = {}
+    try:
+        for ek in (["ASX"] if has_asx else []) + (["NYSE"] if has_us else []) + crypto_keys:
+            rec = db.query(MarketRegimeRecord).filter(
+                MarketRegimeRecord.exchange_key == ek
+            ).order_by(desc(MarketRegimeRecord.evaluated_at)).first()
+            regimes[ek] = {
+                "regime": rec.regime if rec else "Not evaluated",
+                "time":   _fmt_dt(str(rec.evaluated_at), "Australia/Sydney") if rec else "—",
+                "index_close": float(rec.index_close or 0) if rec else 0,
+                "breadth_pct": float(rec.breadth_pct or 0) if rec else 0,
+            }
+    except Exception:
+        pass
+
+    # ── Last-run times (global AuditLog — no org filter) ─────────────────────
+    def _glr(kws: list[str], exch: str = None, actions=None):
+        """Most recent global audit entry matching keywords + optional exchange prefix."""
+        try:
+            if actions is None:
+                actions = [AuditAction.TASK_RUN]
+            q = db.query(AuditLog).filter(
+                AuditLog.action.in_(actions),
+                or_(*[AuditLog.message.ilike(f"%{kw}%") for kw in kws]),
+            )
+            if exch:
+                q = q.filter(AuditLog.message.ilike(f"%{exch}%"))
+            log = q.order_by(desc(AuditLog.id)).first()
+            if log:
+                return {"time": _fmt_dt(str(log.created_at), "Australia/Sydney"), "msg": (log.message or "")[:120]}
+        except Exception:
+            pass
+        return None
+
+    task_runs = {
+        "universe":      _glr(["Universe refresh", "universe refresh"], actions=[AuditAction.TASK_RUN, AuditAction.SYSTEM_STARTED]),
+        "price_asx":     _glr(["Price data", "price data"], "ASX"),
+        "price_us":      _glr(["Price data", "price data"], "NYSE") if has_us else None,
+        "price_crypto":  _glr(["Price data", "price data"], "CRYPTO") if has_crypto else None,
+        "regime_asx":    _glr(["Market regime"], "ASX",   actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_asx else None,
+        "regime_us":     _glr(["Market regime"], "NYSE",  actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_us else None,
+        "regime_crypto": _glr(["Market regime"], "CRYPTO",actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_crypto else None,
+        "heartbeat":     _glr(["Heartbeat"], actions=[AuditAction.HEALTH_CHECK]),
+    }
+
+    # Active orgs count (for context banner)
+    active_org_count = db.query(func.count(Organization.id)).filter(Organization.is_active == True).scalar() or 0
+
+    ctx.update({
+        "msg": msg,
+        "asx_count": asx_count, "us_count": us_count, "crypto_count": crypto_count,
+        "custom_count": custom_count, "total_bars": total_bars,
+        "latest_bar": str(latest_bar) if latest_bar else "—", "today_bars": today_bars,
+        "has_asx": has_asx, "has_us": has_us, "has_crypto": has_crypto,
+        "crypto_keys": crypto_keys, "all_exchanges": sorted(all_exchanges),
+        "regimes": regimes, "task_runs": task_runs,
+        "active_org_count": active_org_count,
+        "crypto_by_exchange": crypto_by_exchange,
+        "seeded_crypto_count": seeded_crypto_count,
+    })
+    return templates.TemplateResponse("superadmin/operations.html", ctx)
+
+
+# ── Super admin global action routes ─────────────────────────────────────────
+
+@app.post("/superadmin/action/refresh-data")
+async def sa_action_refresh_data(request: Request, exchange: str = Form(None)):
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.screening import refresh_price_data, refresh_crypto_universe
+    try:
+        is_crypto = exchange and (exchange == "CRYPTO" or exchange.startswith("CRYPTO_"))
+        if is_crypto:
+            from celery import chain as _chain
+            effective = exchange if exchange != "CRYPTO" else "CRYPTO_INDEPENDENTRESERVE"
+            _chain(
+                refresh_crypto_universe.si(exchange_key=effective),
+                refresh_price_data.si(exchange_key=effective),
+            ).delay()
+        else:
+            refresh_price_data.delay(exchange_key=exchange or None)
+    except Exception:
+        refresh_price_data.delay(exchange_key=exchange or None)
+    return RedirectResponse("/superadmin/operations?msg=data", 302)
+
+
+@app.post("/superadmin/action/refresh-universe")
+async def sa_action_refresh_universe(request: Request, scope: str = Form(None)):
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.screening import refresh_universe
+    try:
+        refresh_universe.delay(scope=scope or None, organization_id=None)
+    except Exception:
+        pass
+    return RedirectResponse("/superadmin/operations?msg=universe", 302)
+
+
+@app.post("/superadmin/action/evaluate-regime")
+async def sa_action_evaluate_regime(request: Request, exchange: str = Form("ASX")):
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.screening import evaluate_market_regime_task
+    evaluate_market_regime_task.delay(exchange_key=exchange or "ASX")
+    return RedirectResponse("/superadmin/operations?msg=regime", 302)
+
+
+@app.post("/superadmin/action/seed-crypto")
+async def sa_action_seed_crypto(request: Request, exchange: str = Form("CRYPTO_INDEPENDENTRESERVE")):
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.screening import refresh_crypto_universe
+    try:
+        refresh_crypto_universe.delay(exchange_key=exchange)
+    except Exception:
+        pass
+    return RedirectResponse("/superadmin/operations?msg=crypto_seed", 302)
+
+
+@app.post("/superadmin/action/full-setup")
+async def sa_action_full_setup(request: Request):
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.screening import run_full_setup
+    run_full_setup.delay()
+    return RedirectResponse("/superadmin/operations?msg=setup", 302)
+
+
+@app.post("/superadmin/action/ping-worker")
+async def sa_action_ping_worker(request: Request):
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.reporting import health_check
+    health_check.delay()
+    return RedirectResponse("/superadmin/operations?msg=ping", 302)
+
+
+# ===========================================================================
+# MCP — OAuth 2.0 Token Endpoint
+# ===========================================================================
+
+from fastapi.responses import JSONResponse as _JSONResponse
+
+
+@app.get("/authorize", response_class=HTMLResponse)
+async def oauth_authorize(
+    request: Request,
+    response_type: str = Query(...),
+    client_id: str = Query(...),
+    redirect_uri: str = Query(...),
+    state: str = Query(""),
+    code_challenge: str = Query(""),
+    code_challenge_method: str = Query(""),
+    db: Session = Depends(get_db)
+):
+    if not _auth(request):
+        import urllib.parse
+        encoded_url = urllib.parse.quote(str(request.url))
+        return RedirectResponse(f"/login?next={encoded_url}", 302)
+
+    if response_type != "code":
+        return RedirectResponse(f"{redirect_uri}?error=unsupported_response_type&state={state}", 302)
+
+    from app.models.mcp import MCPCredential, SCOPE_DESCRIPTIONS
+    cred = db.query(MCPCredential).filter(MCPCredential.client_id == client_id).first()
+    if not cred or not cred.is_valid:
+        return HTMLResponse("Invalid or inactive client_id", status_code=400)
+
+    return templates.TemplateResponse("authorize.html", {
+        "request": request,
+        "client_id": client_id,
+        "client_name": cred.name,
+        "org_name": cred.organization.name if cred.organization else "AstraTrade Org",
+        "redirect_uri": redirect_uri,
+        "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": code_challenge_method,
+        "scopes": cred.scopes or [],
+        "scope_descriptions": SCOPE_DESCRIPTIONS,
+    })
+
+
+@app.post("/authorize/approve")
+async def oauth_authorize_approve(
+    request: Request,
+    client_id: str = Form(...),
+    redirect_uri: str = Form(...),
+    state: str = Form(""),
+    code_challenge: str = Form(""),
+    code_challenge_method: str = Form(""),
+    db: Session = Depends(get_db)
+):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+
+    from app.models.mcp import MCPCredential
+    cred = db.query(MCPCredential).filter(MCPCredential.client_id == client_id).first()
+    if not cred or not cred.is_valid:
+        return HTMLResponse("Invalid or inactive client_id", status_code=400)
+
+    import secrets
+    auth_code = f"vcp_code_{secrets.token_urlsafe(32)}"
+
+    from app.utils.cache import cache
+    code_data = {
+        "client_id": client_id,
+        "organization_id": cred.organization_id,
+        "code_challenge": code_challenge,
+        "code_challenge_method": code_challenge_method,
+        "credential_id": cred.id,
+    }
+    cache.set(f"oauth_code:{auth_code}", code_data, expire_seconds=300)
+
+    import urllib.parse
+    redirect_url = f"{redirect_uri}?code={auth_code}"
+    if state:
+        redirect_url += f"&state={urllib.parse.quote(state)}"
+    return RedirectResponse(redirect_url, 302)
+
+
+@app.post("/mcp/oauth/token")
+@app.post("/token")
+@app.post("/oauth/token")
+async def mcp_oauth_token(request: Request, db: Session = Depends(get_db)):
+    """
+    OAuth 2.0 Token Endpoint.
+    Supports:
+      • grant_type=client_credentials (API/CLI clients using client_id + client_secret)
+      • grant_type=authorization_code (OAuth flow clients like Claude.ai using PKCE)
+    """
+    from app.models.mcp import MCPCredential, verify_secret
+    from app.mcp.auth import create_access_token
+
+    client_id     = None
+    client_secret = None
+    grant_type    = None
+    code          = None
+    code_verifier = None
+    req_redirect_uri = None
+
+    content_type = request.headers.get("content-type", "")
+    if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+        form = await request.form()
+        client_id     = form.get("client_id")
+        client_secret = form.get("client_secret")
+        grant_type    = form.get("grant_type")
+        code          = form.get("code")
+        code_verifier = form.get("code_verifier")
+        req_redirect_uri = form.get("redirect_uri")
+    else:
+        try:
+            body = await request.json()
+            client_id     = body.get("client_id")
+            client_secret = body.get("client_secret")
+            grant_type    = body.get("grant_type")
+            code          = body.get("code")
+            code_verifier = body.get("code_verifier")
+            req_redirect_uri = body.get("redirect_uri")
+        except Exception:
+            pass
+
+    # Fall back to HTTP Basic Auth for client_credentials
+    if not client_id or not client_secret:
+        import base64
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Basic "):
+            try:
+                decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+                client_id, client_secret = decoded.split(":", 1)
+                if not grant_type:
+                    grant_type = "client_credentials"
+            except Exception:
+                pass
+
+    if not grant_type:
+        grant_type = "authorization_code" if code else "client_credentials"
+
+    logger.info(
+        f"mcp_oauth_token request: content_type={content_type}, grant_type={grant_type}, "
+        f"client_id={client_id}, code={code}, code_verifier={code_verifier}, redirect_uri={req_redirect_uri}"
+    )
+
+    if grant_type not in ("client_credentials", "authorization_code"):
+        logger.warning(f"mcp_oauth_token error: unsupported grant type '{grant_type}'")
+        return _JSONResponse(
+            {"error": "unsupported_grant_type", "error_description": "Only client_credentials and authorization_code are supported"},
+            status_code=400,
+        )
+
+    if grant_type == "authorization_code":
+        if not code:
+            logger.warning("mcp_oauth_token error: code is required for authorization_code grant")
+            return _JSONResponse(
+                {"error": "invalid_request", "error_description": "code is required for authorization_code grant"},
+                status_code=400,
+            )
+
+        from app.utils.cache import cache
+        code_data = cache.get(f"oauth_code:{code}")
+        if not code_data:
+            logger.warning(f"mcp_oauth_token error: authorization code '{code}' not found or expired in cache")
+            return _JSONResponse(
+                {"error": "invalid_grant", "error_description": "Authorization code is invalid or expired"},
+                status_code=400,
+            )
+
+        cache.delete(f"oauth_code:{code}")
+
+        if client_id and client_id != code_data["client_id"]:
+            logger.warning(f"mcp_oauth_token error: client_id mismatch. Request={client_id}, Code={code_data['client_id']}")
+            return _JSONResponse(
+                {"error": "invalid_client", "error_description": "Client ID mismatch"},
+                status_code=400,
+            )
+
+        client_id = code_data["client_id"]
+        challenge = code_data.get("code_challenge")
+        method = code_data.get("code_challenge_method", "S256")
+
+        if challenge:
+            if not code_verifier:
+                logger.warning("mcp_oauth_token error: missing code_verifier (PKCE challenge was set)")
+                return _JSONResponse(
+                    {"error": "invalid_request", "error_description": "code_verifier is required (PKCE)"},
+                    status_code=400,
+                )
+
+            import hashlib
+            import base64
+
+            def base64url_encode(input_bytes: bytes) -> str:
+                return base64.urlsafe_b64encode(input_bytes).decode('utf-8').rstrip('=')
+
+            if method == "S256":
+                sha256_hash = hashlib.sha256(code_verifier.encode('utf-8')).digest()
+                calculated = base64url_encode(sha256_hash)
+            else:
+                calculated = code_verifier
+
+            if calculated != challenge:
+                logger.warning(f"mcp_oauth_token error: PKCE verification failed. Calculated={calculated}, Challenge={challenge}")
+                return _JSONResponse(
+                    {"error": "invalid_grant", "error_description": "PKCE verification failed"},
+                    status_code=400,
+                )
+
+        cred = db.query(MCPCredential).filter(
+            MCPCredential.id == code_data["credential_id"],
+            MCPCredential.is_active == True,
+        ).first()
+
+        if not cred:
+            logger.warning(f"mcp_oauth_token error: active credential id {code_data.get('credential_id')} not found")
+            return _JSONResponse(
+                {"error": "invalid_grant", "error_description": "Associated credential is no longer active"},
+                status_code=400,
+            )
+
+    else:  # client_credentials
+        if not client_id or not client_secret:
+            logger.warning("mcp_oauth_token error: client_id and client_secret are required for client_credentials grant")
+            return _JSONResponse(
+                {"error": "invalid_request", "error_description": "client_id and client_secret are required"},
+                status_code=400,
+            )
+
+        cred = db.query(MCPCredential).filter(
+            MCPCredential.client_id == client_id,
+            MCPCredential.is_active == True,
+        ).first()
+
+        if not cred or not verify_secret(client_secret, cred.client_secret_hash):
+            logger.warning(f"mcp_oauth_token error: invalid client credentials for client_id {client_id}")
+            return _JSONResponse(
+                {"error": "invalid_client", "error_description": "Invalid client_id or client_secret"},
+                status_code=401,
+            )
+
+    if cred.is_expired:
+        return _JSONResponse(
+            {"error": "invalid_client", "error_description": "Credential has expired. Contact your super admin to regenerate."},
+            status_code=401,
+        )
+
+    token = create_access_token(
+        org_id=cred.organization_id,
+        scopes=cred.scopes,
+        credential_id=cred.id,
+        client_id=cred.client_id,
+    )
+    cred.last_used_at = datetime.utcnow()
+    db.commit()
+
+    return _JSONResponse({
+        "access_token": token,
+        "token_type":   "Bearer",
+        "expires_in":   3600,
+        "scope":        " ".join(cred.scopes),
+    })
+
+
+# ===========================================================================
+# MCP — Super Admin Credential Management
+# ===========================================================================
+
+@app.post("/superadmin/mcp/base-url")
+async def superadmin_mcp_base_url_save(
+    request: Request,
+    mcp_base_url: str = Form(...),
+    redirect_org_id: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    """Update the global mcp_base_url SystemConfig (no org_id)."""
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+
+    from app.models.config import SystemConfig
+    row = db.query(SystemConfig).filter(
+        SystemConfig.key == "mcp_base_url",
+        SystemConfig.organization_id == None,
+    ).first()
+    url = mcp_base_url.strip().rstrip("/")
+    if row:
+        row.value = url
+        row.updated_by = request.session.get("email", "superadmin")
+    else:
+        db.add(SystemConfig(
+            key="mcp_base_url", value=url, value_type="STRING",
+            label="MCP Base URL", group="mcp", organization_id=None,
+            updated_by=request.session.get("email", "superadmin"),
+        ))
+    from app.models.audit import AuditLog, AuditAction
+    db.add(AuditLog(
+        action=AuditAction.CONFIG_CHANGED,
+        actor=request.session.get("email", "superadmin"),
+        organization_id=None,
+        message=f"MCP base URL updated to: {url}",
+    ))
+    db.commit()
+
+    if redirect_org_id:
+        return RedirectResponse(f"/superadmin/organizations/{redirect_org_id}?msg=mcp_url_saved", 302)
+    return RedirectResponse("/superadmin/organizations?msg=mcp_url_saved", 302)
+
+
+@app.post("/superadmin/organizations/{org_id}/mcp/generate")
+async def superadmin_mcp_generate(
+    org_id: int,
+    request: Request,
+    name: str = Form("Default"),
+    notes: str = Form(""),
+    scopes: list = Form(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Generate a new MCP client_id + client_secret pair for an organisation.
+    The plain secret is returned once in the redirect URL (shown once in UI).
+    """
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+
+    from app.models.account import Organization
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    if not org:
+        return RedirectResponse("/superadmin/organizations", 302)
+
+    from app.models.mcp import (
+        MCPCredential, MCP_ALL_SCOPES,
+        MCP_CREDENTIAL_VALIDITY_DAYS,
+        generate_client_id, generate_client_secret, hash_secret,
+    )
+    from datetime import timedelta
+
+    selected_scopes = scopes if scopes else MCP_ALL_SCOPES
+
+    plain_secret = generate_client_secret()
+    client_id    = generate_client_id()
+
+    cred = MCPCredential(
+        organization_id       = org_id,
+        name                  = name,
+        client_id             = client_id,
+        client_secret_hash    = hash_secret(plain_secret),
+        scopes                = selected_scopes,
+        expires_at            = datetime.utcnow() + timedelta(days=MCP_CREDENTIAL_VALIDITY_DAYS),
+        is_active             = True,
+        created_by            = request.session.get("email", "superadmin"),
+        notes                 = notes or None,
+    )
+    db.add(cred)
+
+    from app.utils.cache import cache
+    cache.set(f"mcp_secret:{client_id}", plain_secret, expire_seconds=600)
+
+    from app.models.audit import AuditLog, AuditAction
     db.add(AuditLog(
         action=AuditAction.CONFIG_CHANGED,
         actor=request.session.get("email", "superadmin"),
