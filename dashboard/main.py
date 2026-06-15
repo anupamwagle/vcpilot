@@ -3436,6 +3436,65 @@ def _trader_watchlist_data_inner(request: Request, db):
 
     org_id = request.session.get("organization_id")
 
+    from app.models.audit import AuditLog, AuditAction
+    # Retrieve timezone
+    tz_row = db.query(SystemConfig).filter(SystemConfig.key == "org_timezone", SystemConfig.organization_id == org_id).first()
+    display_tz = tz_row.value if tz_row else "Australia/Sydney"
+
+    # Query last screener run AuditLog rows once for ASX, NYSE, CRYPTO
+    last_screens = {}
+    for exk in ["ASX", "NYSE", "CRYPTO"]:
+        row = (
+            db.query(AuditLog)
+            .filter(
+                AuditLog.organization_id == org_id,
+                AuditLog.action == AuditAction.SCREENER_RUN,
+                AuditLog.message.like(f"[{exk}]%")
+            )
+            .order_by(AuditLog.created_at.desc())
+            .first()
+        )
+        if row:
+            last_screens[exk] = row
+
+    def _get_next_scheduled_run(exk: str, tz_name: str) -> str:
+        import pytz
+        from datetime import datetime as dt_class, timedelta
+        try:
+            tz = pytz.timezone(tz_name)
+            now_local = dt_class.now(tz)
+            
+            if exk == "CRYPTO":
+                # 4-hourly runs: 00:55, 04:55, 08:55, 12:55, 16:55, 20:55
+                target_hours = [0, 4, 8, 12, 16, 20]
+                for h in target_hours:
+                    candidate = now_local.replace(hour=h, minute=55, second=0, microsecond=0)
+                    if candidate > now_local:
+                        return candidate.strftime("%Y-%m-%d %H:%M %Z")
+                tomorrow = now_local + timedelta(days=1)
+                return tomorrow.replace(hour=0, minute=55, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M %Z")
+                
+            elif exk == "NYSE":
+                # US: 7:30am Tue-Sat
+                for offset in range(8):
+                    candidate_day = now_local + timedelta(days=offset)
+                    if candidate_day.weekday() in (1, 2, 3, 4, 5):
+                        candidate = candidate_day.replace(hour=7, minute=30, second=0, microsecond=0)
+                        if candidate > now_local:
+                            return candidate.strftime("%Y-%m-%d %H:%M %Z")
+                            
+            else: # ASX
+                # ASX: 5:30pm Mon-Fri
+                for offset in range(8):
+                    candidate_day = now_local + timedelta(days=offset)
+                    if candidate_day.weekday() in (0, 1, 2, 3, 4):
+                        candidate = candidate_day.replace(hour=17, minute=30, second=0, microsecond=0)
+                        if candidate > now_local:
+                            return candidate.strftime("%Y-%m-%d %H:%M %Z")
+        except Exception:
+            pass
+        return "TBD"
+
     # ── All WATCHING items (with label eager-loaded) ──
     wl_items = (
         db.query(Watchlist)
@@ -3559,6 +3618,20 @@ def _trader_watchlist_data_inner(request: Request, db):
             rv = rules["vcp_contractions"]
             vcp_contractions = int(rv.get("value") or 0) if isinstance(rv, dict) and rv.get("value") else None
 
+        # Determine screener exchange key
+        is_crypto_item = w.ticker.endswith(("-AUD", "-USD", "-USDT")) or getattr(w, "asset_type", "EQUITY") == "CRYPTO"
+        if is_crypto_item:
+            scr_ex = "CRYPTO"
+        elif (w.exchange_key or "ASX") in ("NYSE", "NASDAQ"):
+            scr_ex = "NYSE"
+        else:
+            scr_ex = "ASX"
+
+        row = last_screens.get(scr_ex)
+        last_screen_at_val = _fmt_dt(row.created_at.isoformat(), display_tz) if row else "Never"
+        last_screen_summary_val = (row.message.split("] ", 1)[-1] if row and row.message else "No screen run found")
+        next_screen_at_val = _get_next_scheduled_run(scr_ex, display_tz)
+
         return {
             "id": w.id,
             "ticker": w.ticker,
@@ -3597,6 +3670,9 @@ def _trader_watchlist_data_inner(request: Request, db):
             "has_pending_signal": w.ticker in pending_signal_tickers,
             "added_by": w.added_by or "screener",
             "added_date": w.added_date.isoformat() if w.added_date else None,
+            "last_screen_at": last_screen_at_val,
+            "last_screen_summary": last_screen_summary_val,
+            "next_screen_at": next_screen_at_val,
         }
 
     label_map: dict = {}

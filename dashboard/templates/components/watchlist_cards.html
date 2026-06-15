@@ -178,7 +178,7 @@
   {% if w.stats.bar_date or w.stats.live_price %}
   <div style="padding:.3rem .75rem;border-bottom:1px solid var(--border)">
     {% if w.stats.live_price %}
-      <span style="font-size:.65rem;color:var(--pos);font-weight:600">⚡ Live price</span>
+      <span style="font-size:.65rem;color:var(--pos);font-weight:600">⚡ Live price: ${{ "%.4f"|format(w.stats.live_price) if w.stats.live_price < 1.0 else "%.3f"|format(w.stats.live_price) }}</span>
       {% if w.stats.delay_mins and w.stats.delay_mins > 0 %}
         <span style="font-size:.65rem;color:var(--text-subtle)"> (~{{ w.stats.delay_mins }}min delay · {{ w.stats.data_source }})</span>
       {% else %}

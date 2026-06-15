@@ -776,6 +776,22 @@
           </div>
         </div>
 
+        <!-- Screener Status Panel -->
+        <div style="background:var(--surf2); border-bottom:1px solid var(--border); padding:8px 10px; display:flex; flex-direction:column; gap:4px; font-size:10px">
+          <div style="display:flex; justify-content:space-between; align-items:center">
+            <span style="color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:0.04em">Last Screen:</span>
+            <span style="color:var(--text); font-family:monospace; font-weight:700" x-text="selectedItem.last_screen_at || 'Never'"></span>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center">
+            <span style="color:var(--muted)">Summary:</span>
+            <span style="color:var(--accent); font-weight:700" x-text="selectedItem.last_screen_summary || 'No data'"></span>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center">
+            <span style="color:var(--muted)">Next Check:</span>
+            <span style="color:var(--warn); font-family:monospace; font-weight:700" x-text="selectedItem.next_screen_at || 'TBD'"></span>
+          </div>
+        </div>
+
         <!-- Rule results (scrollable) -->
         <div class="right-scroll">
 
