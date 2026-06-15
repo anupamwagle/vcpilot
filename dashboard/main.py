@@ -3445,7 +3445,7 @@ def _trader_watchlist_data_inner(request: Request, db):
             Watchlist.status == WatchlistStatus.WATCHING,
         )
         .order_by(Watchlist.created_at.desc())
-        .limit(300)
+        .limit(1000)
         .all()
     )
 
