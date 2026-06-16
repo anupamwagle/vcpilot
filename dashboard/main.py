@@ -679,8 +679,18 @@ async def home(
     # Single query for all company names — used across positions + signals
     stock_names = {s.ticker: (s.name or "") for s in db.query(Stock).all()}
 
+    active_exchange = (exchange or "ALL").upper()
+
     # Open positions
-    positions = db.query(Position).filter(Position.status == TradeStatus.OPEN, Position.organization_id == org_id).all()
+    pos_q = db.query(Position).filter(Position.status == TradeStatus.OPEN, Position.organization_id == org_id)
+    if active_exchange == "ASX":
+        pos_q = pos_q.filter(Position.exchange_key == "ASX")
+    elif active_exchange == "US":
+        pos_q = pos_q.filter(Position.exchange_key.in_(["NYSE", "NASDAQ"]))
+    elif active_exchange == "CRYPTO":
+        pos_q = pos_q.filter(Position.asset_type == "CRYPTO")
+    positions = pos_q.all()
+
     pos_data, total_risk = [], 0.0
     for p in positions:
         entry = float(p.entry_price or 0)
@@ -704,13 +714,21 @@ async def home(
 
     # Signals (Show today's signals OR active pending signals)
     from sqlalchemy import or_
-    signals = db.query(Signal).filter(
+    sig_q = db.query(Signal).filter(
         or_(
             Signal.signal_date == get_current_date(),
             Signal.status == SignalStatus.PENDING
         ),
         Signal.organization_id == org_id
-    ).all()
+    )
+    if active_exchange == "ASX":
+        sig_q = sig_q.filter(Signal.exchange_key == "ASX")
+    elif active_exchange == "US":
+        sig_q = sig_q.filter(Signal.exchange_key.in_(["NYSE", "NASDAQ"]))
+    elif active_exchange == "CRYPTO":
+        sig_q = sig_q.filter(Signal.asset_type == "CRYPTO")
+    signals = sig_q.all()
+
     sig_data = [{
         "id": s.id, "ticker": s.ticker,
         "company_name": stock_names.get(s.ticker, ""),
@@ -725,8 +743,68 @@ async def home(
     } for s in signals]
 
     # P&L
-    today_trades = db.query(Trade).filter(Trade.exit_date == get_current_date(), Trade.organization_id == org_id).all()
-    all_trades   = db.query(Trade).filter(Trade.organization_id == org_id).all()
+    today_trades_q = db.query(Trade).filter(Trade.exit_date == get_current_date(), Trade.organization_id == org_id)
+    all_trades_q   = db.query(Trade).filter(Trade.organization_id == org_id)
+    if active_exchange == "ASX":
+        today_trades_q = today_trades_q.filter(Trade.exchange_key == "ASX")
+        all_trades_q   = all_trades_q.filter(Trade.exchange_key == "ASX")
+    elif active_exchange == "US":
+        today_trades_q = today_trades_q.filter(Trade.exchange_key.in_(["NYSE", "NASDAQ"]))
+        all_trades_q   = all_trades_q.filter(Trade.exchange_key.in_(["NYSE", "NASDAQ"]))
+    elif active_exchange == "CRYPTO":
+        today_trades_q = today_trades_q.filter(Trade.asset_type == "CRYPTO")
+        all_trades_q   = all_trades_q.filter(Trade.asset_type == "CRYPTO")
+    today_trades = today_trades_q.all()
+    all_trades   = all_trades_q.all()
+
+    # Calculate realised P&L
+    total_realised_pnl = sum(float(t.net_pnl_aud or 0) for t in all_trades)
+    today_realised_pnl = sum(float(t.net_pnl_aud or 0) for t in today_trades)
+
+    # Bulk PriceBar lookup for prev_close (daily P&L)
+    from app.models.market import PriceBar
+    from sqlalchemy import and_, func
+    _pos_tickers = list({p.ticker for p in positions})
+    prev_close_map = {}
+    if _pos_tickers:
+        latest_dates_sub = db.query(
+            PriceBar.ticker,
+            func.max(PriceBar.date).label("max_date")
+        ).filter(
+            PriceBar.ticker.in_(_pos_tickers),
+            PriceBar.date < get_current_date()
+        ).group_by(PriceBar.ticker).subquery()
+
+        prev_bars = db.query(PriceBar).join(
+            latest_dates_sub,
+            and_(
+                PriceBar.ticker == latest_dates_sub.c.ticker,
+                PriceBar.date == latest_dates_sub.c.max_date
+            )
+        ).all()
+        prev_close_map = {b.ticker: float(b.close) for b in prev_bars if b.close is not None}
+
+    # Calculate today's unrealised P&L
+    today_unrealised_pnl = 0.0
+    for p in positions:
+        entry = float(p.entry_price or 0)
+        curr  = float(p.current_price or entry)
+        qty   = float(p.qty or 0)
+        fx    = float(p.current_fx_rate or p.entry_fx_rate or 1.0) if getattr(p, "currency", "AUD") != "AUD" else 1.0
+
+        if p.entry_date == get_current_date():
+            pos_today_pnl = (curr - entry) * qty * fx
+        else:
+            prev_close = prev_close_map.get(p.ticker)
+            if prev_close is not None:
+                pos_today_pnl = (curr - prev_close) * qty * fx
+            else:
+                pos_today_pnl = (curr - entry) * qty * fx
+        today_unrealised_pnl += pos_today_pnl
+
+    total_unrealised_pnl = sum(float(p.unrealised_pnl or 0) for p in positions)
+    today_pnl = today_realised_pnl + today_unrealised_pnl
+    total_pnl = total_realised_pnl + total_unrealised_pnl
 
     # ── Automated System Checks ──
     from app.models.audit import AuditLog, AuditAction
@@ -915,8 +993,12 @@ async def home(
         "signals": sig_data,
         "regimes": regimes_list,
         "portfolio_heat": round(total_risk / capital * 100, 1) if capital else 0,
-        "today_pnl": round(sum(float(t.net_pnl_aud or 0) for t in today_trades), 2),
-        "total_pnl":  round(sum(float(t.net_pnl_aud or 0) for t in all_trades), 2),
+        "today_pnl": round(today_pnl, 2),
+        "today_realised_pnl": round(today_realised_pnl, 2),
+        "today_unrealised_pnl": round(today_unrealised_pnl, 2),
+        "total_pnl": round(total_pnl, 2),
+        "total_realised_pnl": round(total_realised_pnl, 2),
+        "total_unrealised_pnl": round(total_unrealised_pnl, 2),
         "trade_count": len(all_trades),
         "checks": checks,
         "watchlist_rows": watchlist_rows,
@@ -1119,12 +1201,31 @@ async def positions(request: Request, db: Session = Depends(get_db),
     win_loss_ratio = round(avg_win / avg_loss, 2) if avg_loss else 0.0
     avg_hold_time = round(sum(t.hold_days for t in trades if t.hold_days is not None) / len(trades), 1) if trades else 0.0
 
+    # Calculate total realised, unrealised, and total P&L across all matching records (not just limit 50)
+    all_trade_q = db.query(Trade).filter(Trade.organization_id == org_id)
+    try:
+        if af == "ASX":
+            all_trade_q = all_trade_q.filter(Trade.exchange_key == "ASX")
+        elif af == "CRYPTO":
+            all_trade_q = all_trade_q.filter(Trade.asset_type == "CRYPTO")
+        elif af == "US":
+            all_trade_q = all_trade_q.filter(Trade.exchange_key.in_(["NYSE", "NASDAQ"]))
+    except Exception:
+        pass
+    all_trades_for_pnl = all_trade_q.all()
+
+    total_realised_pnl = sum(float(t.net_pnl_aud or 0) for t in all_trades_for_pnl)
+    total_unrealised_pnl = sum(float(p.unrealised_pnl or 0) for p in positions)
+    total_pnl = total_realised_pnl + total_unrealised_pnl
+
     ef = _get_exchange_filters(org_id, db)
     ctx.update({
         "positions": pos_data, "trades": trade_data,
         "win_rate": round(len(wins) / len(trades) * 100) if trades else 0,
-        "total_pnl": round(sum(float(t.net_pnl_aud or 0) for t in trades), 2),
-        "trade_count": len(trades),
+        "total_realised_pnl": round(total_realised_pnl, 2),
+        "total_unrealised_pnl": round(total_unrealised_pnl, 2),
+        "total_pnl": round(total_pnl, 2),
+        "trade_count": len(all_trades_for_pnl),
         "portfolio_heat": portfolio_heat,
         "win_loss_ratio": win_loss_ratio,
         "avg_hold_time": avg_hold_time,
