@@ -16,7 +16,7 @@ from app.models.config import SystemConfig
 from app.data.fetcher import (
     get_asx200_tickers, get_asx200_metadata,
     get_asx300_tickers, get_asx300_metadata,
-    get_asx_all_listed, infer_sector_label,
+    get_asx_all_listed,
     get_price_history, get_batch_prices,
     get_fundamentals, compute_rs_ratings, get_top_crypto_tickers, normalize_ticker,
 )
@@ -1423,33 +1423,58 @@ def _get_or_create_sector_label(label_name: str, organization_id: int, db) -> in
 
 def _auto_assign_sector_label(ticker: str, wl_item, organization_id: int, db, force: bool = False):
     """
-    Auto-assign a sector WatchlistLabel to the watchlist item based on the stock's sector/industry.
+    Auto-assign a sector WatchlistLabel to the watchlist item based on the
+    stock's ticker (deterministic override map) or sector/industry data.
 
     Only assigns if:
     - The item has no label yet (or force=True to override any non-default label)
-    - The stock has sector/industry data
+    - A label can be determined — either via the ASX_TICKER_SECTOR_OVERRIDES
+      map (instant, no data dependency) or via sector/industry keyword
+      matching (fetched live and persisted to the Stock row if missing).
 
     Does NOT override Favourites, High Priority, VCP Forming, or Under Review unless force=True.
+
+    Note: most WATCHING items are, by definition, NOT a full 8/8 trend pass —
+    run_daily_screen's get_fundamentals() call (the only place that normally
+    populates Stock.industry) is gated behind a full trend-template pass and
+    is therefore never reached for the bulk of the watchlist. The ticker
+    override map and the live-fetch fallback below exist specifically to
+    close that gap.
     """
     from app.models.market import Stock
-    from app.models.signal import WatchlistLabel
+    from app.data.fetcher import infer_sector_label_for_ticker, get_fundamentals
 
     # Skip if already has a label and not forcing
     if wl_item.label_id and not force:
         return
 
     stock = db.query(Stock).filter(Stock.ticker == ticker).first()
-    if not stock:
-        return
+    sector   = (stock.sector   if stock else "") or ""
+    industry = (stock.industry if stock else "") or ""
 
-    sector   = stock.sector   or ""
-    industry = stock.industry or ""
+    # Deterministic ticker override is checked first inside
+    # infer_sector_label_for_ticker() — works even with blank sector/industry.
+    label_name = infer_sector_label_for_ticker(ticker, sector, industry)
 
-    # If no sector data available yet, skip (will be filled on next screener run)
-    if not sector and not industry:
-        return
+    # No override match and no sector/industry data yet — try a live, throttled
+    # fetch before giving up. Throttled to once per 24h per ticker so a bulk
+    # re-categorise run doesn't hammer yfinance for every miss.
+    if not label_name and not sector and not industry and stock and stock.asset_type != "CRYPTO":
+        from app.utils.cache import cache
+        _throttle_key = f"sector_fetch_attempted:{ticker}"
+        if not cache.get(_throttle_key):
+            cache.set(_throttle_key, "1", expire_seconds=86400)
+            try:
+                fundamentals = get_fundamentals(ticker)
+                f_sector   = fundamentals.get("sector") or ""
+                f_industry = fundamentals.get("industry") or ""
+                if f_sector or f_industry:
+                    stock.sector   = f_sector   or stock.sector
+                    stock.industry = f_industry or stock.industry
+                    label_name = infer_sector_label_for_ticker(ticker, f_sector, f_industry)
+            except Exception as e:
+                logger.warning(f"Live sector/industry fetch failed for {ticker}: {e}")
 
-    label_name = infer_sector_label(sector, industry)
     if not label_name:
         return
 

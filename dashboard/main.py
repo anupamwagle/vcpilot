@@ -28,6 +28,24 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.exceptions import RequestValidationError
 from app.utils.cache import cache
 
+# ── Known crypto base-symbol set (e.g. "TRX", "BTC") ─────────────────────────
+# Used to catch legacy Signal/Watchlist rows that predate ticker-suffix
+# normalisation and still have a bare ticker (e.g. "TRX") + exchange_key="ASX"
+# left over from the Jun 2026 screener bug. Suffix checks ("-AUD"/"-USD"/
+# "-USDT") alone miss these bare-symbol rows.
+from app.data.fetcher import TOP_CRYPTO_SYMBOLS as _CRYPTO_BASE_SYMBOLS
+_CRYPTO_TICKER_SET = frozenset(_CRYPTO_BASE_SYMBOLS)
+
+def _looks_like_crypto_ticker(ticker: str) -> bool:
+    """True if ticker has a crypto suffix or its bare base matches a known coin symbol."""
+    if not ticker:
+        return False
+    t = ticker.upper()
+    if t.endswith(("-AUD", "-USD", "-USDT")):
+        return True
+    base = t.split("-")[0].split("/")[0]
+    return base in _CRYPTO_TICKER_SET
+
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     status_code = exc.status_code
@@ -114,13 +132,14 @@ def get_cached_wl_labels(org_id: int, db: Session) -> list[dict]:
     sort_order is used to infer label asset-type: 10-13 = crypto, 20-38 = ASX sector, 0-3 = default.
     """
     from app.models.signal import WatchlistLabel
+    from sqlalchemy import func as _wlfunc
     cache_key = f"wl_labels:{org_id}"
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
     labels = db.query(WatchlistLabel).filter(
         WatchlistLabel.organization_id == org_id
-    ).order_by(WatchlistLabel.sort_order).all()
+    ).order_by(_wlfunc.lower(WatchlistLabel.name)).all()
     result = [
         {"id": l.id, "name": l.name, "color": l.color, "is_default": l.is_default, "sort_order": l.sort_order}
         for l in labels
@@ -1383,9 +1402,24 @@ async def signals(request: Request, db: Session = Depends(get_db),
         Signal.organization_id == org_id,
     )
     if af == "ASX":
-        _base_q = _base_q.filter(Signal.exchange_key == "ASX")
+        # Exclude bare/suffixed crypto tickers that landed with exchange_key="ASX"
+        # due to the Jun 2026 screener/promotion bug (legacy rows pre-date ticker
+        # suffix normalisation, e.g. "TRX" instead of "TRX-AUD").
+        _base_q = _base_q.filter(
+            Signal.exchange_key == "ASX",
+            ~Signal.ticker.like("%-AUD"),
+            ~Signal.ticker.like("%-USD"),
+            ~Signal.ticker.like("%-USDT"),
+            ~Signal.ticker.in_(_CRYPTO_TICKER_SET),
+        )
     elif af == "CRYPTO":
-        _base_q = _base_q.filter(Signal.asset_type == "CRYPTO")
+        _base_q = _base_q.filter(or_(
+            Signal.asset_type == "CRYPTO",
+            Signal.ticker.like("%-AUD"),
+            Signal.ticker.like("%-USD"),
+            Signal.ticker.like("%-USDT"),
+            Signal.ticker.in_(_CRYPTO_TICKER_SET),
+        ))
     elif af == "US":
         _base_q = _base_q.filter(Signal.exchange_key.in_(["NYSE", "NASDAQ"]))
 
@@ -1466,17 +1500,21 @@ async def signals_items(request: Request, db: Session = Depends(get_db),
         Signal.organization_id == org_id,
     )
     if af == "ASX":
-        # Exclude crypto-format tickers that landed with exchange_key="ASX" due to Jun 2026 DB bug
+        # Exclude bare/suffixed crypto tickers that landed with exchange_key="ASX"
+        # due to the Jun 2026 screener/promotion bug (legacy rows pre-date ticker
+        # suffix normalisation, e.g. "TRX" instead of "TRX-AUD").
         q = q.filter(
             Signal.exchange_key == "ASX",
             ~Signal.ticker.like("%-AUD"),
             ~Signal.ticker.like("%-USD"),
             ~Signal.ticker.like("%-USDT"),
+            ~Signal.ticker.in_(_CRYPTO_TICKER_SET),
         )
     elif af == "CRYPTO":
         from sqlalchemy import or_ as _or_sig
         q = q.filter(_or_sig(
             Signal.asset_type == "CRYPTO",
+            Signal.ticker.in_(_CRYPTO_TICKER_SET),
             Signal.ticker.like("%-AUD"),
             Signal.ticker.like("%-USD"),
             Signal.ticker.like("%-USDT"),
@@ -1484,6 +1522,30 @@ async def signals_items(request: Request, db: Session = Depends(get_db),
     elif af == "US":
         q = q.filter(Signal.exchange_key.in_(["NYSE", "NASDAQ"]))
     sigs = q.all()
+
+    # ── Self-heal legacy mis-tagged crypto signals ───────────────────────────
+    # Rows created before ticker-suffix normalisation can have exchange_key="ASX"
+    # / asset_type="EQUITY" with a bare crypto ticker (e.g. "TRX"). Correct them
+    # in place so they file under the right exchange tab going forward and don't
+    # need the runtime heuristic on every request.
+    _healed = False
+    for _s in sigs:
+        if _looks_like_crypto_ticker(_s.ticker) and (_s.exchange_key == "ASX" or _s.asset_type != "CRYPTO"):
+            _s.exchange_key = "CRYPTO_INDEPENDENTRESERVE"
+            _s.asset_type = "CRYPTO"
+            _healed = True
+    if _healed:
+        try:
+            db.add(AuditLog(
+                action=AuditAction.CONFIG_CHANGED,
+                actor="system",
+                organization_id=org_id,
+                message="Auto-corrected mis-tagged legacy crypto signal(s) — exchange_key/asset_type fixed.",
+            ))
+            db.commit()
+        except Exception:
+            db.rollback()
+
     stock_names = get_cached_stock_names(db)
 
     # ── Pre-fetch audit entries (avoids N+1) ──────────────────────────────
@@ -3893,11 +3955,12 @@ def _trader_watchlist_data_inner(request: Request, db):
         .all()
     )
 
-    # ── All labels (for ordering) ──
+    # ── All labels (for ordering — alphabetical, case-insensitive) ──
+    from sqlalchemy import func as _twfunc
     labels = (
         db.query(WatchlistLabel)
         .filter(WatchlistLabel.organization_id == org_id)
-        .order_by(WatchlistLabel.sort_order, WatchlistLabel.id)
+        .order_by(_twfunc.lower(WatchlistLabel.name))
         .all()
     )
 

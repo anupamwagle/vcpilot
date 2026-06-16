@@ -635,6 +635,110 @@ _SECTOR_LABEL_RULES: list[tuple[list[str], str | None, str]] = [
     (["crypto", "digital asset", "defi"], None,         "Crypto Core"),
 ]
 
+# ---------------------------------------------------------------------------
+# Deterministic ASX ticker → sector-label overrides.
+#
+# Why this exists: yfinance frequently returns blank/incomplete `sector` and
+# `industry` fields for ASX-listed tickers via `.info`, and — separately —
+# `app.tasks.screening.run_daily_screen` only calls `get_fundamentals()` (the
+# code path that persists `industry` onto the Stock row) for tickers that
+# pass ALL 8 trend-template criteria. Watchlist items are, by definition, NOT
+# full trend passes (6-7/8) — so the vast majority of watchlist stocks never
+# get `industry` populated and the keyword-based `infer_sector_label()` below
+# has nothing reliable to match against (e.g. CBA's Wikipedia-sourced sector
+# is just "Financials", with no "industry" sub-group ever fetched, so the
+# "bank" keyword never appears).
+#
+# This map shortcuts well-known ASX blue/mid-cap tickers straight to a label,
+# independent of any external data fetch — instant, deterministic, and
+# immune to yfinance flakiness. It is checked BEFORE the keyword-based
+# inference in `infer_sector_label_for_ticker()`. Keys are base ASX codes
+# (no ".AX" suffix), matched case-insensitively.
+# ---------------------------------------------------------------------------
+ASX_TICKER_SECTOR_OVERRIDES: dict[str, str] = {
+    # ── Banks ─────────────────────────────────────────────────────────────
+    "CBA": "Banks", "WBC": "Banks", "ANZ": "Banks", "NAB": "Banks",
+    "MQG": "Banks", "BOQ": "Banks", "BEN": "Banks", "JDO": "Banks",
+    # ── Insurance ─────────────────────────────────────────────────────────
+    "SUN": "Insurance", "IAG": "Insurance", "QBE": "Insurance",
+    "MPL": "Insurance", "NHF": "Insurance", "GMA": "Insurance",
+    # ── Financials (diversified / asset mgmt / registry) ─────────────────────
+    "MFG": "Financials", "PPT": "Financials", "GQG": "Financials",
+    "PNI": "Financials", "CGF": "Financials", "ASX": "Financials",
+    "IFL": "Financials", "AMP": "Financials", "CPU": "Financials",
+    # ── FinTech ───────────────────────────────────────────────────────────
+    "Z1P": "FinTech", "TYR": "FinTech", "HUM": "FinTech", "SQ2": "FinTech",
+    # ── Gold ──────────────────────────────────────────────────────────────
+    "EVN": "Gold", "NST": "Gold", "RRL": "Gold", "RMS": "Gold", "GOR": "Gold",
+    "DEG": "Gold", "CMM": "Gold", "BGL": "Gold", "PRU": "Gold", "WGX": "Gold",
+    "SBM": "Gold", "VAU": "Gold", "GMD": "Gold",
+    # ── Lithium ───────────────────────────────────────────────────────────
+    "PLS": "Lithium", "MIN": "Lithium", "LTR": "Lithium", "IGO": "Lithium",
+    "LTM": "Lithium", "CXO": "Lithium", "SYA": "Lithium", "WC8": "Lithium",
+    # ── Rare Earth ────────────────────────────────────────────────────────
+    "LYC": "Rare Earth",
+    # ── Uranium ───────────────────────────────────────────────────────────
+    "PDN": "Uranium", "BOE": "Uranium", "DYL": "Uranium", "PEN": "Uranium",
+    # ── Copper ────────────────────────────────────────────────────────────
+    "SFR": "Copper", "29M": "Copper", "C6C": "Copper",
+    # ── Iron & Steel ──────────────────────────────────────────────────────
+    "BHP": "Iron & Steel", "RIO": "Iron & Steel", "FMG": "Iron & Steel",
+    "BSL": "Iron & Steel", "MGX": "Iron & Steel", "CIA": "Iron & Steel",
+    # ── Oil & Gas ─────────────────────────────────────────────────────────
+    "WDS": "Oil & Gas", "STO": "Oil & Gas", "BPT": "Oil & Gas",
+    "KAR": "Oil & Gas", "VEA": "Oil & Gas", "ALD": "Oil & Gas",
+    # ── Mining (General) / Materials ─────────────────────────────────────
+    "S32": "Mining (General)", "ILU": "Mining (General)", "OZL": "Mining (General)",
+    # ── Energy (generation / retail) ─────────────────────────────────────
+    "ORG": "Energy", "AGL": "Energy",
+    # ── Utilities (infrastructure) ───────────────────────────────────────
+    "APA": "Utilities",
+    # ── Healthcare / Pharma ───────────────────────────────────────────────
+    "CSL": "Healthcare / Pharma", "RMD": "Healthcare / Pharma", "COH": "Healthcare / Pharma",
+    "SHL": "Healthcare / Pharma", "RHC": "Healthcare / Pharma", "FPH": "Healthcare / Pharma",
+    "EBO": "Healthcare / Pharma", "API": "Healthcare / Pharma", "NAN": "Healthcare / Pharma",
+    "SIG": "Healthcare / Pharma",
+    # ── Biotech ───────────────────────────────────────────────────────────
+    "PME": "Biotech", "TLX": "Biotech", "MSB": "Biotech", "IMM": "Biotech", "CGS": "Biotech",
+    # ── Technology ────────────────────────────────────────────────────────
+    "XRO": "Technology", "WTC": "Technology", "TNE": "Technology", "ALU": "Technology",
+    "APX": "Technology", "MP1": "Technology", "NXT": "Technology", "DTL": "Technology",
+    "WBT": "Technology", "BRN": "Technology", "SIQ": "Technology",
+    # ── Real Estate (REIT) ───────────────────────────────────────────────
+    "GMG": "Real Estate (REIT)", "SCG": "Real Estate (REIT)", "SGP": "Real Estate (REIT)",
+    "MGR": "Real Estate (REIT)", "VCX": "Real Estate (REIT)", "GPT": "Real Estate (REIT)",
+    "CHC": "Real Estate (REIT)", "DXS": "Real Estate (REIT)", "CLW": "Real Estate (REIT)",
+    "NSR": "Real Estate (REIT)", "ARF": "Real Estate (REIT)", "LLC": "Real Estate (REIT)",
+    # ── Consumer (retail / food / beverage) ──────────────────────────────
+    "WOW": "Consumer", "COL": "Consumer", "WES": "Consumer", "JBH": "Consumer",
+    "HVN": "Consumer", "PMV": "Consumer", "LOV": "Consumer", "BAP": "Consumer",
+    "TWE": "Consumer", "A2M": "Consumer", "BKL": "Consumer", "ALL": "Consumer",
+    "EDV": "Consumer", "DMP": "Consumer",
+    # ── Industrials ───────────────────────────────────────────────────────
+    "TCL": "Industrials", "QAN": "Industrials", "BXB": "Industrials", "ALQ": "Industrials",
+    "SVW": "Industrials", "DOW": "Industrials", "ORI": "Industrials", "AMC": "Industrials",
+    "CIM": "Industrials", "JHX": "Industrials", "REH": "Industrials", "GWA": "Industrials",
+    # ── Telco / Media ─────────────────────────────────────────────────────
+    "TLS": "Telco / Media", "TPG": "Telco / Media", "NEC": "Telco / Media",
+    "SWM": "Telco / Media", "REA": "Telco / Media", "CAR": "Telco / Media", "SEK": "Telco / Media",
+}
+
+
+def infer_sector_label_for_ticker(ticker: str, sector: str, industry: str) -> str | None:
+    """
+    Map a ticker (+ optional sector/industry) to a watchlist label name.
+
+    Checks the deterministic ASX_TICKER_SECTOR_OVERRIDES map first (works even
+    when sector/industry are completely blank), then falls back to the
+    keyword-based infer_sector_label() using whatever sector/industry data is
+    available.
+    """
+    base_code = (ticker or "").split(".")[0].split("-")[0].upper()
+    override = ASX_TICKER_SECTOR_OVERRIDES.get(base_code)
+    if override:
+        return override
+    return infer_sector_label(sector, industry)
+
 
 def infer_sector_label(sector: str, industry: str) -> str | None:
     """
