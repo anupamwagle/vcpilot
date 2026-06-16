@@ -191,24 +191,31 @@
 </script>
 {% endif %}
 
-<!-- ── Label filter chips ─────────────────────────────────────────────── -->
-<div style="display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin-bottom:1.25rem;padding:.125rem 0">
+<!-- ── Label + Tier filter chips ──────────────────────────────────────────── -->
+{% set _exc_q = ("&exchange=" ~ _eff_exchange) if _has_tabs else "" %}
+{% set _tier_q = ("&tier=" ~ active_tier) if active_tier else "" %}
+
+<div style="display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin-bottom:.5rem;padding:.125rem 0">
   <!-- All labels -->
-  {% set _exc_q = ("&exchange=" ~ _eff_exchange) if _has_tabs else "" %}
-  <a href="/watchlist{{ ('?exchange=' ~ _eff_exchange) if _has_tabs else '' }}"
+  <a href="/watchlist{{ ('?exchange=' ~ _eff_exchange) if _has_tabs else '' }}{{ _tier_q }}"
      style="display:inline-flex;align-items:center;gap:.35rem;padding:.3rem .85rem;border-radius:999px;font-size:.75rem;font-weight:600;border:2px solid;text-decoration:none;transition:opacity .15s;
      {% if active_label is none %}background:var(--t-accent);color:white;border-color:var(--t-accent)
      {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
-    All <span style="background:rgba(255,255,255,.25);border-radius:999px;padding:0 .45rem;font-size:.7rem">{{ watchlist|length if active_label is none else '' }}</span>
+    All
+    <span style="background:rgba(255,255,255,.25);border-radius:999px;padding:0 .45rem;font-size:.7rem">{{ total }}</span>
   </a>
 
   {% for lbl in labels %}
-  <a href="/watchlist?label={{ lbl.id }}{{ _exc_q }}"
+  {% set cnt = label_counts.get(lbl.id, 0) %}
+  <a href="/watchlist?label={{ lbl.id }}{{ _exc_q }}{{ _tier_q }}"
      style="display:inline-flex;align-items:center;gap:.35rem;padding:.3rem .85rem;border-radius:999px;font-size:.75rem;font-weight:600;border:2px solid;text-decoration:none;transition:opacity .15s;
      {% if active_label == lbl.id %}background:{{ lbl.color }};color:white;border-color:{{ lbl.color }}
      {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
     <span style="width:.55rem;height:.55rem;border-radius:50%;background:{{ lbl.color }};display:inline-block;flex-shrink:0"></span>
     {{ lbl.name }}
+    {% if cnt > 0 %}
+    <span style="background:rgba(255,255,255,.2);border-radius:999px;padding:0 .4rem;font-size:.65rem;font-weight:700">{{ cnt }}</span>
+    {% endif %}
   </a>
   {% endfor %}
 
@@ -218,6 +225,41 @@
     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
     New label
   </button>
+</div>
+
+<!-- ── Tier quality filter ──────────────────────────────────────────────── -->
+{% set _lbl_q = ("&label=" ~ active_label) if active_label is not none else "" %}
+{% set _tier_base = ("/watchlist?exchange=" ~ _eff_exchange) if _has_tabs else ("/watchlist?label=" ~ active_label if active_label is not none else "/watchlist") %}
+<div style="display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;margin-bottom:1rem">
+  <span style="font-size:.65rem;font-weight:600;color:var(--text-subtle);text-transform:uppercase;letter-spacing:.05em;min-width:2.5rem">Tier</span>
+  <a href="{{ _tier_base }}"
+     style="padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
+     {% if not active_tier %}background:var(--surface-alt);color:var(--text-muted);border-color:var(--border){% else %}background:transparent;color:var(--text-subtle);border-color:var(--border){% endif %}">
+    All
+  </a>
+  <a href="/watchlist?tier=A{{ _exc_q }}{{ _lbl_q }}"
+     style="padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:700;border:1px solid;text-decoration:none;
+     {% if active_tier == 'A' %}background:rgba(16,185,129,.15);color:#10b981;border-color:rgba(16,185,129,.5)
+     {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
+    ★ A — Best
+  </a>
+  <a href="/watchlist?tier=B{{ _exc_q }}{{ _lbl_q }}"
+     style="padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:700;border:1px solid;text-decoration:none;
+     {% if active_tier == 'B' %}background:rgba(59,130,246,.12);color:#3b82f6;border-color:rgba(59,130,246,.4)
+     {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
+    B — Forming
+  </a>
+  <a href="/watchlist?tier=C{{ _exc_q }}{{ _lbl_q }}"
+     style="padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
+     {% if active_tier == 'C' %}background:var(--surface-alt);color:var(--text-muted);border-color:var(--border);opacity:1
+     {% else %}background:transparent;color:var(--text-subtle);border-color:var(--border){% endif %}">
+    C — Early
+  </a>
+  {% if active_tier %}
+  <span style="font-size:.65rem;color:var(--text-subtle);margin-left:.25rem">
+    Minervini quality filter active — <a href="{{ _tier_base }}" style="color:var(--t-accent);text-decoration:none">clear ×</a>
+  </span>
+  {% endif %}
 </div>
 
 <!-- Inline new-label form (hidden by default) -->

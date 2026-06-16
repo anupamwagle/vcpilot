@@ -1862,14 +1862,33 @@ def recategorise_watchlist_labels(self, organization_id: int = None, force: bool
         for org in orgs:
             assigned = 0
             with get_db() as db:
+                from app.models.signal import WatchlistLabel
                 items = db.query(Watchlist).filter(
                     Watchlist.organization_id == org.id,
                     Watchlist.status == WatchlistStatus.WATCHING,
                 ).all()
 
+                # User-priority labels are protected from auto-assignment unless force=True.
+                # Sector labels (auto-assigned) are always eligible for re-categorisation.
+                _PROTECTED_NAMES = {
+                    "Favourites", "High Priority", "VCP Forming", "Under Review",
+                    "Crypto Core", "DeFi", "Altcoins", "Crypto Watch",
+                }
+                _protected_ids: set = {
+                    lbl.id for lbl in db.query(WatchlistLabel).filter(
+                        WatchlistLabel.organization_id == org.id,
+                        WatchlistLabel.name.in_(_PROTECTED_NAMES),
+                    ).all()
+                }
+
                 for item in items:
+                    # Skip only if the current label is a user-priority label and not forcing
+                    if not force and item.label_id and item.label_id in _protected_ids:
+                        continue
                     before = item.label_id
-                    _auto_assign_sector_label(item.ticker, item, org.id, db, force=force)
+                    # Guard has already been applied above, so use force=True internally
+                    # to allow overwriting any non-protected sector label
+                    _auto_assign_sector_label(item.ticker, item, org.id, db, force=True)
                     if item.label_id != before:
                         assigned += 1
 

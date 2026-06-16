@@ -69,6 +69,40 @@
   <p style="color:var(--text-muted);font-size:.85rem">No matching signals</p>
 </div>
 
+{# ── Tier quality filter ─────────────────────────────────────────────── #}
+{% set _sig_base = ("/signals?exchange=" ~ _eff_exchange) if _has_tabs else "/signals" %}
+<div style="display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;margin-bottom:1rem">
+  <span style="font-size:.65rem;font-weight:600;color:var(--text-subtle);text-transform:uppercase;letter-spacing:.05em;min-width:2.5rem">Tier</span>
+  <a href="{{ _sig_base }}"
+     style="padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
+     {% if not active_tier %}background:var(--surface-alt);color:var(--text-muted);border-color:var(--border){% else %}background:transparent;color:var(--text-subtle);border-color:var(--border){% endif %}">
+    All
+  </a>
+  <a href="{{ _sig_base }}{{ '&' if _has_tabs else '?' }}tier=A"
+     style="padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:700;border:1px solid;text-decoration:none;
+     {% if active_tier == 'A' %}background:rgba(16,185,129,.15);color:#10b981;border-color:rgba(16,185,129,.5)
+     {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
+    ★ A — Best
+  </a>
+  <a href="{{ _sig_base }}{{ '&' if _has_tabs else '?' }}tier=B"
+     style="padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:700;border:1px solid;text-decoration:none;
+     {% if active_tier == 'B' %}background:rgba(59,130,246,.12);color:#3b82f6;border-color:rgba(59,130,246,.4)
+     {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
+    B — Forming
+  </a>
+  <a href="{{ _sig_base }}{{ '&' if _has_tabs else '?' }}tier=C"
+     style="padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
+     {% if active_tier == 'C' %}background:var(--surface-alt);color:var(--text-muted);border-color:var(--border)
+     {% else %}background:transparent;color:var(--text-subtle);border-color:var(--border){% endif %}">
+    C — Early
+  </a>
+  {% if active_tier %}
+  <span style="font-size:.65rem;color:var(--text-subtle);margin-left:.25rem">
+    Tier filter active — <a href="{{ _sig_base }}" style="color:var(--t-accent);text-decoration:none">clear ×</a>
+  </span>
+  {% endif %}
+</div>
+
 {# ── Signal cards loaded via /signals/items (skeleton-first) ─────────── #}
 <div id="sig-cards-container" style="display:flex;flex-direction:column;gap:1.25rem">
   {# Loading skeleton — replaced immediately by JS fetch #}
@@ -124,11 +158,15 @@ function togglePassingRules(sigId) {
 (function() {
   const container  = document.getElementById('sig-cards-container');
   const skeleton   = document.getElementById('sig-skeleton');
-  const exchange   = new URLSearchParams(location.search).get('exchange') || '{{ _eff_exchange }}';
+  const _usp       = new URLSearchParams(location.search);
+  const exchange   = _usp.get('exchange') || '{{ _eff_exchange }}';
+  const tierParam  = _usp.get('tier') || '{{ active_tier or "" }}';
 
   async function loadCards() {
     try {
-      const r = await fetch('/signals/items?exchange=' + encodeURIComponent(exchange));
+      let url = '/signals/items?exchange=' + encodeURIComponent(exchange);
+      if (tierParam) url += '&tier=' + encodeURIComponent(tierParam);
+      const r = await fetch(url);
       if (!r.ok) return;
       const html = await r.text();
       if (container) container.innerHTML = html;

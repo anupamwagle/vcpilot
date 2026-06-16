@@ -1253,7 +1253,7 @@ def _enrich_rule_results(ticker: str, rule_results_dict: dict, db_session, targe
 
 @app.get("/signals", response_class=HTMLResponse)
 async def signals(request: Request, db: Session = Depends(get_db),
-                  exchange: str = Query("ALL")):
+                  exchange: str = Query("ALL"), tier: str = Query(None)):
     if not _auth(request):
         return RedirectResponse("/login", 302)
     org_id = request.session.get("organization_id")
@@ -1303,6 +1303,7 @@ async def signals(request: Request, db: Session = Depends(get_db),
         "skipped_count":       skipped_count,
         "exchange_filters":       ef,
         "active_exchange_filter": af,
+        "active_tier":            (tier or "").upper() if tier in ("A", "B", "C") else None,
         "base_url":               "/signals",
         "extra_params":           "",
     })
@@ -1311,14 +1312,15 @@ async def signals(request: Request, db: Session = Depends(get_db),
 
 @app.get("/signals/items", response_class=HTMLResponse)
 async def signals_items(request: Request, db: Session = Depends(get_db),
-                        exchange: str = Query("ALL")):
+                        exchange: str = Query("ALL"), tier: str = Query(None)):
     """Cached HTML fragment for signal cards — polled by signals.html on load."""
     if not _auth(request):
         return HTMLResponse("", status_code=401)
     org_id = request.session.get("organization_id")
     af = (exchange or "ALL").upper()
+    _sig_tier = (tier or "").upper() if tier in ("A", "B", "C") else None
 
-    _sig_ck = f"sig_items:{org_id}:{af}"
+    _sig_ck = f"sig_items:{org_id}:{af}:{_sig_tier or 'all'}"
     _cached = cache.get_raw(_sig_ck)
     if _cached:
         return HTMLResponse(_cached)
@@ -1363,9 +1365,21 @@ async def signals_items(request: Request, db: Session = Depends(get_db),
         Signal.organization_id == org_id,
     )
     if af == "ASX":
-        q = q.filter(Signal.exchange_key == "ASX")
+        # Exclude crypto-format tickers that landed with exchange_key="ASX" due to Jun 2026 DB bug
+        q = q.filter(
+            Signal.exchange_key == "ASX",
+            ~Signal.ticker.like("%-AUD"),
+            ~Signal.ticker.like("%-USD"),
+            ~Signal.ticker.like("%-USDT"),
+        )
     elif af == "CRYPTO":
-        q = q.filter(Signal.asset_type == "CRYPTO")
+        from sqlalchemy import or_ as _or_sig
+        q = q.filter(_or_sig(
+            Signal.asset_type == "CRYPTO",
+            Signal.ticker.like("%-AUD"),
+            Signal.ticker.like("%-USD"),
+            Signal.ticker.like("%-USDT"),
+        ))
     elif af == "US":
         q = q.filter(Signal.exchange_key.in_(["NYSE", "NASDAQ"]))
     sigs = q.all()
@@ -1587,6 +1601,10 @@ async def signals_items(request: Request, db: Session = Depends(get_db),
 
     _status_order = {"PENDING": 0, "TRIGGERED": 1, "SKIPPED": 2}
     sig_data.sort(key=lambda x: _status_order.get(x["status"], 9))
+
+    # ── Tier filter (post-sort, since setup_tier is derived not stored) ──────
+    if _sig_tier:
+        sig_data = [s for s in sig_data if s.get("setup_tier") == _sig_tier]
 
     _html_out = templates.get_template("components/signals_cards.html").render({
         "request": request,
@@ -1877,6 +1895,7 @@ async def watchlist(
     request: Request,
     label: int = Query(None),
     exchange: str = Query("ALL"),
+    tier: str = Query(None),
     db: Session = Depends(get_db)
 ):
     """
@@ -1978,6 +1997,7 @@ async def watchlist(
     except Exception:
         db.rollback(); ee = [{"key": "ASX", "name": "ASX", "flag": "", "asset_type": "EQUITY"}]
 
+    _active_tier = (tier or "").upper() if tier in ("A", "B", "C") else None
     ctx.update({
         "enabled_exchanges": ee,
         "exchange_filters": ef,
@@ -1991,6 +2011,7 @@ async def watchlist(
         "crypto_tickers": crypto_tickers,
         "page": 1,
         "has_more": total > 0,
+        "active_tier": _active_tier,
     })
     return templates.TemplateResponse("trading/watchlist.html", ctx)
 
@@ -2000,13 +2021,14 @@ async def watchlist_rows(
     request: Request,
     label: int = Query(None),
     exchange: str = Query("ALL"),
+    tier: str = Query(None),
     page: int = Query(1),
     db: Session = Depends(get_db)
 ):
     """
     Fragment endpoint — returns paginated watchlist card HTML for infinite scroll.
 
-    Results are cached in Redis for 5 minutes per (org, exchange, label, page).
+    Results are cached in Redis for 5 minutes per (org, exchange, label, tier, page).
     Cache is invalidated on add/remove/label/promote/screener-run. This means
     the first request after a screener run computes (~800 ms) and all subsequent
     loads for the same filter state are served in < 20 ms.
@@ -2015,10 +2037,13 @@ async def watchlist_rows(
         return HTMLResponse("", status_code=403)
     org_id = request.session.get("organization_id")
 
+    _tier_filter = (tier or "").upper() if tier in ("A", "B", "C") else None
+
     # ── Redis HTML cache (raw string, not JSON) ──────────────────────────────
     _af = (exchange or "ALL").upper()
     _lbl_key = str(label) if label is not None else "all"
-    _html_ck = f"wl_rows:{org_id}:{_af}:{_lbl_key}:{page}"
+    _tier_key = _tier_filter or "all"
+    _html_ck = f"wl_rows:{org_id}:{_af}:{_lbl_key}:{_tier_key}:{page}"
     _cached_html = cache.get_raw(_html_ck)
     if _cached_html:
         return HTMLResponse(_cached_html)
@@ -2156,6 +2181,10 @@ async def watchlist_rows(
         })
 
     _enrich_watchlist_vcp_and_sizing(watchlist_data, db, org_id)
+
+    # ── Tier filter (post-compute, since setup_tier is derived not stored) ──
+    if _tier_filter:
+        watchlist_data = [w for w in watchlist_data if w.get("setup_tier") == _tier_filter]
 
     # Favourites — same query as _global()
     try:
