@@ -3057,28 +3057,190 @@ async def _trader_data_inner(request: Request, db):
 
     stock_names = get_cached_stock_names(db)
 
+    # Query last screener run AuditLog rows once for ASX, NYSE, CRYPTO
+    from app.models.audit import AuditLog, AuditAction
+    last_screens = {}
+    for exk in ["ASX", "NYSE", "CRYPTO"]:
+        row = (
+            db.query(AuditLog)
+            .filter(
+                AuditLog.organization_id == org_id,
+                AuditLog.action == AuditAction.SCREENER_RUN,
+                AuditLog.message.like(f"[{exk}]%")
+            )
+            .order_by(AuditLog.created_at.desc())
+            .first()
+        )
+        if row:
+            last_screens[exk] = row
+
+    def _get_next_scheduled_run(exk: str, tz_name: str) -> str:
+        import pytz
+        from datetime import datetime as dt_class, timedelta
+        try:
+            tz = pytz.timezone(tz_name)
+            now_local = dt_class.now(tz)
+            
+            if exk == "CRYPTO":
+                # 4-hourly runs: 00:55, 04:55, 08:55, 12:55, 16:55, 20:55
+                target_hours = [0, 4, 8, 12, 16, 20]
+                for h in target_hours:
+                    candidate = now_local.replace(hour=h, minute=55, second=0, microsecond=0)
+                    if candidate > now_local:
+                        return candidate.strftime("%Y-%m-%d %H:%M %Z")
+                tomorrow = now_local + timedelta(days=1)
+                return tomorrow.replace(hour=0, minute=55, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M %Z")
+                
+            elif exk == "NYSE":
+                # US: 7:30am Tue-Sat
+                for offset in range(8):
+                    candidate_day = now_local + timedelta(days=offset)
+                    if candidate_day.weekday() in (1, 2, 3, 4, 5):
+                        candidate = candidate_day.replace(hour=7, minute=30, second=0, microsecond=0)
+                        if candidate > now_local:
+                            return candidate.strftime("%Y-%m-%d %H:%M %Z")
+                            
+            else: # ASX
+                # ASX: 5:30pm Mon-Fri
+                for offset in range(8):
+                    candidate_day = now_local + timedelta(days=offset)
+                    if candidate_day.weekday() in (0, 1, 2, 3, 4):
+                        candidate = candidate_day.replace(hour=17, minute=30, second=0, microsecond=0)
+                        if candidate > now_local:
+                            return candidate.strftime("%Y-%m-%d %H:%M %Z")
+        except Exception:
+            pass
+        return "TBD"
+
+    def _pct(a, b):
+        if a and b and float(b) > 0:
+            return round((float(a) - float(b)) / float(b) * 100, 2)
+        return None
+
     # ── Build watchlist payload ──
     wl_data = []
+    pending_signal_tickers = {s.ticker for s in signals}
     for w in wl_items:
         bar = price_map.get(w.ticker)
-        has_sig = any(s.ticker == w.ticker for s in signals)
+        has_sig = w.ticker in pending_signal_tickers
         close = float(bar.close) if bar and bar.close else None
         open_ = float(bar.open) if bar and bar.open else None
-        chg = round((close - open_) / open_ * 100, 2) if close and open_ and open_ > 0 else 0.0
+        
+        is_crypto_wl = w.ticker.endswith(("-AUD", "-USD", "-USDT"))
+        if is_crypto_wl:
+            live_cache_key = f"live_price:{w.ticker}"
+            live_cached = cache.get(live_cache_key)
+            if live_cached and not live_cached.get("_failed"):
+                live_close = float(live_cached.get("close") or live_cached.get("price") or 0)
+                if live_close > 0:
+                    close = live_close
+                    if live_cached.get("change_pct") is not None:
+                        open_ = None
+        
+        chg_pct = _pct(close, open_) if close and open_ and open_ > 0 else 0.0
+        
+        ma50      = float(bar.ma_50)   if bar and bar.ma_50   else None
+        ma150     = float(bar.ma_150)  if bar and bar.ma_150  else None
+        ma200     = float(bar.ma_200)  if bar and bar.ma_200  else None
+        vol_ratio = float(bar.vol_ratio)  if bar and bar.vol_ratio  else None
+        rs_rating = float(bar.rs_rating)  if bar and bar.rs_rating  else None
+        high_52w  = float(bar.high_52w)   if bar and bar.high_52w   else None
+        low_52w   = float(bar.low_52w)    if bar and bar.low_52w    else None
+        
+        range_pct = None
+        if high_52w and low_52w and high_52w > low_52w and close:
+            range_pct = round((close - low_52w) / (high_52w - low_52w) * 100, 1)
+
+        rules = w.rule_results or {}
+        trend_keys = [k for k in rules if k.startswith("trend_")]
+        trend_passed = sum(
+            1 for k in trend_keys
+            if (rules[k].get("passed") if isinstance(rules[k], dict) else bool(rules[k]))
+        )
+        trend_total = len(trend_keys) if trend_keys else 8
+
+        vcp_contractions = None
+        if "vcp_contractions" in rules:
+            rv = rules["vcp_contractions"]
+            vcp_contractions = int(rv.get("value") or 0) if isinstance(rv, dict) and rv.get("value") else None
+
+        # Setup quality tier (A/B/C)
+        if (trend_passed >= trend_total > 0
+                and rs_rating is not None and rs_rating >= 80
+                and (vol_ratio is None or vol_ratio <= 0.6)):
+            setup_tier = "A"
+        elif (trend_total > 0 and trend_passed >= max(trend_total - 1, 1)
+                and rs_rating is not None and rs_rating >= 70):
+            setup_tier = "B"
+        else:
+            setup_tier = "C"
+
+        next_earnings_date = None
+        days_to_earnings = None
+        cached_ed = cache.get(f"earnings_date:{w.ticker}")
+        if cached_ed and isinstance(cached_ed, str):
+            try:
+                from datetime import date as _date
+                _ed = _date.fromisoformat(cached_ed)
+                _today = _date.today()
+                if _ed >= _today:
+                    next_earnings_date = cached_ed
+                    days_to_earnings = (_ed - _today).days
+            except Exception:
+                pass
+
+        is_crypto_item = w.ticker.endswith(("-AUD", "-USD", "-USDT")) or getattr(w, "asset_type", "EQUITY") == "CRYPTO"
+        if is_crypto_item:
+            scr_ex = "CRYPTO"
+        elif (w.exchange_key or "ASX") in ("NYSE", "NASDAQ"):
+            scr_ex = "NYSE"
+        else:
+            scr_ex = "ASX"
+
+        row = last_screens.get(scr_ex)
+        last_screen_at_val = _fmt_dt(row.created_at.isoformat(), display_tz) if row else "Never"
+        last_screen_summary_val = (row.message.split("] ", 1)[-1] if row and row.message else "No screen run found")
+        next_screen_at_val = _get_next_scheduled_run(scr_ex, display_tz)
+
         wl_data.append({
+            "id": w.id,
             "ticker": w.ticker,
             "display_ticker": _disp(w.ticker),
             "name": stock_names.get(w.ticker, _disp(w.ticker)),
             "exchange_key": w.exchange_key or "ASX",
-            "asset_type": w.asset_type or "EQUITY",
+            "asset_type": "CRYPTO" if is_crypto_item else (w.asset_type or "EQUITY"),
             "currency": w.currency or "AUD",
             "flag": _flag(w.exchange_key or "ASX"),
-            "close": close,
-            "change_pct": chg,
-            "volume": int(bar.volume) if bar and bar.volume else 0,
+            "label_id": w.label_id,
             "label_name": w.label.name if w.label else None,
             "label_color": w.label.color if w.label else None,
+            "close": close,
+            "change_pct": chg_pct,
+            "ma_50": ma50,
+            "ma_150": ma150,
+            "ma_200": ma200,
+            "ma_50_pct": _pct(close, ma50),
+            "ma_150_pct": _pct(close, ma150),
+            "ma_200_pct": _pct(close, ma200),
+            "vol_ratio": vol_ratio,
+            "rs_rating": rs_rating,
+            "high_52w": high_52w,
+            "low_52w": low_52w,
+            "range_pct": range_pct,
+            "trend_score": trend_passed,
+            "trend_total": trend_total,
+            "vcp_contractions": vcp_contractions,
+            "rule_results": rules,
+            "setup_tier": setup_tier,
+            "next_earnings_date": next_earnings_date,
+            "days_to_earnings": days_to_earnings,
             "has_signal": has_sig,
+            "has_pending_signal": has_sig,
+            "added_by": w.added_by or "screener",
+            "added_date": w.added_date.isoformat() if w.added_date else None,
+            "last_screen_at": last_screen_at_val,
+            "last_screen_summary": last_screen_summary_val,
+            "next_screen_at": next_screen_at_val,
         })
 
     # ── Build signals payload ──
@@ -3172,6 +3334,7 @@ async def _trader_data_inner(request: Request, db):
         "capital_aud": capital,
         "account_is_paper": is_paper,
         "tape": tape,
+        "exchange_filters": _get_exchange_filters(org_id, db),
     })
 
 
@@ -3892,6 +4055,7 @@ def _trader_watchlist_data_inner(request: Request, db):
             "equity_count": equity_count,
             "crypto_count": crypto_count,
         },
+        "exchange_filters": _get_exchange_filters(org_id, db),
     }
     # Cache for 30s — same as JS poll interval, so every poll hits cache
     try:

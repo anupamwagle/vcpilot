@@ -394,9 +394,18 @@
        ROW 1 — Regime / status bar
   ═══════════════════════════════════════════════════════════ -->
   <div class="tv-regime">
-    <a href="/" class="back-link">← AstraTrade</a>
+    <!-- Brand / Switcher -->
+    <div style="display:flex;align-items:center;gap:6px">
+      <a href="/" class="logo-link">◈ ASTRATRADE</a>
+      <div class="regime-sep"></div>
+      <a href="/trader" class="nav-link-item active-nav">TRADER</a>
+      <div class="regime-sep" style="height:12px;opacity:0.5"></div>
+      <a href="/trader/watchlist" class="nav-link-item">WATCHLIST</a>
+    </div>
+
     <div class="regime-sep"></div>
 
+    <!-- Regime indicators -->
     <template x-for="[exch, regime] in Object.entries(regimes)" :key="exch">
       <div class="regime-pill" :class="'regime-' + regime.toLowerCase()">
         <span x-text="regimeIcon(regime)"></span>
@@ -406,6 +415,8 @@
     </template>
 
     <div class="regime-sep"></div>
+
+    <!-- Sessions -->
     <span class="sess"><span class="sess-dot" :class="asxOpen && 'open'"></span>ASX</span>
     <span class="sess"><span class="sess-dot" :class="nyseOpen && 'open'"></span>NYSE</span>
     <span class="sess"><span class="sess-dot open"></span>CRYPTO</span>
@@ -413,6 +424,7 @@
     <div class="regime-right">
       <span class="clock" x-text="clock"></span>
       <div class="regime-sep"></div>
+      
       <!-- P&L -->
       <span style="color:var(--muted)">Open P&L</span>
       <span :class="totalPnl >= 0 ? 'pnl-pos' : 'pnl-neg'" x-text="fmtAud(totalPnl, true)"></span>
@@ -427,12 +439,9 @@
 
       <span class="paper-badge" x-show="isPaper">PAPER</span>
 
-      <!-- Refresh -->
+      <!-- Action buttons -->
       <button class="icon-btn" @click="refresh()" title="Refresh data">⟳</button>
-      <!-- Fullscreen -->
       <button class="icon-btn" @click="toggleFullscreen()" title="Fullscreen">⛶</button>
-      <div class="regime-sep"></div>
-      <a href="/trader/watchlist" class="back-link" title="Watchlist Terminal">◈ WL</a>
     </div>
   </div>
 
@@ -498,11 +507,31 @@
     </div>
 
     <!-- ── Watchlist ── -->
-    <div class="tv-scroll" x-show="tab==='watchlist'" style="display:flex;flex-direction:column;overflow:hidden">
+    <div class="tv-scroll" x-show="tab==='watchlist'" style="display:flex;flex-direction:column;overflow:hidden;min-height:0">
+      
+      <!-- Exchange Filter Bar -->
+      <div class="wl-label-bar" x-show="exchangeFilters.length > 1" style="border-bottom:none; padding-bottom: 2px;">
+        <template x-for="f in exchangeFilters" :key="f.key">
+          <button class="wlp"
+                  :class="{active: wlExchangeFilter === f.key}"
+                  @click="wlExchangeFilter = f.key">
+            <span x-text="f.flag ? f.flag + ' ' + f.label : f.label"></span>
+          </button>
+        </template>
+      </div>
+
+      <!-- Tier Filter Bar -->
+      <div class="wl-label-bar" :style="allWlLabels.length > 1 ? 'border-bottom:none; padding-bottom: 2px;' : ''">
+        <button class="wlp" :class="{active: wlTierFilter === 'ALL'}" @click="wlTierFilter = 'ALL'">All Tiers</button>
+        <button class="wlp" :class="{active: wlTierFilter === 'A'}" @click="wlTierFilter = 'A'">⭐ Tier A</button>
+        <button class="wlp" :class="{active: wlTierFilter === 'B'}" @click="wlTierFilter = 'B'">Tier B</button>
+        <button class="wlp" :class="{active: wlTierFilter === 'C'}" @click="wlTierFilter = 'C'">Tier C</button>
+      </div>
+
       <!-- Label filter pills (only shown when there are labels) -->
       <template x-if="allWlLabels.length > 1">
         <div class="wl-label-bar">
-          <button class="wlp" :class="{active: wlLabelFilter === null}" @click="wlLabelFilter = null">All</button>
+          <button class="wlp" :class="{active: wlLabelFilter === null}" @click="wlLabelFilter = null">All Labels</button>
           <template x-for="lbl in allWlLabels" :key="lbl.name">
             <button class="wlp"
                     :class="{active: wlLabelFilter === lbl.name}"
@@ -524,7 +553,16 @@
               <div style="display:flex;align-items:center;gap:6px">
                 <span class="mkt" :class="mktClass(item.exchange_key)" x-text="mktLabel(item.exchange_key)"></span>
                 <div>
-                  <span class="card-ticker" x-text="item.display_ticker"></span>
+                  <div style="display:flex;align-items:center;gap:5px">
+                    <span class="card-ticker" x-text="item.display_ticker"></span>
+                    <!-- Quality tier badge (A/B only — C is implicit) -->
+                    <template x-if="item.setup_tier === 'A'">
+                      <span class="badge-xs" style="color:#00e676; background:#00e67618; border:1px solid #00e67644; font-size:8px; font-weight:800; padding:0 3px; border-radius:2px">★ A</span>
+                    </template>
+                    <template x-if="item.setup_tier === 'B'">
+                      <span class="badge-xs" style="color:#ffd740; background:#ffd74012; border:1px solid #ffd74033; font-size:8px; font-weight:800; padding:0 3px; border-radius:2px">B</span>
+                    </template>
+                  </div>
                   <div class="card-name" x-text="item.name"></div>
                 </div>
               </div>
@@ -856,48 +894,189 @@
     <!-- ── SIGNAL MONITOR (watchlist tab) ───────────────────────────── -->
     <template x-if="tab==='watchlist'">
       <div style="display:contents">
-        <div class="panel-header">
-          <span>Signal Monitor</span>
-          <span style="font-size:9px;color:var(--muted)" x-text="signals.length + ' active'"></span>
-        </div>
-        <div class="tv-scroll" style="flex:1">
-          <div class="empty-msg" x-show="watchlist.length===0">Watchlist is empty</div>
-          <!-- Items with active signals first, then approaching -->
-          <template x-for="item in watchlist.slice().sort((a,b) => (b.has_signal - a.has_signal))" :key="item.ticker">
-            <div style="border-bottom:1px solid var(--border);padding:7px 10px;cursor:pointer"
-                 :style="item.has_signal ? 'background:#f59e0b08' : ''"
-                 @click="selectWatchlist(item)">
-              <div style="display:flex;justify-content:space-between;align-items:center">
-                <span style="font-weight:700;font-size:11px;display:inline-flex;align-items:center;gap:4px">
-                  <span class="mkt" :class="mktClass(item.exchange_key)" x-text="mktLabel(item.exchange_key)"></span>
-                  <span x-text="item.display_ticker"></span>
-                  <span class="signal-badge" x-show="item.has_signal" style="font-size:8px">⚡</span>
-                </span>
-                <span :class="(liveChange(item.ticker) ?? item.change_pct ?? 0) >= 0 ? 'up' : 'down'"
-                      style="font-size:10px;font-weight:700"
-                      x-text="((liveChange(item.ticker) >= 0 ? '+' : '') + (liveChange(item.ticker)).toFixed(2) + '%')"></span>
-              </div>
-              <template x-if="item.has_signal">
-                <div style="font-size:9px;margin-top:3px">
-                  <template x-for="sig in signals.filter(s => s.ticker === item.ticker)" :key="sig.id">
-                    <div style="display:flex;gap:8px;color:var(--muted)">
-                      <span>Pivot <span style="color:var(--warn)" x-text="fmtPrice(sig.pivot, item.currency)"></span></span>
-                      <span>Stop <span style="color:var(--down)" x-text="fmtPrice(sig.stop, item.currency)"></span></span>
-                      <span x-show="sig.breakout_confirmed" style="color:#26a69a;font-weight:700">● BREAK</span>
+        
+        <!-- List View (when no watchlist item is selected) -->
+        <template x-if="!selectedWlItem">
+          <div style="display:contents">
+            <div class="panel-header">
+              <span>Signal Monitor</span>
+              <span style="font-size:9px;color:var(--muted)" x-text="signals.length + ' active'"></span>
+            </div>
+            <div class="tv-scroll" style="flex:1">
+              <div class="empty-msg" x-show="watchlist.length===0">Watchlist is empty</div>
+              <!-- Items with active signals first, then approaching -->
+              <template x-for="item in watchlist.slice().sort((a,b) => (b.has_signal - a.has_signal))" :key="item.ticker">
+                <div style="border-bottom:1px solid var(--border);padding:7px 10px;cursor:pointer"
+                     :style="item.has_signal ? 'background:#f59e0b08' : ''"
+                     @click="selectWatchlist(item)">
+                  <div style="display:flex;justify-content:space-between;align-items:center">
+                    <span style="font-weight:700;font-size:11px;display:inline-flex;align-items:center;gap:4px">
+                      <span class="mkt" :class="mktClass(item.exchange_key)" x-text="mktLabel(item.exchange_key)"></span>
+                      <span x-text="item.display_ticker"></span>
+                      <span class="signal-badge" x-show="item.has_signal" style="font-size:8px">⚡</span>
+                    </span>
+                    <span :class="(liveChange(item.ticker) ?? item.change_pct ?? 0) >= 0 ? 'up' : 'down'"
+                          style="font-size:10px;font-weight:700"
+                          x-text="((liveChange(item.ticker) >= 0 ? '+' : '') + (liveChange(item.ticker)).toFixed(2) + '%')"></span>
+                  </div>
+                  <template x-if="item.has_signal">
+                    <div style="font-size:9px;margin-top:3px">
+                      <template x-for="sig in signals.filter(s => s.ticker === item.ticker)" :key="sig.id">
+                        <div style="display:flex;gap:8px;color:var(--muted)">
+                          <span>Pivot <span style="color:var(--warn)" x-text="fmtPrice(sig.pivot, item.currency)"></span></span>
+                          <span>Stop <span style="color:var(--down)" x-text="fmtPrice(sig.stop, item.currency)"></span></span>
+                          <span x-show="sig.breakout_confirmed" style="color:#26a69a;font-weight:700">● BREAK</span>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+                  <template x-if="!item.has_signal">
+                    <div style="font-size:9px;color:var(--muted);margin-top:2px">
+                      <span x-text="fmtPrice(livePrice(item.ticker) ?? item.close, item.currency)"></span>
+                      <span x-show="item.label_name" style="margin-left:6px"
+                            :style="`color:${item.label_color}`" x-text="item.label_name"></span>
                     </div>
                   </template>
                 </div>
               </template>
-              <template x-if="!item.has_signal">
-                <div style="font-size:9px;color:var(--muted);margin-top:2px">
-                  <span x-text="fmtPrice(livePrice(item.ticker) ?? item.close, item.currency)"></span>
-                  <span x-show="item.label_name" style="margin-left:6px"
-                        :style="`color:${item.label_color}`" x-text="item.label_name"></span>
+            </div>
+          </div>
+        </template>
+
+        <!-- Detail View (when a watchlist item is selected) -->
+        <template x-if="selectedWlItem">
+          <div style="display:flex;flex-direction:column;height:100%;overflow:hidden">
+            <!-- Header -->
+            <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center">
+              <span style="font-weight:800;color:var(--accent)" x-text="selectedWlItem.display_ticker + ' Details'"></span>
+              <button @click="selectedWlItem = null" style="background:none;border:1px solid var(--accent);border-radius:3px;color:var(--accent);font-size:9px;padding:2px 6px;cursor:pointer;font-family:inherit">← List</button>
+            </div>
+
+            <!-- Score Row (Setup tier, RS, VCP, Earnings) -->
+            <div style="background:var(--surf2); border-bottom:1px solid var(--border); padding:6px 10px; display:flex; gap:8px; flex-wrap:wrap; font-size:10px; flex-shrink:0">
+              <!-- Setup tier -->
+              <span style="display:inline-flex; align-items:center; gap:3px" x-show="selectedWlItem.setup_tier">
+                <span style="color:var(--muted)">Tier:</span>
+                <span :style="selectedWlItem.setup_tier==='A' ? 'color:#00e676;font-weight:700' : selectedWlItem.setup_tier==='B' ? 'color:#ffd740;font-weight:700' : 'color:var(--text)'"
+                      x-text="selectedWlItem.setup_tier==='A' ? '★ A' : selectedWlItem.setup_tier"></span>
+              </span>
+              <!-- RS rating -->
+              <span style="display:inline-flex; align-items:center; gap:3px" x-show="selectedWlItem.rs_rating">
+                <span style="color:var(--muted)">RS:</span>
+                <span :class="(selectedWlItem.rs_rating||0) >= 80 ? 'up' : (selectedWlItem.rs_rating||0) < 50 ? 'down' : ''"
+                      x-text="Math.round(selectedWlItem.rs_rating||0)"></span>
+              </span>
+              <!-- VCP contractions -->
+              <span style="display:inline-flex; align-items:center; gap:3px" x-show="selectedWlItem.vcp_contractions">
+                <span style="color:var(--muted)">VCP:</span>
+                <span class="up" x-text="selectedWlItem.vcp_contractions+'×'"></span>
+              </span>
+              <!-- Vol ratio -->
+              <span style="display:inline-flex; align-items:center; gap:3px" x-show="selectedWlItem.vol_ratio">
+                <span style="color:var(--muted)">Vol:</span>
+                <span :class="(selectedWlItem.vol_ratio||0) >= 1.5 ? 'up' : (selectedWlItem.vol_ratio||0) < 0.8 ? 'down' : ''"
+                      x-text="(selectedWlItem.vol_ratio||0).toFixed(1)+'×'"></span>
+              </span>
+              <!-- Earnings warning -->
+              <span style="display:inline-flex; align-items:center; gap:3px" x-show="selectedWlItem.days_to_earnings !== null && selectedWlItem.days_to_earnings !== undefined">
+                <span style="color:var(--muted)">Earnings:</span>
+                <span :style="selectedWlItem.days_to_earnings <= 5 ? 'color:#ff5252;font-weight:700' : 'color:#ff9800;font-weight:700'"
+                      x-text="`${selectedWlItem.days_to_earnings}d`"></span>
+              </span>
+            </div>
+
+            <!-- Screener Status Panel -->
+            <div style="background:var(--surf2); border-bottom:1px solid var(--border); padding:6px 10px; display:flex; flex-direction:column; gap:4px; font-size:10px; flex-shrink:0">
+              <div style="display:flex; justify-content:space-between; align-items:center">
+                <span style="color:var(--muted)">Last Screen:</span>
+                <span style="color:var(--text); font-family:monospace" x-text="selectedWlItem.last_screen_at || 'Never'"></span>
+              </div>
+              <div style="display:flex; justify-content:space-between; align-items:center">
+                <span style="color:var(--muted)">Summary:</span>
+                <span style="color:var(--accent); font-weight:700" x-text="selectedWlItem.last_screen_summary || 'No data'"></span>
+              </div>
+            </div>
+
+            <!-- Rule results (scrollable list) -->
+            <div class="tv-scroll" style="flex:1">
+              <!-- Waiting to be Completed -->
+              <template x-if="promotionRules.pending.length > 0">
+                <div>
+                  <div class="rule-cat" style="color:var(--warn); border-left: 2px solid var(--warn); padding-left: 6px; margin-top: 6px">
+                    Waiting to be Completed (<span x-text="promotionRules.pending.length"></span>)
+                  </div>
+                  <template x-for="r in promotionRules.pending" :key="r.key">
+                    <div class="rule-row">
+                      <span class="rule-icon rule-fail">✗</span>
+                      <span class="rule-name rule-fail">
+                        <span style="font-size:7px; font-weight:800; opacity:0.6; margin-right:4px; text-transform:uppercase" x-text="`[${r.cat}]`"></span>
+                        <span x-text="r.label"></span>
+                      </span>
+                      <span class="rule-val muted" x-text="r.msg || ''"></span>
+                    </div>
+                  </template>
+                </div>
+              </template>
+
+              <!-- Ready banner -->
+              <template x-if="promotionRules.pending.length === 0 && promotionRules.completed.length > 0">
+                <div style="margin: 6px; padding: 8px; background: rgba(74, 222, 128, 0.08); border: 1px solid var(--up); border-radius: 4px; text-align: center">
+                  <div style="color: var(--up); font-weight: 800; font-size: 10px; margin-bottom: 2px">🎉 Ready for Promotion</div>
+                  <div style="color: var(--muted); font-size: 8px">All screening criteria met. Ready to be promoted to signal.</div>
+                </div>
+              </template>
+
+              <!-- Completed -->
+              <template x-if="promotionRules.completed.length > 0">
+                <div style="margin-top:6px">
+                  <div class="rule-cat" style="color:var(--up); border-left: 2px solid var(--up); padding-left: 6px">
+                    Completed (<span x-text="promotionRules.completed.length"></span>)
+                  </div>
+                  <template x-for="r in promotionRules.completed" :key="r.key">
+                    <div class="rule-row">
+                      <span class="rule-icon" :class="r.na ? 'rule-na' : 'rule-pass'" x-text="r.na ? '–' : '✓'"></span>
+                      <span class="rule-name" :class="r.na ? 'rule-na' : ''">
+                        <span style="font-size:7px; font-weight:800; opacity:0.6; margin-right:4px; text-transform:uppercase" x-text="`[${r.cat}]`"></span>
+                        <span x-text="r.label"></span>
+                      </span>
+                      <span class="rule-val" :class="r.na ? 'muted' : 'up'" x-text="r.msg || ''"></span>
+                    </div>
+                  </template>
+                </div>
+              </template>
+
+              <template x-if="!hasAnyRules">
+                <div style="padding:16px 10px;text-align:center;color:var(--muted);font-size:9px">
+                  No rule data — screener hasn't run for this ticker yet
                 </div>
               </template>
             </div>
-          </template>
-        </div>
+
+            <!-- Actions block at bottom -->
+            <div style="padding:8px 10px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:4px; flex-shrink:0; background:var(--surface)">
+              <div style="font-size:9px; text-align:center"
+                   :style="promoteMsg.startsWith('✓') ? 'color:var(--up)' : promoteMsg.startsWith('✗') ? 'color:var(--down)' : 'color:var(--muted)'"
+                   x-text="promoteMsg"></div>
+              <button style="background:var(--accent); color:#000; border:none; border-radius:4px; font-weight:800; font-size:10px; padding:6px; cursor:pointer; font-family:inherit; width:100%; display:flex; align-items:center; justify-content:center; gap:5px"
+                      :disabled="promoting || selectedWlItem?.has_pending_signal"
+                      @click="promoteSelected()">
+                <template x-if="promoting">
+                  <svg class="spin" width="10" height="10" fill="none" viewBox="0 0 24 24" style="animation: spin 1s linear infinite">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" style="opacity:.25"/>
+                    <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" style="opacity:.75"/>
+                  </svg>
+                </template>
+                <span x-text="selectedWlItem?.has_pending_signal ? 'Already a Signal' : 'Promote to Signal'"></span>
+              </button>
+              <button style="background:none; border:1px solid var(--border); color:var(--muted); border-radius:4px; font-size:9px; padding:4px; cursor:pointer; font-family:inherit; width:100%"
+                      @click="removeSelected()">
+                Remove from Watchlist
+              </button>
+            </div>
+
+          </div>
+        </template>
+
       </div>
     </template>
 
@@ -971,6 +1150,62 @@
      Alpine.js Application
 ════════════════════════════════════════════════════════════ -->
 <script>
+// ── Rule key → human label map ───────────────────────────────────────────────
+const RULE_LABELS = {
+  // Trend template
+  trend_price_above_200ma:      'Price > 200MA',
+  trend_price_above_150ma:      'Price > 150MA',
+  trend_ma150_above_ma200:      'MA150 > MA200',
+  trend_ma200_trending_up:      '200MA Rising (21d)',
+  trend_ma50_above_ma150_200:   'MA50 > MA150/200',
+  trend_price_above_ma50:       'Price > MA50',
+  trend_pct_above_52w_low:      '≥30% Above 52W Low',
+  trend_pct_below_52w_high:     'Within 25% of 52W High',
+  trend_rs_rating_min:          'RS Rating ≥ 70',
+  // VCP
+  vcp_min_contractions:         'Min Contractions (2)',
+  vcp_min_weeks:                'Min Base Weeks (3)',
+  vcp_max_weeks:                'Max Base Weeks (52)',
+  vcp_volume_dry_up:            'Volume Dry-Up',
+  vcp_breakout_volume:          'Breakout Volume',
+  vcp_not_extended:             'Not Extended (<10%)',
+  vcp_contractions:             'VCP Contractions',
+  // Fundamental
+  fundamental_eps_growth:       'EPS Growth (≥25%)',
+  fundamental_eps_acceleration: 'EPS Acceleration',
+  fundamental_annual_eps:       'Annual EPS Positive',
+  fundamental_sales_growth:     'Sales Growth (≥25%)',
+  fundamental_roe:              'ROE (≥17%)',
+  fundamental_margins:          'Profit Margins',
+  // Crypto specific
+  crypto_rs_rating_min:         'Crypto RS Rating ≥ 70',
+  crypto_trend_ma_structure:    'MA Structure (50>150>200)',
+  // Regime
+  regime_market_bullish:        'Market Regime Bullish',
+  regime_breadth_min:           'Breadth ≥ 60%',
+  regime_distribution_days_max: 'Distribution Days ≤ 4',
+};
+
+function ruleCat(key) {
+  if (key.startsWith('trend_'))       return 'trend_';
+  if (key.startsWith('vcp_'))         return 'vcp_';
+  if (key.startsWith('fundamental_')) return 'fundamental_';
+  if (key.startsWith('crypto_'))      return 'crypto_';
+  if (key.startsWith('regime_'))      return 'regime_';
+  return 'other';
+}
+
+function fmtRuleMsg(v) {
+  if (!v || typeof v !== 'object') return '';
+  const val = v.value, msg = v.message;
+  if (msg && msg.length < 40) return msg;
+  if (val !== null && val !== undefined) {
+    if (typeof val === 'number') return val.toFixed(2);
+    return String(val).slice(0, 30);
+  }
+  return '';
+}
+
 function traderApp() {
   return {
     // ── Data ──────────────────────────────────────────────────────────────
@@ -990,6 +1225,11 @@ function traderApp() {
     nyseOpen: false,
     tapeHtml: '<span class="tape-item"><span class="tape-ticker">Loading…</span></span>',
     wlLabelFilter: null,  // null = all labels; string = label_name to filter watchlist by
+    wlTierFilter:  'ALL', // Filter watchlist by setup quality tier (ALL, A, B, C)
+    wlExchangeFilter: 'ALL', // Filter watchlist by Exchange dynamically
+    exchangeFilters: [],  // Dynamic exchange config list
+    promoting: false,     // Watchlist promote trigger state
+    promoteMsg: '',
 
     // ── Exit monitor ──────────────────────────────────────────────────────
     exitPositions: [],
@@ -1001,6 +1241,7 @@ function traderApp() {
     selectedName:    '',
     selectedCurrency:'AUD',
     selectedSignal:  null,
+    selectedWlItem:  null, // Track active watchlist item
     selectedExchange:'ASX',
     activeTf:        'D',
     chartLoading:    false,
@@ -1083,6 +1324,7 @@ function traderApp() {
         this.openCount   = d.open_positions_count || 0;
         this.capitalAud  = d.capital_aud || 0;
         this.isPaper     = d.account_is_paper !== false;
+        this.exchangeFilters = d.exchange_filters || [];
         for (const [t, info] of Object.entries(d.tape || {})) {
           this.livePrices[t] = info;
         }
@@ -1090,6 +1332,11 @@ function traderApp() {
         if (this.selectedSignal) {
           const updated = this.signals.find(s => s.id === this.selectedSignal.id);
           if (updated) this.selectedSignal = updated;
+        }
+        // Refresh selected watchlist item from fresh data
+        if (this.selectedWlItem) {
+          const updated = this.watchlist.find(w => w.ticker === this.selectedWlItem.ticker);
+          if (updated) this.selectedWlItem = updated;
         }
       } catch (e) {
         console.error('trader /data fetch error:', e);
@@ -1314,18 +1561,21 @@ function traderApp() {
     selectSignal(sig) {
       const sameTicker = this.selectedTicker === sig.ticker;
       this.selectedSignal = sig;
+      this.selectedWlItem = this.watchlist.find(w => w.ticker === sig.ticker) ?? null;
       this._select(sig);
       // If same ticker, chart doesn't reload — redraw price lines for new signal levels
       if (sameTicker) this.$nextTick(() => this._drawPriceLines());
     },
 
     selectWatchlist(item) {
+      this.selectedWlItem = item;
       this.selectedSignal = this.signals.find(s => s.ticker === item.ticker) ?? null;
       this._select(item);
     },
 
     selectPosition(pos) {
       this.selectedSignal = this.signals.find(s => s.ticker === pos.ticker) ?? null;
+      this.selectedWlItem = this.watchlist.find(w => w.ticker === pos.ticker) ?? null;
       this._select(pos);
     },
 
@@ -1333,12 +1583,40 @@ function traderApp() {
     get allWlLabels() {
       const counts = {};
       for (const item of this.watchlist) {
-        if (item.label_name) counts[item.label_name] = (counts[item.label_name] || 0) + 1;
+        const tierOk = this.wlTierFilter === 'ALL' || item.setup_tier === this.wlTierFilter;
+        let exchangeOk = true;
+        if (this.wlExchangeFilter !== 'ALL') {
+          if (this.wlExchangeFilter === 'ASX') {
+            exchangeOk = item.exchange_key === 'ASX';
+          } else if (this.wlExchangeFilter === 'US') {
+            exchangeOk = item.exchange_key === 'NYSE' || item.exchange_key === 'NASDAQ';
+          } else if (this.wlExchangeFilter === 'CRYPTO') {
+            exchangeOk = this._isCrypto(item.exchange_key || 'ASX') || item.asset_type === 'CRYPTO';
+          } else {
+            exchangeOk = item.exchange_key === this.wlExchangeFilter;
+          }
+        }
+        if (item.label_name && tierOk && exchangeOk) {
+          counts[item.label_name] = (counts[item.label_name] || 0) + 1;
+        }
       }
       const seen = new Set();
       const labels = [];
       for (const item of this.watchlist) {
-        if (item.label_name && !seen.has(item.label_name)) {
+        const tierOk = this.wlTierFilter === 'ALL' || item.setup_tier === this.wlTierFilter;
+        let exchangeOk = true;
+        if (this.wlExchangeFilter !== 'ALL') {
+          if (this.wlExchangeFilter === 'ASX') {
+            exchangeOk = item.exchange_key === 'ASX';
+          } else if (this.wlExchangeFilter === 'US') {
+            exchangeOk = item.exchange_key === 'NYSE' || item.exchange_key === 'NASDAQ';
+          } else if (this.wlExchangeFilter === 'CRYPTO') {
+            exchangeOk = this._isCrypto(item.exchange_key || 'ASX') || item.asset_type === 'CRYPTO';
+          } else {
+            exchangeOk = item.exchange_key === this.wlExchangeFilter;
+          }
+        }
+        if (item.label_name && !seen.has(item.label_name) && tierOk && exchangeOk) {
           seen.add(item.label_name);
           labels.push({ name: item.label_name, color: item.label_color, count: counts[item.label_name] || 0 });
         }
@@ -1347,8 +1625,91 @@ function traderApp() {
     },
 
     get filteredWatchlist() {
-      if (!this.wlLabelFilter) return this.watchlist;
-      return this.watchlist.filter(i => i.label_name === this.wlLabelFilter);
+      return this.watchlist.filter(i => {
+        const labelOk = !this.wlLabelFilter || i.label_name === this.wlLabelFilter;
+        const tierOk  = this.wlTierFilter === 'ALL' || i.setup_tier === this.wlTierFilter;
+        
+        let exchangeOk = true;
+        if (this.wlExchangeFilter !== 'ALL') {
+          if (this.wlExchangeFilter === 'ASX') {
+            exchangeOk = i.exchange_key === 'ASX';
+          } else if (this.wlExchangeFilter === 'US') {
+            exchangeOk = i.exchange_key === 'NYSE' || i.exchange_key === 'NASDAQ';
+          } else if (this.wlExchangeFilter === 'CRYPTO') {
+            exchangeOk = this._isCrypto(i.exchange_key || 'ASX') || i.asset_type === 'CRYPTO';
+          } else {
+            exchangeOk = i.exchange_key === this.wlExchangeFilter;
+          }
+        }
+        return labelOk && tierOk && exchangeOk;
+      });
+    },
+
+    get hasAnyRules() {
+      return this.selectedWlItem && Object.keys(this.selectedWlItem.rule_results || {}).length > 0;
+    },
+
+    get promotionRules() {
+      if (!this.selectedWlItem?.rule_results) return { pending: [], completed: [] };
+      const rules = this.selectedWlItem.rule_results;
+      const pending = [];
+      const completed = [];
+      for (const [k, v] of Object.entries(rules)) {
+        const passed = typeof v === 'object' ? !!v?.passed : !!v;
+        const na = typeof v === 'object' && v?.value === null && v?.message === null;
+        const cat = ruleCat(k);
+        const catLabel = cat === 'trend_' ? 'Trend' :
+                         cat === 'vcp_' ? 'VCP' :
+                         cat === 'fundamental_' ? 'Fund' :
+                         cat === 'crypto_' ? 'Crypto' :
+                         cat === 'regime_' ? 'Regime' : 'Other';
+        const ruleObj = {
+          key: k,
+          cat: catLabel,
+          label: RULE_LABELS[k] || k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+          passed,
+          na,
+          msg: typeof v === 'object' ? fmtRuleMsg(v) : '',
+        };
+        if (na) {
+          completed.push(ruleObj);
+        } else if (passed) {
+          completed.push(ruleObj);
+        } else {
+          pending.push(ruleObj);
+        }
+      }
+      return { pending, completed };
+    },
+
+    async promoteSelected() {
+      if (!this.selectedWlItem || this.promoting) return;
+      this.promoting  = true;
+      this.promoteMsg = 'Promoting…';
+      try {
+        const r = await fetch(`/trader/watchlist/promote/${this.selectedWlItem.id}`, { method: 'POST' });
+        const d = await r.json();
+        if (d.ok) {
+          this.promoteMsg = `✓ ${d.ticker} queued for promotion`;
+          await this._loadAll();
+        } else {
+          this.promoteMsg = `✗ ${d.error || 'Promotion failed'}`;
+        }
+      } catch (e) {
+        this.promoteMsg = '✗ Network error';
+      } finally {
+        this.promoting = false;
+      }
+    },
+
+    async removeSelected() {
+      if (!this.selectedWlItem) return;
+      if (!confirm(`Remove ${this.selectedWlItem.display_ticker} from watchlist?`)) return;
+      try {
+        await fetch(`/watchlist/${this.selectedWlItem.id}/remove`, { method: 'POST' });
+        this.selectedWlItem = null;
+        await this._loadAll();
+      } catch (e) { alert('Remove failed'); }
     },
 
     // ── Live price helpers ────────────────────────────────────────────────

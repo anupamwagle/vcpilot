@@ -61,10 +61,12 @@
       padding: 0 10px; gap: 10px;
       font-size: 10px;
     }
-    .logo-text {
-      font-weight: 800; font-size: 11px; letter-spacing: 0.04em;
-      color: var(--accent);
+    .logo-link {
+      color: var(--text); text-decoration: none; font-weight: 800; font-size: 11px;
+      letter-spacing: 0.04em; padding: 2px 4px; border-radius: 3px;
+      transition: color .15s, background .15s;
     }
+    .logo-link:hover { color: var(--accent); background: var(--surf2); }
     .top-sep { width: 1px; height: 18px; background: var(--border); flex-shrink: 0; }
     .regime-pill {
       display: flex; align-items: center; gap: 5px;
@@ -81,24 +83,25 @@
       font-size: 9px; font-weight: 800;
       padding: 1px 6px; border-radius: 3px; letter-spacing: 0.07em;
     }
+    .sess { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10px; }
+    .sess-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--subtle); }
+    .sess-dot.open { background: var(--up); box-shadow: 0 0 6px var(--up); }
     .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
     .clock { font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
-    .nav-btn {
-      background: none; border: 1px solid transparent; cursor: pointer;
-      color: var(--muted); font-size: 10px; padding: 2px 8px;
-      border-radius: 3px; font-family: inherit;
-      transition: color .15s, border-color .15s, background .15s;
+    .icon-btn {
+      background: none; border: none; cursor: pointer;
+      color: var(--muted); font-size: 13px; padding: 2px 4px;
+      border-radius: 3px; transition: color .15s, background .15s;
     }
-    .nav-btn:hover { color: var(--text); border-color: var(--border); background: var(--surf2); }
-    .nav-btn.active { color: var(--accent); border-color: var(--accent); }
-    .nav-link {
+    .icon-btn:hover { color: var(--text); background: var(--surf2); }
+    .nav-link-item {
       color: var(--muted); text-decoration: none; font-size: 10px;
       font-weight: 600; letter-spacing: 0.04em;
       padding: 2px 6px; border-radius: 3px;
-      border: 1px solid transparent;
       transition: color .15s, background .15s;
     }
-    .nav-link:hover { color: var(--accent); border-color: var(--border); background: var(--surf2); }
+    .nav-link-item:hover { color: var(--text); background: var(--surf2); }
+    .nav-link-item.active-nav { color: var(--accent); font-weight: 700; }
 
     /* ── Filter tabs (EQUITY / CRYPTO / ALL) ─────────────────────────────── */
     .filter-tabs { display: flex; gap: 3px; }
@@ -413,36 +416,56 @@
 
   <!-- ══ TOP BAR ═══════════════════════════════════════════════════════════ -->
   <div class="wl-topbar">
-    <span class="logo-text">◈ WATCHLIST</span>
-    <div class="top-sep"></div>
-
-    <!-- Regime pills -->
-    <template x-for="[exk, regime] in Object.entries(regimes)" :key="exk">
-      <span class="regime-pill"
-            :class="regime==='BULL' ? 'regime-bull' : regime==='BEAR' ? 'regime-bear' : regime==='CAUTION' ? 'regime-caution' : 'regime-unknown'">
-        <span x-text="exk.replace('CRYPTO_INDEPENDENTRESERVE','IR').replace('CRYPTO_BINANCE','BNB')"></span>
-        <span x-text="regime"></span>
-      </span>
-    </template>
-    <template x-if="isPaper">
-      <span class="paper-badge">PAPER</span>
-    </template>
-
-    <div class="top-sep"></div>
-
-    <!-- Asset filter -->
-    <div class="filter-tabs">
-      <button class="ftab" :class="{active: assetFilter==='ALL'}"    @click="assetFilter='ALL'">ALL</button>
-      <button class="ftab" :class="{active: assetFilter==='EQUITY'}" @click="assetFilter='EQUITY'">EQUITY</button>
-      <button class="ftab" :class="{active: assetFilter==='CRYPTO'}" @click="assetFilter='CRYPTO'">₿ CRYPTO</button>
+    <!-- Brand / Switcher -->
+    <div style="display:flex;align-items:center;gap:6px">
+      <a href="/" class="logo-link">◈ ASTRATRADE</a>
+      <div class="top-sep"></div>
+      <a href="/trader" class="nav-link-item">TRADER</a>
+      <div class="top-sep" style="height:12px;opacity:0.5"></div>
+      <a href="/trader/watchlist" class="nav-link-item active-nav">WATCHLIST</a>
     </div>
 
+    <div class="top-sep"></div>
+
+    <!-- Regime indicators -->
+    <template x-for="[exch, regime] in Object.entries(regimes)" :key="exch">
+      <div class="regime-pill" :class="'regime-' + regime.toLowerCase()">
+        <span x-text="regimeIcon(regime)"></span>
+        <span x-text="exchShort(exch)"></span>
+        <span x-text="regime"></span>
+      </div>
+    </template>
+
+    <div class="top-sep"></div>
+
+    <!-- Sessions -->
+    <span class="sess"><span class="sess-dot" :class="asxOpen && 'open'"></span>ASX</span>
+    <span class="sess"><span class="sess-dot" :class="nyseOpen && 'open'"></span>NYSE</span>
+    <span class="sess"><span class="sess-dot open"></span>CRYPTO</span>
+
+    <div class="top-sep"></div>
+
+    <!-- Asset/Exchange filter -->
+    <div class="filter-tabs" x-show="exchangeFilters.length > 1">
+      <template x-for="f in exchangeFilters" :key="f.key">
+        <button class="ftab"
+                :class="{active: assetFilter === f.key}"
+                @click="assetFilter = f.key">
+          <span x-text="f.flag ? f.flag + ' ' + f.label : f.label"></span>
+        </button>
+      </template>
+    </div>
+
+    <!-- Right-aligned area -->
     <div class="topbar-right">
       <span class="clock" x-text="clock"></span>
       <div class="top-sep"></div>
-      <a class="nav-link" href="/trader">← Trader</a>
-      <a class="nav-link" href="/watchlist">Full View</a>
-      <a class="nav-link" href="/">Dashboard</a>
+
+      <span class="paper-badge" x-show="isPaper">PAPER</span>
+
+      <!-- Action buttons -->
+      <button class="icon-btn" @click="refresh()" title="Refresh data">⟳</button>
+      <button class="icon-btn" @click="toggleFullscreen()" title="Fullscreen">⛶</button>
     </div>
   </div>
 
@@ -486,6 +509,14 @@
           </template>
         </select>
       </template>
+    </div>
+
+    <!-- Tier filter pills -->
+    <div class="label-filter-row" :style="(data && allLabels.length > 1) ? 'border-bottom: none; padding-bottom: 2px;' : ''">
+      <button class="lbl-pill" :class="{active: tierFilter === 'ALL'}" @click="tierFilter = 'ALL'">All Tiers</button>
+      <button class="lbl-pill" :class="{active: tierFilter === 'A'}" @click="tierFilter = 'A'">⭐ Tier A</button>
+      <button class="lbl-pill" :class="{active: tierFilter === 'B'}" @click="tierFilter = 'B'">Tier B</button>
+      <button class="lbl-pill" :class="{active: tierFilter === 'C'}" @click="tierFilter = 'C'">Tier C</button>
     </div>
 
     <!-- Label filter pills -->
@@ -991,6 +1022,8 @@ function wlApp() {
     selectedId:   null,
     _assetFilter: 'ALL',
     labelFilter:  null,   // null = all labels; set to label_id to filter by that label
+    tierFilter:   'ALL',  // Filter by setup quality tier (ALL, A, B, C)
+    exchangeFilters: [],  // Dynamic exchange configuration tabs
     search:       '',
     chartWidget:  null,
     chartTf:      '1Y',
@@ -998,6 +1031,8 @@ function wlApp() {
     isPaper:      true,
     stats:        null,
     clock:        '',
+    asxOpen:      false,
+    nyseOpen:     false,
     promoting:    false,
     promoteMsg:   '',
     _clockTimer:  null,
@@ -1030,7 +1065,20 @@ function wlApp() {
 
     tickClock() {
       const now = new Date();
-      this.clock = now.toLocaleTimeString('en-AU', {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false});
+      this.clock = now.toLocaleTimeString('en-AU', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        timeZone: 'Australia/Sydney',
+      }) + ' AEST';
+
+      // ASX: 10:00–16:00 Sydney, Mon–Fri
+      const syd = new Date(now.toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+      const sm = syd.getHours() * 60 + syd.getMinutes();
+      this.asxOpen = syd.getDay() >= 1 && syd.getDay() <= 5 && sm >= 600 && sm < 960;
+
+      // NYSE: 9:30–16:00 New York, Mon–Fri
+      const ny = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const nm = ny.getHours() * 60 + ny.getMinutes();
+      this.nyseOpen = ny.getDay() >= 1 && ny.getDay() <= 5 && nm >= 570 && nm < 960;
     },
 
     // ── Data load ───────────────────────────────────────────────────────────
@@ -1042,6 +1090,7 @@ function wlApp() {
         this.regimes  = d.regimes  || {};
         this.isPaper  = d.account_is_paper ?? true;
         this.stats    = d.stats    || null;
+        this.exchangeFilters = d.exchange_filters || [];
         // Re-select current item from fresh data (in case rule_results updated)
         if (this.selectedId && d.groups) {
           for (const g of d.groups) {
@@ -1052,6 +1101,28 @@ function wlApp() {
           this.selectItem(this.filteredItems[0]);
         }
       } catch (e) { console.error('WL data load error:', e); }
+    },
+
+    async refresh() {
+      await this.loadData();
+    },
+
+    toggleFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen?.();
+      } else {
+        document.exitFullscreen?.();
+      }
+    },
+
+    exchShort(key) {
+      return { ASX:'ASX', NYSE:'NYSE', NASDAQ:'NASDAQ',
+               CRYPTO_INDEPENDENTRESERVE:'IR',
+               CRYPTO_BINANCE:'BNB', CRYPTO_COINBASE:'CB', CRYPTO_KRAKEN:'KR' }[key] || key;
+    },
+
+    regimeIcon(r) {
+      return { BULL:'🐂', CAUTION:'⚠', BEAR:'🐻', UNKNOWN:'?' }[r] || '?';
     },
 
     async refreshPrices() {
@@ -1071,17 +1142,25 @@ function wlApp() {
         || item.ticker?.endsWith('-USDT');
     },
 
+    matchesExchange(item, filterKey) {
+      if (filterKey === 'ALL') return true;
+      if (filterKey === 'EQUITY') return !this.isCrypto(item);
+      if (filterKey === 'CRYPTO') return this.isCrypto(item);
+      if (filterKey === 'ASX') return item.exchange_key === 'ASX';
+      if (filterKey === 'US') return item.exchange_key === 'NYSE' || item.exchange_key === 'NASDAQ';
+      return item.exchange_key === filterKey;
+    },
+
     // ── Computed: all items flat (filtered by search + assetFilter + labelFilter) ─────
     get filteredItems() {
       if (!this.data?.groups) return [];
       const q = this.search.toLowerCase().trim();
       return this.data.groups.flatMap(g => g.items).filter(item => {
-        const assetOk = this.assetFilter === 'ALL'
-          || (this.assetFilter === 'EQUITY' && !this.isCrypto(item))
-          || (this.assetFilter === 'CRYPTO' && this.isCrypto(item));
+        const assetOk = this.matchesExchange(item, this.assetFilter);
         const labelOk = this.labelFilter === null || item.label_id === this.labelFilter;
+        const tierOk  = this.tierFilter === 'ALL' || item.setup_tier === this.tierFilter;
         const searchOk = !q || item.display_ticker.toLowerCase().includes(q) || (item.name||'').toLowerCase().includes(q);
-        return assetOk && labelOk && searchOk;
+        return assetOk && labelOk && tierOk && searchOk;
       });
     },
 
@@ -1097,9 +1176,8 @@ function wlApp() {
           seen.add(g.label_id);
           // Count only items matching the current assetFilter so pills reflect the filtered view
           const count = g.items.filter(i =>
-            this.assetFilter === 'ALL' ||
-            (this.assetFilter === 'EQUITY' && !this.isCrypto(i)) ||
-            (this.assetFilter === 'CRYPTO' && this.isCrypto(i))
+            this.matchesExchange(i, this.assetFilter) &&
+            (this.tierFilter === 'ALL' || i.setup_tier === this.tierFilter)
           ).length;
           // Only show labels that have at least one item in the current asset view
           if (count > 0) {
@@ -1120,6 +1198,7 @@ function wlApp() {
           ...g,
           items: g.items.filter(i =>
             !this.isCrypto(i) &&
+            (this.tierFilter === 'ALL' || i.setup_tier === this.tierFilter) &&
             (!q || i.display_ticker.toLowerCase().includes(q) || (i.name||'').toLowerCase().includes(q))
           )
         })).filter(g => g.items.length > 0);
@@ -1135,6 +1214,7 @@ function wlApp() {
           ...g,
           items: g.items.filter(i =>
             this.isCrypto(i) &&
+            (this.tierFilter === 'ALL' || i.setup_tier === this.tierFilter) &&
             (!q || i.display_ticker.toLowerCase().includes(q) || (i.name||'').toLowerCase().includes(q))
           )
         })).filter(g => g.items.length > 0);
