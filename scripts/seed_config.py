@@ -448,10 +448,10 @@ RULE_CONFIGS = [
     dict(rule_id="exit_earnings_avoid",
          category="EXIT_DEFENSIVE", sort_order=63,
          label="Exit N days before earnings",
-         description="Exit positions N trading days before the next earnings date.",
+         description="Exit positions N trading days before the next earnings date. Early warning fires at 3× this buffer and surfaces in audit log without forcing exit.",
          minervini_ref="Never hold through earnings — binary risk event",
-         threshold=2.0, threshold_label="Trading days before earnings to exit",
-         threshold_min=1.0, threshold_max=5.0,
+         threshold=5.0, threshold_label="Trading days before earnings to exit",
+         threshold_min=1.0, threshold_max=20.0,
          enabled_globally=True, is_mandatory=False),
 
     dict(rule_id="exit_break_below_50ma",

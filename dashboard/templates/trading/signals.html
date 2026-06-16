@@ -21,6 +21,11 @@
 </div>
 {% endif %}
 
+{# ── Effective exchange: default to first tab if 'ALL' ──────────────────── #}
+{% set _tabs = exchange_filters | selectattr('key', 'ne', 'ALL') | list %}
+{% set _has_tabs = _tabs | length > 1 %}
+{% set _eff_exchange = active_exchange_filter if (active_exchange_filter and active_exchange_filter != 'ALL') else (_tabs[0].key if _tabs else 'ALL') %}
+
 <!-- ── Exchange tabs ──────────────────────────────────────────────────── -->
 {% set base_url = "/signals" %}
 {% set extra_params = "" %}
@@ -119,7 +124,7 @@ function togglePassingRules(sigId) {
 (function() {
   const container  = document.getElementById('sig-cards-container');
   const skeleton   = document.getElementById('sig-skeleton');
-  const exchange   = new URLSearchParams(location.search).get('exchange') || 'ALL';
+  const exchange   = new URLSearchParams(location.search).get('exchange') || '{{ _eff_exchange }}';
 
   async function loadCards() {
     try {

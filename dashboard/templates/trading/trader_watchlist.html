@@ -228,6 +228,12 @@
     .badge-vcp     { color: var(--up);     background: #26a69a14; border: 1px solid #26a69a44; }
     .badge-sig     { color: var(--up);     background: #26a69a18; border: 1px solid #26a69a44; }
     .badge-crypto  { color: #f7931a;       background: #f7931a14; border: 1px solid #f7931a44; }
+    /* Quality tier badges */
+    .badge-tier-a  { color: #00e676; background: #00e67620; border: 1px solid #00e67666; font-weight: 900; letter-spacing: 0.05em; }
+    .badge-tier-b  { color: #ffd740; background: #ffd74018; border: 1px solid #ffd74044; font-weight: 900; }
+    /* Earnings warning badges */
+    .badge-earn-danger { color: #ff5252; background: #ff525218; border: 1px solid #ff525244; }
+    .badge-earn-warn   { color: #ff9800; background: #ff980018; border: 1px solid #ff980044; }
     .badge-mkt     { display: inline-block; font-size: 8px; font-weight: 800; padding: 1px 5px; border-radius: 3px; letter-spacing: 0.06em; }
     .mkt-asx    { color: #42a5f5; background: #42a5f514; border: 1px solid #42a5f544; }
     .mkt-us     { color: #a78bfa; background: #a78bfa14; border: 1px solid #a78bfa44; }
@@ -543,6 +549,13 @@
                   </div>
                   <div class="card-name" x-text="item.name"></div>
                   <div class="card-row2">
+                    <!-- Quality tier badge (A/B only — C is implicit) -->
+                    <template x-if="item.setup_tier === 'A'">
+                      <span class="badge-xs badge-tier-a">★ A</span>
+                    </template>
+                    <template x-if="item.setup_tier === 'B'">
+                      <span class="badge-xs badge-tier-b">B</span>
+                    </template>
                     <!-- Trend score badge -->
                     <span class="badge-xs" :class="(item.trend_score||0) >= 7 ? 'badge-trend' : 'badge-trend-lo'"
                           x-text="`T ${item.trend_score||0}/${item.trend_total||8}`"></span>
@@ -553,6 +566,12 @@
                     <!-- VCP badge -->
                     <template x-if="item.vcp_contractions">
                       <span class="badge-xs badge-vcp" x-text="`VCP×${item.vcp_contractions}`"></span>
+                    </template>
+                    <!-- Earnings warning -->
+                    <template x-if="item.days_to_earnings !== null && item.days_to_earnings !== undefined && item.days_to_earnings <= 14">
+                      <span class="badge-xs"
+                            :class="item.days_to_earnings <= 5 ? 'badge-earn-danger' : 'badge-earn-warn'"
+                            :x-text="`⚠ ERN ${item.days_to_earnings}d`"></span>
                     </template>
                     <!-- Change pct -->
                     <span :class="(livePrices[item.ticker]?.change_pct ?? item.change_pct) >= 0 ? 'up' : 'down'"
@@ -604,6 +623,13 @@
                   <div class="card-name" x-text="item.name"></div>
                   <div class="card-row2">
                     <span class="badge-xs badge-crypto">₿</span>
+                    <!-- Quality tier badge -->
+                    <template x-if="item.setup_tier === 'A'">
+                      <span class="badge-xs badge-tier-a">★ A</span>
+                    </template>
+                    <template x-if="item.setup_tier === 'B'">
+                      <span class="badge-xs badge-tier-b">B</span>
+                    </template>
                     <span class="badge-xs" :class="(item.trend_score||0) >= 7 ? 'badge-trend' : 'badge-trend-lo'"
                           x-text="`T ${item.trend_score||0}/${item.trend_total||8}`"></span>
                     <template x-if="item.rs_rating">
@@ -751,6 +777,13 @@
           </div>
           <!-- Score chips -->
           <div class="score-row">
+            <!-- Setup tier chip -->
+            <div class="score-chip" x-show="selectedItem.setup_tier">
+              <span class="score-chip-val"
+                    :style="selectedItem.setup_tier==='A' ? 'color:#00e676' : selectedItem.setup_tier==='B' ? 'color:#ffd740' : 'color:var(--text-muted)'"
+                    x-text="selectedItem.setup_tier==='A' ? '★ A' : selectedItem.setup_tier || '—'"></span>
+              <span class="score-chip-lbl">TIER</span>
+            </div>
             <div class="score-chip">
               <span class="score-chip-val"
                     :class="(selectedItem.trend_score||0) >= 7 ? 'up' : (selectedItem.trend_score||0) >= 5 ? '' : 'down'"
@@ -766,6 +799,13 @@
             <div class="score-chip" x-show="selectedItem.vcp_contractions">
               <span class="score-chip-val up" x-text="selectedItem.vcp_contractions+'×'"></span>
               <span class="score-chip-lbl">VCP</span>
+            </div>
+            <!-- Earnings warning chip -->
+            <div class="score-chip" x-show="selectedItem.days_to_earnings !== null && selectedItem.days_to_earnings !== undefined">
+              <span class="score-chip-val"
+                    :style="selectedItem.days_to_earnings <= 5 ? 'color:#ff5252' : 'color:#ff9800'"
+                    x-text="`⚠ ${selectedItem.days_to_earnings}d`"></span>
+              <span class="score-chip-lbl">EARNINGS</span>
             </div>
             <div class="score-chip" x-show="selectedItem.vol_ratio">
               <span class="score-chip-val"

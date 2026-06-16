@@ -1235,6 +1235,14 @@ async def signals(request: Request, db: Session = Depends(get_db),
 
     af = (exchange or "ALL").upper()
 
+    ef = _get_exchange_filters(org_id, db)
+
+    # Resolve effective exchange — same logic as the template tabs, so counts
+    # match what the default tab will actually show.
+    _non_all = [f for f in ef if f["key"] != "ALL"]
+    if af == "ALL" and _non_all:
+        af = _non_all[0]["key"]
+
     # ── Fast count queries only — the full card data comes from /signals/items ──
     _base_q = db.query(Signal).filter(
         or_(
@@ -1257,7 +1265,6 @@ async def signals(request: Request, db: Session = Depends(get_db),
     skipped_count   = sum(1 for s in _all_sigs if s.status == SignalStatus.SKIPPED)
     has_signals     = bool(_all_sigs)
 
-    ef = _get_exchange_filters(org_id, db)
     ctx.update({
         "signals":             [],   # skeleton — cards loaded via /signals/items
         "has_signals":         has_signals,
@@ -3650,6 +3657,35 @@ def _trader_watchlist_data_inner(request: Request, db):
             rv = rules["vcp_contractions"]
             vcp_contractions = int(rv.get("value") or 0) if isinstance(rv, dict) and rv.get("value") else None
 
+        # ── Setup quality tier (A/B/C) — Minervini prioritisation ────────────
+        # A: 8/8 trend + RS ≥ 80 + volume dry-up (vol_ratio ≤ 0.6)
+        # B: 7+/8 trend + RS ≥ 70
+        # C: still forming — below threshold
+        if (trend_passed >= trend_total > 0
+                and rs_rating is not None and rs_rating >= 80
+                and (vol_ratio is None or vol_ratio <= 0.6)):
+            setup_tier = "A"
+        elif (trend_total > 0 and trend_passed >= max(trend_total - 1, 1)
+                and rs_rating is not None and rs_rating >= 70):
+            setup_tier = "B"
+        else:
+            setup_tier = "C"
+
+        # ── Upcoming earnings warning (from Redis — written by get_fundamentals) ─
+        next_earnings_date = None
+        days_to_earnings = None
+        cached_ed = cache.get(f"earnings_date:{w.ticker}")
+        if cached_ed and isinstance(cached_ed, str):
+            try:
+                from datetime import date as _date
+                _ed = _date.fromisoformat(cached_ed)
+                _today = _date.today()
+                if _ed >= _today:
+                    next_earnings_date = cached_ed
+                    days_to_earnings = (_ed - _today).days
+            except Exception:
+                pass
+
         # Determine screener exchange key
         is_crypto_item = w.ticker.endswith(("-AUD", "-USD", "-USDT")) or getattr(w, "asset_type", "EQUITY") == "CRYPTO"
         if is_crypto_item:
@@ -3699,6 +3735,9 @@ def _trader_watchlist_data_inner(request: Request, db):
             "trend_total": trend_total,
             "vcp_contractions": vcp_contractions,
             "rule_results": rules,
+            "setup_tier": setup_tier,
+            "next_earnings_date": next_earnings_date,
+            "days_to_earnings": days_to_earnings,
             "has_pending_signal": w.ticker in pending_signal_tickers,
             "added_by": w.added_by or "screener",
             "added_date": w.added_date.isoformat() if w.added_date else None,
@@ -3733,6 +3772,11 @@ def _trader_watchlist_data_inner(request: Request, db):
             "label_color": "#5a5a78",
             "items": unlabelled,
         })
+
+    # Sort items within each group: A-tier first, then B, then C
+    _tier_order = {"A": 0, "B": 1, "C": 2}
+    for g in groups:
+        g["items"].sort(key=lambda x: _tier_order.get(x.get("setup_tier", "C"), 2))
 
     def _is_crypto(w) -> bool:
         # Ticker format is authoritative — covers DB rows with wrong asset_type="EQUITY"

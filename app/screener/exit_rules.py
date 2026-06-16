@@ -99,11 +99,21 @@ def evaluate_exit_rules(
     rule_id = "exit_earnings_avoid"
     if engine.is_enabled(rule_id) and next_earnings_date:
         days_to_earnings = (next_earnings_date - today).days
-        buffer_days = int(engine.threshold(rule_id) or 2)
+        buffer_days = int(engine.threshold(rule_id) or 5)
+        early_warn_days = buffer_days * 3   # early warning at 3× the buffer (e.g. 15d if buffer=5)
         if 0 <= days_to_earnings <= buffer_days:
+            # Within the exit buffer — trigger full exit
             signals.append(ExitSignal(
                 should_exit=True, reason=ExitReason.EARNINGS_AVOID, exit_type="FULL",
                 message=f"Earnings in {days_to_earnings}d — exiting per rule (buffer {buffer_days}d)",
+                rule_id=rule_id
+            ))
+        elif days_to_earnings <= early_warn_days:
+            # Early warning window — flag it but don't exit yet
+            # (surfaces in audit log "holding" summary so operator can decide)
+            signals.append(ExitSignal(
+                should_exit=False, reason=ExitReason.EARNINGS_AVOID,
+                message=f"⚠ Earnings approaching in {days_to_earnings}d — monitor position (exit in ≤{buffer_days}d)",
                 rule_id=rule_id
             ))
 

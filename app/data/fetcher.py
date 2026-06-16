@@ -1309,6 +1309,15 @@ def get_fundamentals(ticker: str) -> dict:
         except Exception:
             pass
 
+        # Cache earnings date 24hr so watchlist/positions UI can surface warnings
+        # without an extra yfinance call on every page load.
+        if result.get("next_earnings_date"):
+            try:
+                from app.utils.cache import cache as _fcache
+                _fcache.set(f"earnings_date:{ticker}", result["next_earnings_date"], expire_seconds=86400)
+            except Exception:
+                pass
+
     except Exception as e:
         logger.debug(f"Fundamentals fetch failed for {ticker}: {e}")
 
