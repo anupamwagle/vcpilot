@@ -83,6 +83,11 @@
       {% if s.is_promoted_manual %}
       <span style="font-size:.65rem;padding:.15rem .5rem;border-radius:.3rem;font-weight:600;background:rgba(245,158,11,.12);color:#d97706;border:1px solid rgba(245,158,11,.35)">👤 Manual Promotion</span>
       {% endif %}
+      {% if s.setup_tier == 'A' %}
+      <span style="font-size:.6rem;font-weight:700;padding:.1rem .4rem;border-radius:.25rem;background:rgba(16,185,129,.15);color:#10b981;border:1px solid rgba(16,185,129,.35)">★ A</span>
+      {% elif s.setup_tier == 'B' %}
+      <span style="font-size:.6rem;font-weight:700;padding:.1rem .4rem;border-radius:.25rem;background:rgba(59,130,246,.12);color:#3b82f6;border:1px solid rgba(59,130,246,.3)">B</span>
+      {% endif %}
       <span class="tag">Trend {{ s.trend_score }}/{{ 8 if s.asset_type == 'CRYPTO' else 9 }}</span>
       {% if s.asset_type != 'CRYPTO' %}<span class="tag">Fund {{ s.fund_score }}/7</span>{% endif %}
       {% if s.has_overrides %}

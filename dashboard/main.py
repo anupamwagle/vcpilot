@@ -830,6 +830,15 @@ async def home(
         if only_custom and not is_custom:
             continue
 
+        _h_rs = float(bar.rs_rating) if bar and bar.rs_rating else 0
+        _h_vol = float(bar.vol_ratio) if bar and bar.vol_ratio else None
+        if _h_rs >= 80 and (_h_vol is None or _h_vol <= 0.6):
+            _h_tier = "A"
+        elif _h_rs >= 70:
+            _h_tier = "B"
+        else:
+            _h_tier = "C"
+
         watchlist_rows.append({
             "ticker": w.ticker,
             "company_name": s.name if s else "",
@@ -849,6 +858,7 @@ async def home(
             "pct_from_52w_high": float(bar.pct_from_52w_high) if bar and bar.pct_from_52w_high else None,
             "atr_14": float(bar.atr_14) if bar and bar.atr_14 else None,
             "bar_date": str(bar.date) if bar else "",
+            "setup_tier": _h_tier,
         })
 
     # Filter by exchange
@@ -958,6 +968,22 @@ async def positions(request: Request, db: Session = Depends(get_db),
     except Exception:
         pass
     positions = pos_q.all()
+
+    # Bulk PriceBar lookup for setup_tier (RS rating)
+    _pos_tickers = list({p.ticker for p in positions})
+    _pos_bar_rs: dict[str, float] = {}
+    if _pos_tickers:
+        from sqlalchemy import func as _pfunc
+        from app.models.market import PriceBar as _PB
+        _psub = (
+            db.query(_PB.ticker, _pfunc.max(_PB.date).label("max_date"))
+            .filter(_PB.ticker.in_(_pos_tickers))
+            .group_by(_PB.ticker)
+            .subquery()
+        )
+        for _pb in db.query(_PB).join(_psub, (_PB.ticker == _psub.c.ticker) & (_PB.date == _psub.c.max_date)).all():
+            _pos_bar_rs[_pb.ticker] = float(_pb.rs_rating or 0)
+
     pos_data = []
     total_risk = 0.0
     for p in positions:
@@ -1029,6 +1055,8 @@ async def positions(request: Request, db: Session = Depends(get_db),
 
         ek = getattr(p, "exchange_key", "ASX") or "ASX"
         at = getattr(p, "asset_type",   "EQUITY") or "EQUITY"
+        _p_rs = _pos_bar_rs.get(p.ticker, 0)
+        _p_tier = "A" if _p_rs >= 80 else ("B" if _p_rs >= 70 else "C")
         pos_data.append({
             "id": p.id, "ticker": p.ticker,
             "exchange_key":  ek,
@@ -1048,6 +1076,7 @@ async def positions(request: Request, db: Session = Depends(get_db),
             "entry_date": str(p.entry_date),
             "is_paper": p.is_paper,
             "exit_checks": exit_checks,
+            "setup_tier": _p_tier,
         })
 
     # Closed trades — also filter by exchange if selected
@@ -1514,6 +1543,16 @@ async def signals_items(request: Request, db: Session = Depends(get_db),
         if _live and isinstance(_live, (int, float)) and _live > 0:
             _close = float(_live)
 
+        _s_trend_total = 8 if at == "CRYPTO" else 9
+        _s_rs = float(s.rs_rating or 0)
+        _s_trend = s.trend_score or 0
+        if _s_trend >= _s_trend_total and _s_rs >= 80:
+            _s_tier = "A"
+        elif _s_trend >= max(_s_trend_total - 1, 1) and _s_rs >= 70:
+            _s_tier = "B"
+        else:
+            _s_tier = "C"
+
         sig_data.append({
             "id": s.id, "ticker": s.ticker,
             "exchange_key":  ek,
@@ -1543,6 +1582,7 @@ async def signals_items(request: Request, db: Session = Depends(get_db),
             "is_promoted_manual": bool(is_promoted_manual),
             "is_promoted_vcp": bool(is_promoted_vcp),
             "last_check": last_check,
+            "setup_tier": _s_tier,
         })
 
     _status_order = {"PENDING": 0, "TRIGGERED": 1, "SKIPPED": 2}
@@ -2086,6 +2126,18 @@ async def watchlist_rows(
         if w.label:
             lbl = {"id": w.label.id, "name": w.label.name, "color": w.label.color}
 
+        # ── Setup quality tier (A/B/C) — Minervini prioritisation ────────────
+        _wl_trend_keys = [k for k in rr if k.startswith("trend_")]
+        _wl_trend_passed = sum(1 for k in _wl_trend_keys if (rr[k].get("passed") if isinstance(rr[k], dict) else bool(rr[k])))
+        _wl_trend_total = len(_wl_trend_keys)
+        _wl_rs = bar_data.get("rs_rating", 0) if bar_data else 0
+        if _wl_trend_total > 0 and _wl_trend_passed >= _wl_trend_total and _wl_rs >= 80:
+            _wl_tier = "A"
+        elif _wl_trend_total > 0 and _wl_trend_passed >= max(_wl_trend_total - 1, 1) and _wl_rs >= 70:
+            _wl_tier = "B"
+        else:
+            _wl_tier = "C"
+
         watchlist_data.append({
             "id": w.id,
             "ticker": w.ticker,
@@ -2100,6 +2152,7 @@ async def watchlist_rows(
             "rules_total": len(rr),
             "rule_results": _enrich_rule_results(w.ticker, rr, db, _bar_data=_bar_lookup_dict.get(w.ticker)),
             "label": lbl,
+            "setup_tier": _wl_tier,
         })
 
     _enrich_watchlist_vcp_and_sizing(watchlist_data, db, org_id)
