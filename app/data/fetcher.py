@@ -603,6 +603,11 @@ _SECTOR_LABEL_RULES: list[tuple[list[str], str | None, str]] = [
     (["gas", "natural gas"],            "Energy",       "Oil & Gas"),
     (["mining", "mineral"],             "Basic Materials","Mining (General)"),
     (["mining", "mineral"],             "Materials",    "Mining (General)"),
+    # Catch-all: bare GICS sector="Materials"/"Basic Materials" with no specific
+    # commodity keyword in industry (the most common case — yfinance/Wikipedia
+    # rarely populate `industry` for ASX small/mid-caps). Sits after every
+    # specific commodity rule above so gold/lithium/copper/etc. still win first.
+    (["materials", "basic materials"],  None,           "Mining (General)"),
     # ── Energy ──────────────────────────────────────────────────────────────
     (["energy", "renewable", "solar", "wind"], "Energy","Energy"),
     (["energy"],                        None,           "Energy"),
