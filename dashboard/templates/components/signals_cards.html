@@ -164,6 +164,20 @@
     <span style="font-size:.63rem;color:var(--text-subtle)">* Close = price when signal generated (static). Live price in entry-check panel below.</span>
   </div>
 
+  {# ── VCP price/volume chart — real PriceBar data for this ticker ───── #}
+  {% if s.vcp_chart_svg %}
+  <div style="padding:.85rem 1rem;border-bottom:1px solid var(--border)">
+    <div style="margin:0;background:var(--surface-alt);border:1px solid var(--border);border-radius:8px;padding:.75rem;overflow-x:auto">
+      {{ s.vcp_chart_svg | safe }}
+    </div>
+    <p style="font-size:.68rem;color:var(--text-subtle);text-align:center;margin-top:.4rem;font-style:italic">
+      {{ s.vcp_contractions }} contraction{{ 's' if s.vcp_contractions != 1 else '' }} over {{ s.vcp_weeks }} week{{ 's' if s.vcp_weeks != 1 else '' }} base ·
+      <span style="color:#f97316">— Pivot</span> · <span style="color:#ef4444">— Stop</span> · <span style="color:#4ade80">— Target 1</span> ·
+      green volume = ≥150% of average · amber dots = detected swing points
+    </p>
+  </div>
+  {% endif %}
+
   {# ── Screener rule badges — collapsible ──────────────────────────── #}
   {% set sig_passed = s.rule_results | selectattr('passed') | list | length %}
   {% set sig_total  = s.rule_results | length %}

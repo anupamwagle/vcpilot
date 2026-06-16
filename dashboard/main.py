@@ -1371,6 +1371,107 @@ def _enrich_rule_results(ticker: str, rule_results_dict: dict, db_session, targe
     return enriched
 
 
+def _build_vcp_chart_svg(ticker: str, bars: list[dict], pivot: float, stop: float, target1: float) -> str | None:
+    """
+    Build a real-data price/volume SVG chart for a signal card, visually styled like the
+    FAQ Q1 illustrative VCP diagram (cyan price line, gray/green volume bars, dashed
+    coloured reference lines) but driven entirely by actual PriceBar history for this ticker.
+
+    bars: ascending-by-date list of dicts with close/high/low/volume/vol_ratio.
+    Returns raw SVG markup (caller must render with `| safe`), or None if too little history.
+    """
+    if not bars or len(bars) < 15:
+        return None
+
+    n = len(bars)
+    closes = [b["close"] for b in bars]
+    highs  = [b.get("high") or b["close"] for b in bars]
+    lows   = [b.get("low") or b["close"] for b in bars]
+    vols   = [b.get("volume") or 0 for b in bars]
+    vol_ratios = [b.get("vol_ratio") for b in bars]
+
+    # ── Layout (mirrors the FAQ .chart-wrap convention: viewBox 0 0 700 220) ──
+    W, H = 700, 220
+    margin_l, margin_r = 36, 92
+    chart_top, price_h = 14, 128
+    vol_top = chart_top + price_h + 10
+    vol_h = 40
+    baseline_y = vol_top + vol_h
+    plot_w = W - margin_l - margin_r
+
+    all_prices = highs + lows + [p for p in (pivot, stop, target1) if p and p > 0]
+    pmax = max(all_prices) if all_prices else 1.0
+    pmin = min(all_prices) if all_prices else 0.0
+    if pmax <= pmin:
+        pmax = pmin + 1.0
+    pad = (pmax - pmin) * 0.08
+    pmax += pad
+    pmin -= pad
+
+    def x_of(i: int) -> float:
+        return margin_l + (i / (n - 1)) * plot_w if n > 1 else margin_l
+
+    def y_of(price: float) -> float:
+        return chart_top + (pmax - price) / (pmax - pmin) * price_h
+
+    price_pts = " ".join(f"{x_of(i):.1f},{y_of(closes[i]):.1f}" for i in range(n))
+
+    # ── Volume bars — green when that day's vol_ratio hit breakout threshold ──
+    vmax = max(vols) if vols and max(vols) > 0 else 1.0
+    bar_w = max(plot_w / n * 0.7, 1.0)
+    vol_bars = []
+    for i in range(n):
+        vh = (vols[i] / vmax) * vol_h
+        vr = vol_ratios[i]
+        color = "#4ade80" if (vr is not None and vr >= 150) else "#94a3b8"
+        x = x_of(i) - bar_w / 2
+        y = baseline_y - vh
+        vol_bars.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{max(vh,0):.1f}" fill="{color}" opacity=".8"/>')
+
+    # ── Swing high/low markers — real contraction points via the same pivot
+    #    detector the screener uses (app.screener.vcp._find_pivots) ──
+    swing_markers = []
+    try:
+        import numpy as _np
+        from app.screener.vcp import _find_pivots
+        win = 3 if n < 60 else 5
+        for i in _find_pivots(_np.array(highs), direction="high", window=win):
+            swing_markers.append(f'<circle cx="{x_of(i):.1f}" cy="{y_of(highs[i]):.1f}" r="2.5" fill="#f59e0b"/>')
+        for i in _find_pivots(_np.array(lows), direction="low", window=win):
+            swing_markers.append(f'<circle cx="{x_of(i):.1f}" cy="{y_of(lows[i]):.1f}" r="2.5" fill="#f59e0b" opacity=".7"/>')
+    except Exception:
+        pass
+
+    # ── Reference lines: pivot (orange) / stop (red) / target 1 (green) ──
+    ref_lines = []
+    def _ref(price: float, color: str, label: str):
+        if not price or price <= 0:
+            return
+        y = y_of(price)
+        ref_lines.append(
+            f'<line x1="{margin_l}" y1="{y:.1f}" x2="{W - margin_r + 4:.1f}" y2="{y:.1f}" '
+            f'stroke="{color}" stroke-width="1.1" stroke-dasharray="5,3"/>'
+            f'<text x="{W - margin_r + 8:.1f}" y="{y + 3:.1f}" font-size="9.5" fill="{color}" font-weight="bold">{label} ${price:.3f}</text>'
+        )
+    _ref(pivot, "#f97316", "Pivot")
+    _ref(stop, "#ef4444", "Stop")
+    _ref(target1, "#4ade80", "T1")
+
+    return (
+        f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" '
+        f'style="width:100%;max-width:{W}px;display:block;margin:0 auto">'
+        f'<line x1="{margin_l}" y1="{baseline_y}" x2="{W - margin_r + 4}" y2="{baseline_y}" '
+        f'stroke="#475569" stroke-width="1" stroke-dasharray="4,3"/>'
+        f'<g>{"".join(vol_bars)}</g>'
+        f'{"".join(ref_lines)}'
+        f'<polyline points="{price_pts}" stroke="#22d3ee" stroke-width="2" fill="none"/>'
+        f'<g>{"".join(swing_markers)}</g>'
+        f'<circle cx="{x_of(n-1):.1f}" cy="{y_of(closes[-1]):.1f}" r="3" fill="#22d3ee"/>'
+        f'<text x="{margin_l}" y="{chart_top - 4}" font-size="9.5" fill="#94a3b8">{ticker} · {n}d</text>'
+        f'</svg>'
+    )
+
+
 @app.get("/signals", response_class=HTMLResponse)
 async def signals(request: Request, db: Session = Depends(get_db),
                   exchange: str = Query("ALL"), tier: str = Query(None)):
@@ -1604,6 +1705,28 @@ async def signals_items(request: Request, db: Session = Depends(get_db),
             if not cache.get(_ck):
                 cache.set(_ck, _bd, expire_seconds=300)
 
+    # ── Bulk-fetch historical bars for the per-signal VCP chart ──────────
+    # (last ~150 trading days — wide enough to show contraction history + breakout)
+    _chart_bars_by_ticker: dict[str, list[dict]] = {}
+    if _sig_tickers:
+        _chart_cutoff = get_current_date() - timedelta(days=240)
+        _hist_rows = (
+            db.query(PriceBar)
+            .filter(PriceBar.ticker.in_(_sig_tickers), PriceBar.date >= _chart_cutoff)
+            .order_by(PriceBar.ticker, PriceBar.date.asc())
+            .all()
+        )
+        for _hb in _hist_rows:
+            _chart_bars_by_ticker.setdefault(_hb.ticker, []).append({
+                "close":     float(_hb.close or 0),
+                "high":      float(_hb.high or _hb.close or 0),
+                "low":       float(_hb.low or _hb.close or 0),
+                "volume":    float(_hb.volume or 0),
+                "vol_ratio": float(_hb.vol_ratio) if _hb.vol_ratio is not None else None,
+            })
+        for _tkr in list(_chart_bars_by_ticker.keys()):
+            _chart_bars_by_ticker[_tkr] = _chart_bars_by_ticker[_tkr][-150:]
+
     # ── Favourites — tickers assigned to the "Favourites" label ─────────
     from app.models.signal import Watchlist, WatchlistStatus, WatchlistLabel
     _fav_label = db.query(WatchlistLabel.id).filter(
@@ -1760,6 +1883,13 @@ async def signals_items(request: Request, db: Session = Depends(get_db),
             "is_promoted_vcp": bool(is_promoted_vcp),
             "last_check": last_check,
             "setup_tier": _s_tier,
+            "vcp_chart_svg": _build_vcp_chart_svg(
+                s.ticker,
+                _chart_bars_by_ticker.get(s.ticker, []),
+                float(s.pivot_price or 0),
+                float(s.stop_price or 0),
+                float(s.target_price_1 or 0),
+            ),
         })
 
     _status_order = {"PENDING": 0, "TRIGGERED": 1, "SKIPPED": 2}
