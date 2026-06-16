@@ -26,7 +26,7 @@
 {% set extra_params = "" %}
 {% include "components/exchange_filter.html" %}
 
-{% if not signals %}
+{% if not has_signals %}
 <div class="card p-12 text-center">
   <div style="font-size:2.5rem;margin-bottom:.75rem">🔍</div>
   <p class="empty-title">No signals for {{ signal_date }}</p>
@@ -64,326 +64,30 @@
   <p style="color:var(--text-muted);font-size:.85rem">No matching signals</p>
 </div>
 
-{% set ns = namespace(shown_triggered_divider=false) %}
-<div style="display:flex;flex-direction:column;gap:1.25rem">
-{% for s in signals %}
-{% if not ns.shown_triggered_divider and s.status in ('TRIGGERED', 'SKIPPED') and loop.index > 1 %}
-{% set ns.shown_triggered_divider = true %}
-<div style="display:flex;align-items:center;gap:.75rem;margin-top:.25rem;margin-bottom:-.25rem">
-  <div style="flex:1;height:1px;background:var(--border)"></div>
-  <span style="font-size:.7rem;color:var(--text-subtle);font-weight:600;white-space:nowrap">Already actioned</span>
-  <div style="flex:1;height:1px;background:var(--border)"></div>
-</div>
-{% endif %}
-
-{# ── Compact row for old triggered/skipped signals (not today's date) ── #}
-{% if s.status in ('TRIGGERED', 'SKIPPED') and s.sig_date != signal_date %}
-<div class="card" id="sig-{{ s.id }}" data-search="{{ s.ticker }} {{ s.company_name or '' }}"
-     style="padding:.5rem .875rem;opacity:.5;display:flex;align-items:center;gap:.75rem">
-  <span style="font-size:.65rem;color:var(--text-subtle)">{{ s.sig_date }}</span>
-  <span class="mono font-bold" style="color:var(--text)">{{ s.ticker.replace('.AX','').replace('-AUD','').replace('-USD','') }}</span>
-  {% if s.company_name %}<span style="font-size:.75rem;color:var(--text-muted)">{{ s.company_name }}</span>{% endif %}
-  <span style="margin-left:auto;font-size:.65rem;font-weight:700;padding:.1rem .45rem;border-radius:.25rem;
-    {% if s.status == 'TRIGGERED' %}background:var(--pos-bg);color:var(--pos){% else %}background:var(--surface-alt);color:var(--text-subtle){% endif %}">
-    {{ s.status }}
-  </span>
-  {% if s.pivot %}<span style="font-size:.7rem;color:var(--text-muted)">Pivot {{ s.pivot | round(3) }}</span>{% endif %}
-  {% if s.stop  %}<span style="font-size:.7rem;color:var(--neg)">Stop {{ s.stop | round(3) }}</span>{% endif %}
-</div>
-{% else %}
-
-{# ── Full card for today's signals or all PENDING ── #}
-<div class="card overflow-hidden card-lift card-enter" id="sig-{{ s.id }}"
-     data-search="{{ s.ticker }} {{ s.company_name or '' }}"
-     style="{% if s.status == 'TRIGGERED' %}opacity:.65;border-color:var(--bull-border){% elif s.status == 'SKIPPED' %}opacity:.45{% endif %}">
-
-  {# ── Header ───────────────────────────────────────────────────────── #}
-  <div class="section-head-r">
-    <div style="display:flex;align-items:center;gap:.625rem;flex-wrap:wrap">
-      <div style="display:flex;flex-direction:column">
-        <span class="mono font-bold text-base" style="color:var(--text);line-height:1.2;display:inline-flex;align-items:center;gap:.35rem">
-          <form method="post" action="/watchlist/toggle-favourite" style="display:inline">
-            <input type="hidden" name="ticker" value="{{ s.ticker }}">
-            <input type="hidden" name="redirect_url" value="{{ path }}">
-            <button type="submit" class="focus:outline-none" style="color:#f59e0b;background:none;border:none;padding:0;cursor:pointer;font-size:1.1rem;line-height:1" title="Toggle Favourite">
-              {% if s.ticker in favourited_tickers %}★{% else %}☆{% endif %}
-            </button>
-          </form>
-          {{ s.ticker.replace('.AX','').replace('-USD','').replace('-USDT','').replace('-AUD','') }}
-          {% if s.exchange_key and s.exchange_key != 'ASX' %}
-          <span style="font-size:.6rem;font-weight:600;padding:.1rem .3rem;border-radius:.2rem;background:var(--surface-alt);color:var(--text-muted);border:1px solid var(--border)">
-            {{ s.flag_emoji or '' }} {{ s.exchange_key.replace('CRYPTO_','') }}
-          </span>
-          {% elif s.asset_type == 'CRYPTO' %}
-          <span style="font-size:.6rem;font-weight:600;padding:.1rem .3rem;border-radius:.2rem;background:var(--warn-bg);color:var(--warn)">₿</span>
-          {% endif %}
-        </span>
-        {% if s.company_name %}<span style="font-size:.7rem;color:var(--text-subtle);font-weight:normal;line-height:1.2">{{ s.company_name }}</span>{% endif %}
+{# ── Signal cards loaded via /signals/items (skeleton-first) ─────────── #}
+<div id="sig-cards-container" style="display:flex;flex-direction:column;gap:1.25rem">
+  {# Loading skeleton — replaced immediately by JS fetch #}
+  <div id="sig-skeleton" style="display:flex;flex-direction:column;gap:1.25rem">
+    {% for _ in range(pending_count if pending_count > 0 else 2) %}
+    <div class="card overflow-hidden" style="opacity:.5">
+      <div class="section-head-r" style="padding:.875rem 1rem">
+        <div style="display:flex;gap:.75rem;align-items:center">
+          <div style="width:5rem;height:.875rem;border-radius:.25rem;background:var(--border)"></div>
+          <div style="width:3rem;height:.875rem;border-radius:.25rem;background:var(--border)"></div>
+        </div>
+        <div style="width:4rem;height:1.5rem;border-radius:.375rem;background:var(--border)"></div>
       </div>
-      {% if s.status == 'TRIGGERED' %}<span class="tag-pos">✓ Triggered</span>
-      {% elif s.status == 'SKIPPED' %}<span class="tag">Skipped</span>
-      {% else %}<span class="tag-blue">Pending</span>{% endif %}
-      {% if s.is_promoted_vcp %}
-      <span class="tag tag-blue" style="border-color:var(--t-accent-mid)">⚡ VCP Screener</span>
-      {% endif %}
-      {% if s.is_promoted_manual %}
-      <span style="font-size:.65rem;padding:.15rem .5rem;border-radius:.3rem;font-weight:600;background:rgba(245,158,11,.12);color:#d97706;border:1px solid rgba(245,158,11,.35)">👤 Manual Promotion</span>
-      {% endif %}
-      <span class="tag">Trend {{ s.trend_score }}/{{ 8 if s.asset_type == 'CRYPTO' else 9 }}</span>
-      {% if s.asset_type != 'CRYPTO' %}<span class="tag">Fund {{ s.fund_score }}/7</span>{% endif %}
-      {% if s.has_overrides %}
-      <span style="font-size:.65rem;padding:.15rem .5rem;border-radius:.3rem;font-weight:600;background:var(--warn-bg);color:var(--warn);border:1px solid var(--caution-border)">⚙ Overrides active</span>
-      {% endif %}
-    </div>
-    <div class="action-row">
-      {% if s.status == 'PENDING' %}
-      <button onclick="togglePanel('ovr-{{ s.id }}')"
-              style="font-size:.7rem;padding:.3rem .625rem;border-radius:.375rem;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer;white-space:nowrap">
-        ⚙ Override rules
-      </button>
-      <form method="post" action="/signals/{{ s.id }}/skip">
-        <button type="submit" class="btn-ghost text-xs py-1">Skip</button>
-      </form>
-      {% elif s.status == 'SKIPPED' %}
-      <form method="post" action="/signals/{{ s.id }}/unskip">
-        <button type="submit" class="btn-ghost text-xs py-1" style="color:var(--t-accent);border-color:var(--t-accent)">↩ Unskip</button>
-      </form>
-      {% endif %}
-    </div>
-  </div>
-
-  {# ── Key metrics ──────────────────────────────────────────────────── #}
-  {% set pct_from_pivot = ((s.close - s.pivot) / s.pivot * 100) if s.pivot and s.pivot > 0 else none %}
-  {% set rr_ratio = ((s.target - s.pivot) / (s.pivot - s.stop)) if s.target and s.pivot and s.stop and (s.pivot - s.stop) > 0 else none %}
-  {% set rs_v = s.rs|int %}
-  <div class="metrics-grid" style="border-bottom:1px solid var(--border)">
-    <div class="metric-cell" style="padding:.65rem 1rem;border-right:1px solid var(--border)">
-      <p class="field-label" style="font-size:.6rem">Close*</p>
-      <p class="mono font-bold" style="font-size:.85rem;color:var(--text)">${{ "%.3f"|format(s.close) }}</p>
-      {% if pct_from_pivot is not none %}
-      <p class="dist-pill {% if pct_from_pivot <= 0 %}chip-pos{% elif pct_from_pivot <= 3 %}chip-warn{% else %}chip-neg{% endif %}" style="margin-top:.2rem;font-size:.62rem;padding:.05rem .3rem">
-        {{ "{:+.1f}".format(pct_from_pivot) }}% vs pivot
-      </p>
-      {% endif %}
-    </div>
-    <div style="padding:.65rem 1rem;border-right:1px solid var(--border)">
-      <p class="field-label" style="font-size:.6rem">Pivot</p>
-      <p class="mono-pos" style="font-size:.85rem">${{ "%.3f"|format(s.pivot) }}</p>
-    </div>
-    <div style="padding:.65rem 1rem;border-right:1px solid var(--border)">
-      <p class="field-label" style="font-size:.6rem">Stop</p>
-      <p class="mono-neg" style="font-size:.85rem">${{ "%.3f"|format(s.stop) }}</p>
-      {% if s.pivot and s.stop %}
-      <p class="mono-dim" style="font-size:.62rem;margin-top:.2rem">{{ "%.1f"|format((s.pivot - s.stop) / s.pivot * 100) }}% risk</p>
-      {% endif %}
-    </div>
-    <div style="padding:.65rem 1rem;border-right:1px solid var(--border)">
-      <p class="field-label" style="font-size:.6rem">Target 1</p>
-      <p class="mono-pos" style="font-size:.85rem">${{ "%.3f"|format(s.target) }}</p>
-      {% if rr_ratio is not none %}
-      <p style="margin-top:.2rem"><span class="chip chip-blue chip-sm">R:R {{ "%.1f"|format(rr_ratio) }}×</span></p>
-      {% endif %}
-    </div>
-    <div style="padding:.65rem 1rem;border-right:1px solid var(--border)">
-      <p class="field-label" style="font-size:.6rem">RS Rating</p>
-      <span class="rs-pill {% if rs_v >= 80 %}rs-hi{% elif rs_v >= 60 %}rs-mid{% else %}rs-low{% endif %}" style="font-size:.82rem;padding:.2rem .55rem">{{ rs_v }}</span>
-    </div>
-    <div style="padding:.65rem 1rem;border-right:1px solid var(--border)">
-      <p class="field-label" style="font-size:.6rem">VCP</p>
-      <p class="mono" style="font-size:.82rem;color:var(--text)">{{ s.vcp_contractions }}c</p>
-      <p class="mono-dim" style="font-size:.72rem;margin-top:.1rem">{{ s.vcp_weeks }}w base</p>
-    </div>
-    <div style="padding:.65rem 1rem">
-      <p class="field-label" style="font-size:.6rem">Position</p>
-      <p class="mono" style="font-size:.82rem;color:var(--text)">{{ s.size }} sh</p>
-      <p class="mono-warn" style="font-size:.72rem;margin-top:.1rem">R ${{ s.risk_aud|int }}</p>
-    </div>
-  </div>
-  <div style="padding:.2rem 1rem;border-bottom:1px solid var(--border)">
-    <span style="font-size:.63rem;color:var(--text-subtle)">* Close = price when signal generated (static). Live price in entry-check panel below.</span>
-  </div>
-
-  {# ── Screener rule badges — collapsible ──────────────────────────── #}
-  {% set sig_passed = s.rule_results | selectattr('passed') | list | length %}
-  {% set sig_total  = s.rule_results | length %}
-  <details class="rule-toggle" {% if s.status == 'PENDING' %}open{% endif %}>
-    <summary>
-      <span>Screener rules</span>
-      <span class="chip chip-sm {% if sig_passed >= sig_total * 0.75 %}chip-pos{% elif sig_passed >= sig_total * 0.5 %}chip-warn{% else %}chip-neg{% endif %}" style="margin-left:.25rem">
-        {{ sig_passed }}/{{ sig_total }}
-      </span>
-      <span style="display:inline-flex;gap:2px;margin-left:.25rem">
-        {% for r in s.rule_results %}
-        <span style="width:.35rem;height:.35rem;border-radius:50%;display:inline-block;background:{% if r.passed %}var(--pos){% elif r.overridden %}var(--warn){% else %}var(--neg){% endif %}"></span>
-        {% endfor %}
-      </span>
-    </summary>
-    <div class="rule-badge-list" style="border-bottom:1px solid var(--border)">
-      {% for r in s.rule_results %}
-      <span title="{{ r.detail }}" style="font-size:.65rem;font-family:'SF Mono',monospace;padding:.15rem .5rem;border-radius:.3rem;font-weight:600;
-        {% if r.passed %}background:var(--pos-bg);color:var(--pos);border:1px solid var(--bull-border)
-        {% elif r.overridden %}background:var(--warn-bg);color:var(--warn);border:1px solid var(--caution-border)
-        {% else %}background:var(--neg-bg);color:var(--neg);border:1px solid var(--bear-border){% endif %}">
-        {% if r.passed %}✓{% elif r.overridden %}➔ ✗{% else %}✗{% endif %} {{ r.label }}{% if r.detail %}: <span style="font-weight:normal;color:inherit">{{ r.detail }}</span>{% endif %}
-      </span>
-      {% endfor %}
-    </div>
-  </details>
-
-  {# ── Last entry check (5-min breakout scan result) ───────────────── #}
-  {% if s.last_check %}
-  {% set chk = s.last_check %}
-  {% set triggered = chk.result == 'triggered' %}
-  {% set not_triggered = chk.result == 'not_triggered' %}
-  {# Collect failed rules for the inline summary #}
-  {% if chk.rules and not triggered %}
-    {% set ns = namespace(failed=[]) %}
-    {% for r in chk.rules %}
-      {% if not r.passed and not r.overridden %}
-        {% set ns.failed = ns.failed + [r] %}
-      {% endif %}
-    {% endfor %}
-  {% else %}
-    {% set ns = namespace(failed=[]) %}
-  {% endif %}
-  <div id="chk-row-{{ s.id }}" style="padding:.625rem 1rem;border-bottom:1px solid var(--border);background:{% if triggered %}var(--pos-bg){% elif not_triggered %}rgba(220,38,38,.04){% else %}var(--surface-alt){% endif %}">
-    <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
-      <span id="chk-label-{{ s.id }}" style="font-size:.7rem;font-weight:700;color:{% if triggered %}var(--pos){% elif not_triggered %}var(--neg){% else %}var(--text-muted){% endif %}">
-        {% if triggered %}✅ Entry triggered{% elif not_triggered %}❌ Breakout check{% else %}⏱ Last breakout check{% endif %}
-      </span>
-      <span id="chk-time-{{ s.id }}" style="font-size:.7rem;color:var(--text-subtle);font-family:'SF Mono',monospace">{{ chk.time }}</span>
-      {% if chk.close %}
-      <span id="chk-price-{{ s.id }}" style="font-size:.7rem;font-weight:700;padding:.1rem .4rem;border-radius:.25rem;background:var(--t-accent);color:#fff"
-            title="Live price fetched during the most recent 5-minute entry check{% if chk.data_source %} · source: {{ chk.data_source }}{% endif %}{% if chk.delay_mins %} · ~{{ chk.delay_mins }} min delayed{% elif chk.data_source == 'independentreserve' %} · real-time (IR){% endif %}">
-        {% if chk.data_source == 'independentreserve' %}🟢{% else %}🔴{% endif %} Live ${{ "%.3f"|format(chk.close) }} as of {{ chk.time }}{% if chk.delay_mins %} (~{{ chk.delay_mins }}m delayed){% elif chk.data_source == 'independentreserve' %} ⚡ Real-time{% endif %}
-      </span>
-      {% if chk.pivot %}
-      <span style="font-size:.7rem;color:var(--text-subtle)">· pivot ${{ "%.3f"|format(chk.pivot) }}</span>
-      {% endif %}
-      {% endif %}
-      {# ── Inline "not met" summary ── #}
-      {% if not triggered and ns.failed %}
-      <span style="font-size:.7rem;color:var(--neg);font-weight:600;margin-left:.25rem">│ Not met:</span>
-      {% for r in ns.failed %}
-      <span style="font-size:.65rem;font-family:'SF Mono',monospace;padding:.1rem .4rem;border-radius:.25rem;
-                   background:var(--neg-bg);color:var(--neg);border:1px solid var(--bear-border);font-weight:600">
-        ✗ {{ r.label }}{% if r.message %} — <span style="font-weight:normal;opacity:.85">{{ r.message }}</span>{% endif %}
-      </span>
-      {% endfor %}
-      {% elif not triggered and not chk.rules %}
-      <span style="font-size:.7rem;color:var(--neg);font-weight:500;margin-left:.25rem">│ {{ chk.message }}</span>
-      {% endif %}
-    </div>
-    {% if chk.rules %}
-    <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-top:.5rem">
-      {% for r in chk.rules %}
-      <span style="font-size:.65rem;font-family:'SF Mono',monospace;padding:.15rem .5rem;border-radius:.3rem;font-weight:600;
-            {% if r.passed %}background:var(--pos-bg);color:var(--pos);border:1px solid var(--bull-border)
-            {% elif r.overridden %}background:var(--warn-bg);color:var(--warn);border:1px solid var(--caution-border)
-            {% else %}background:var(--neg-bg);color:var(--neg);border:1px solid var(--bear-border){% endif %}"
-            title="{{ r.message }}">
-        {% if r.passed %}✓{% elif r.overridden %}➔ ✗{% else %}✗{% endif %} {{ r.label }}: {{ r.message }}
-      </span>
-      {% endfor %}
-      {% if chk.overrides_applied %}
-      <span style="font-size:.65rem;padding:.15rem .5rem;border-radius:.3rem;font-weight:500;background:var(--warn-bg);color:var(--warn);border:1px solid var(--caution-border)">
-        ⚙ {{ chk.overrides_applied|length }} rule(s) disabled for this signal
-      </span>
-      {% endif %}
-    </div>
-    {% endif %}
-  </div>
-  {% elif s.status == 'PENDING' %}
-  <div style="padding:.5rem 1rem;border-bottom:1px solid var(--border)">
-    <span style="font-size:.7rem;color:var(--text-subtle)">⏱ No entry check yet — runs every 5 min during market hours (10am–4:12pm AEST)</span>
-  </div>
-  {% endif %}
-
-  {# ── Passing rules — always visible, collapsible ────────────────── #}
-  {% if s.status == 'PENDING' and s.override_rules_passed %}
-  <div style="padding:.5rem 1rem;border-bottom:1px solid var(--border)">
-    <button id="ovr-pass-btn-{{ s.id }}" onclick="togglePassingRules('{{ s.id }}')"
-            style="font-size:.68rem;color:var(--text-subtle);background:none;border:none;cursor:pointer;padding:0">
-      ▶ Show passing rules ({{ s.override_rules_passed|length }}) — click to expand and override individually
-    </button>
-    <div id="ovr-pass-{{ s.id }}" style="display:none;margin-top:.5rem;flex-wrap:wrap;gap:.375rem">
-      {% for r in s.override_rules_passed %}
-      <div style="display:inline-flex;align-items:center;gap:.35rem;padding:.25rem .5rem .25rem .375rem;border-radius:.375rem;border:1px solid var(--border);background:var(--surface);opacity:{% if r.is_mandatory %}0.55{% else %}1{% endif %}">
-        <form method="post" action="/signals/{{ s.id }}/toggle-rule" style="margin:0">
-          <input type="hidden" name="rule_id" value="{{ r.rule_id }}">
-          {% if r.is_mandatory %}
-            <span title="Mandatory" style="font-size:.6rem">🔒</span>
-          {% elif r.override == false %}
-            <input type="hidden" name="enabled" value="true">
-            <button type="submit" style="width:.55rem;height:.55rem;border-radius:50%;background:var(--warn);border:none;cursor:pointer;padding:0;display:block" title="Currently disabled — click to re-enable"></button>
-          {% else %}
-            <input type="hidden" name="enabled" value="false">
-            <button type="submit" style="width:.55rem;height:.55rem;border-radius:50%;background:var(--pos);border:none;cursor:pointer;padding:0;display:block" title="Click to disable for this signal"></button>
-          {% endif %}
-        </form>
-        <span style="font-size:.65rem;font-family:'SF Mono',monospace;color:{% if r.override == false %}var(--warn){% else %}var(--text-muted){% endif %}">{{ r.label }}</span>
-      </div>
-      {% endfor %}
-    </div>
-  </div>
-  {% endif %}
-
-  {# ── Rule override panel (hidden by default, toggled by Override Rules button) ── #}
-  {% if s.status == 'PENDING' %}
-  <div id="ovr-{{ s.id }}" style="display:none">
-
-    {# ── FAILED rules — shown first, these are the actionable ones ─── #}
-    {% if s.override_rules_failed %}
-    <div style="padding:.75rem 1rem;background:var(--neg-bg);border-bottom:1px solid var(--bear-border)">
-      <p style="font-size:.7rem;font-weight:700;color:var(--neg);margin-bottom:.5rem;text-transform:uppercase;letter-spacing:.04em">
-        ✗ Failed rules — toggle to override for this signal
-      </p>
-      <div style="display:flex;flex-wrap:wrap;gap:.5rem">
-        {% for r in s.override_rules_failed %}
-        <div style="display:inline-flex;align-items:center;gap:.4rem;padding:.3rem .625rem .3rem .4rem;border-radius:.375rem;border:1px solid {% if r.override == false %}var(--warn){% else %}var(--bear-border){% endif %};background:var(--surface)">
-          <form method="post" action="/signals/{{ s.id }}/toggle-rule" style="margin:0;display:flex;align-items:center">
-            <input type="hidden" name="rule_id" value="{{ r.rule_id }}">
-            {% if r.is_mandatory %}
-              <span title="Mandatory — cannot be disabled" style="font-size:.65rem">🔒</span>
-            {% elif r.override == false %}
-              <input type="hidden" name="enabled" value="true">
-              <button type="submit" title="Click to re-enable this rule"
-                      style="display:inline-flex;align-items:center;gap:.25rem;font-size:.65rem;padding:.15rem .4rem;border-radius:.25rem;border:none;cursor:pointer;background:var(--warn);color:white;font-weight:600;font-family:'SF Mono',monospace">
-                ↺ Re-enable
-              </button>
-            {% else %}
-              <input type="hidden" name="enabled" value="false">
-              <button type="submit" title="Disable this rule for this signal only"
-                      style="display:inline-flex;align-items:center;gap:.25rem;font-size:.65rem;padding:.15rem .4rem;border-radius:.25rem;border:none;cursor:pointer;background:var(--neg);color:white;font-weight:600;font-family:'SF Mono',monospace">
-                ✗ Disable
-              </button>
-            {% endif %}
-          </form>
-          <span style="font-size:.7rem;font-family:'SF Mono',monospace;color:{% if r.override == false %}var(--warn){% else %}var(--neg){% endif %}">
-            {{ r.label }}
-            {% if r.override == false %}<span style="font-size:.6rem;opacity:.7"> (disabled)</span>{% endif %}
-          </span>
+      <div class="metrics-grid" style="border-bottom:1px solid var(--border)">
+        {% for _ in range(7) %}
+        <div style="padding:.65rem 1rem;border-right:1px solid var(--border)">
+          <div style="width:2.5rem;height:.55rem;border-radius:.2rem;background:var(--border);margin-bottom:.4rem"></div>
+          <div style="width:4rem;height:.85rem;border-radius:.2rem;background:var(--border)"></div>
         </div>
         {% endfor %}
       </div>
     </div>
-    {% else %}
-    <div style="padding:.625rem 1rem;background:var(--pos-bg);border-bottom:1px solid var(--bull-border)">
-      <span style="font-size:.7rem;color:var(--pos);font-weight:600">✓ All evaluated rules passed — no overrides needed</span>
-    </div>
-    {% endif %}
-
-    <div style="padding:.4rem 1rem;background:var(--surface-alt)">
-      <p style="font-size:.62rem;color:var(--text-subtle)">
-        🔒 Mandatory rules cannot be disabled · Overrides apply to the <em>next</em> entry check only · Reset when signal is re-screened
-      </p>
-    </div>
+    {% endfor %}
   </div>
-  {% endif %}
-
-</div>
-{% endif %}{# end full-card vs compact-row #}
-{% endfor %}
 </div>
 {% endif %}
 {% endblock %}
@@ -411,8 +115,26 @@ function togglePassingRules(sigId) {
   }
 }
 
+// ── Signal cards — load from cache immediately on page open ─────────────────
+(function() {
+  const container  = document.getElementById('sig-cards-container');
+  const skeleton   = document.getElementById('sig-skeleton');
+  const exchange   = new URLSearchParams(location.search).get('exchange') || 'ALL';
+
+  async function loadCards() {
+    try {
+      const r = await fetch('/signals/items?exchange=' + encodeURIComponent(exchange));
+      if (!r.ok) return;
+      const html = await r.text();
+      if (container) container.innerHTML = html;
+    } catch(e) { /* silent — keep skeleton */ }
+  }
+
+  // Fetch immediately (Redis serves in <5ms on cache hit)
+  loadCards();
+})();
+
 // ── Live entry-check polling (30s, silent) ──────────────────────────────────
-// Updates price badge + check label/time in-place — no page flash, no countdown.
 (function() {
   async function pollChecks() {
     try {

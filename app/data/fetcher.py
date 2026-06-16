@@ -1188,6 +1188,15 @@ def get_fundamentals(ticker: str) -> dict:
     """
     Fetch fundamental data from yfinance.
     Returns dict with eps_quarterly, revenue_quarterly, roe, net_margin, etc.
+
+    EPS / revenue strategy (yfinance ASX data gaps):
+      1. Try stock.quarterly_earnings / quarterly_income_stmt (newer yfinance API)
+      2. Fall back to stock.quarterly_financials (older API, still works for some tickers)
+      3. If still empty — leave as [] so fundamentals.py auto-passes the rule (data-gap policy)
+
+    ROE / margin strategy:
+      stock.info keys returnOnEquity / profitMargins / trailingPE are populated for
+      most ASX stocks via yfinance's info endpoint; if None, fundamentals.py auto-passes.
     """
     result = {
         "company_name": "",
@@ -1206,39 +1215,91 @@ def get_fundamentals(ticker: str) -> dict:
         stock = yf.Ticker(ticker)
         info = stock.info or {}
 
-        # EPS quarterly (trailing 8 quarters)
+        # ── EPS quarterly (trailing 8 quarters, latest-first) ─────────────────
+        # Strategy: try newer income_stmt API first, fall back to legacy quarterly_earnings
         try:
-            q_earnings = stock.quarterly_earnings
-            if q_earnings is not None and not q_earnings.empty:
-                result["eps_quarterly"] = q_earnings["EPS"].tolist()[:8]
+            q_income = stock.quarterly_income_stmt
+            if q_income is not None and not q_income.empty:
+                # Look for "Diluted EPS" or "Basic EPS"
+                for eps_row in ("Diluted EPS", "Basic EPS", "EPS"):
+                    if eps_row in q_income.index:
+                        eps_series = q_income.loc[eps_row].dropna()
+                        if not eps_series.empty:
+                            result["eps_quarterly"] = eps_series.tolist()[:8]
+                            break
         except Exception:
             pass
 
-        # Revenue quarterly
+        if not result["eps_quarterly"]:
+            # Legacy API fallback
+            try:
+                q_earnings = stock.quarterly_earnings
+                if q_earnings is not None and not q_earnings.empty and "EPS" in q_earnings.columns:
+                    result["eps_quarterly"] = q_earnings["EPS"].dropna().tolist()[:8]
+            except Exception:
+                pass
+
+        # ── Revenue quarterly ─────────────────────────────────────────────────
         try:
-            q_financials = stock.quarterly_financials
-            if q_financials is not None and not q_financials.empty:
-                if "Total Revenue" in q_financials.index:
-                    result["revenue_quarterly"] = (
-                        q_financials.loc["Total Revenue"].dropna().tolist()[:8]
-                    )
+            q_income = stock.quarterly_income_stmt
+            if q_income is not None and not q_income.empty:
+                for rev_row in ("Total Revenue", "Revenue"):
+                    if rev_row in q_income.index:
+                        rev_series = q_income.loc[rev_row].dropna()
+                        if not rev_series.empty:
+                            result["revenue_quarterly"] = rev_series.tolist()[:8]
+                            break
         except Exception:
             pass
 
-        # Company name — prefer longName, fall back to shortName
+        if not result["revenue_quarterly"]:
+            # Legacy API fallback
+            try:
+                q_financials = stock.quarterly_financials
+                if q_financials is not None and not q_financials.empty:
+                    for rev_row in ("Total Revenue", "Revenue"):
+                        if rev_row in q_financials.index:
+                            result["revenue_quarterly"] = (
+                                q_financials.loc[rev_row].dropna().tolist()[:8]
+                            )
+                            break
+            except Exception:
+                pass
+
+        # ── Net margin (current + prior period for trend check) ───────────────
+        # Try income_stmt for two consecutive periods to calculate improving trend
+        try:
+            annual = stock.income_stmt
+            if annual is not None and not annual.empty:
+                for margin_row in ("Net Income", "Net Income Common Stockholders"):
+                    if margin_row in annual.index and "Total Revenue" in annual.index:
+                        net_vals = annual.loc[margin_row].dropna().tolist()
+                        rev_vals = annual.loc["Total Revenue"].dropna().tolist()
+                        if len(net_vals) >= 1 and len(rev_vals) >= 1 and rev_vals[0]:
+                            result["net_margin"] = net_vals[0] / rev_vals[0]
+                        if len(net_vals) >= 2 and len(rev_vals) >= 2 and rev_vals[1]:
+                            result["net_margin_prev"] = net_vals[1] / rev_vals[1]
+                        break
+        except Exception:
+            pass
+
+        # ── Company name — prefer longName, fall back to shortName ────────────
         long_name = info.get("longName") or info.get("shortName") or ""
         if long_name:
             result["company_name"] = long_name.strip()
 
-        # Sector / industry
+        # ── Sector / industry ─────────────────────────────────────────────────
         result["sector"]   = info.get("sector") or ""
         result["industry"] = info.get("industry") or ""
 
-        # ROE, margins from info
+        # ── ROE, margins from info (most reliable for ASX via yfinance info) ──
         result["roe"] = info.get("returnOnEquity")
-        result["net_margin"] = info.get("profitMargins")
+        # Use profitMargins from info if income_stmt calc not already set
+        if result["net_margin"] is None:
+            result["net_margin"] = info.get("profitMargins")
         result["inst_ownership_pct"] = info.get("heldPercentInstitutions")
-        # Next earnings date
+
+        # ── Next earnings date ────────────────────────────────────────────────
         try:
             cal = stock.calendar
             if cal is not None and not cal.empty:

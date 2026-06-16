@@ -71,11 +71,59 @@ class RedisCache:
                 return True
             except Exception as e:
                 logger.debug(f"Redis cache delete failed for key {key}: {e}")
-        
+
         if key in self._local_cache:
             del self._local_cache[key]
             return True
         return False
+
+    def delete_prefix(self, prefix: str) -> int:
+        """Delete all keys matching the given prefix. Returns count of deleted keys."""
+        deleted = 0
+        if self.enabled and self._client:
+            try:
+                # Use SCAN to avoid blocking Redis on large key sets
+                cursor = 0
+                pattern = f"{prefix}*"
+                keys_to_delete = []
+                while True:
+                    cursor, keys = self._client.scan(cursor, match=pattern, count=100)
+                    keys_to_delete.extend(keys)
+                    if cursor == 0:
+                        break
+                if keys_to_delete:
+                    deleted = self._client.delete(*keys_to_delete)
+                return deleted
+            except Exception as e:
+                logger.debug(f"Redis cache delete_prefix failed for prefix {prefix}: {e}")
+
+        # In-memory fallback
+        keys_to_remove = [k for k in list(self._local_cache.keys()) if k.startswith(prefix)]
+        for k in keys_to_remove:
+            del self._local_cache[k]
+        return len(keys_to_remove)
+
+    def set_raw(self, key: str, value: str, expire_seconds: int = 300) -> bool:
+        """Store a raw string (e.g. pre-rendered HTML) without JSON encoding."""
+        if self.enabled and self._client:
+            try:
+                self._client.set(key, value, ex=expire_seconds)
+                return True
+            except Exception as e:
+                logger.debug(f"Redis cache set_raw failed for key {key}: {e}")
+        self._local_cache[key] = value
+        return True
+
+    def get_raw(self, key: str) -> Optional[str]:
+        """Retrieve a raw string value (stored via set_raw)."""
+        if self.enabled and self._client:
+            try:
+                val = self._client.get(key)
+                return val  # already a string (decode_responses=True)
+            except Exception as e:
+                logger.debug(f"Redis cache get_raw failed for key {key}: {e}")
+        v = self._local_cache.get(key)
+        return v if isinstance(v, str) else None
 
 # Global cache instance
 cache = RedisCache()

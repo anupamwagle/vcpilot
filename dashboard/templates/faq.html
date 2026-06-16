@@ -1,0 +1,857 @@
+{% extends "base.html" %}
+{% block title %}FAQ — AstraTrade{% endblock %}
+
+{% block content %}
+<style>
+  .faq-hero { padding: 2.5rem 0 1.5rem; border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
+  .faq-hero h1 { font-size: 2rem; font-weight: 700; color: var(--text); margin-bottom: .5rem; }
+  .faq-hero p  { font-size: 1rem; color: var(--text-muted); max-width: 680px; line-height: 1.7; }
+
+  .section-title { font-size: 1.15rem; font-weight: 700; color: var(--t-accent); margin: 2.5rem 0 1rem;
+                   padding-bottom: .4rem; border-bottom: 2px solid var(--t-accent); letter-spacing:.02em; }
+
+  details { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+            margin-bottom: .65rem; overflow: hidden; transition: box-shadow .15s; }
+  details:hover { box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+  details[open] { border-color: var(--t-accent); }
+
+  summary { cursor: pointer; padding: 1rem 1.2rem; font-weight: 600; color: var(--text);
+            font-size: .94rem; list-style: none; display: flex; align-items: center;
+            justify-content: space-between; gap: .5rem; user-select: none; }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: '+'; font-size: 1.3rem; font-weight: 300; color: var(--t-accent);
+                   flex-shrink: 0; transition: transform .2s; }
+  details[open] summary::after { content: '−'; }
+
+  .faq-body { padding: .1rem 1.2rem 1.1rem; color: var(--text-muted); font-size: .91rem;
+              line-height: 1.75; border-top: 1px solid var(--border); }
+  .faq-body p  { margin: .6rem 0; }
+  .faq-body ul { padding-left: 1.25rem; margin: .5rem 0; }
+  .faq-body li { margin-bottom: .3rem; }
+  .faq-body strong { color: var(--text); }
+  .faq-body code { background: var(--surface-alt); padding: .1em .35em; border-radius: 4px;
+                   font-size: .85em; color: var(--t-accent); font-family: monospace; }
+  .faq-body blockquote { border-left: 3px solid var(--t-accent); margin: .75rem 0;
+                          padding: .4rem .8rem; background: var(--surface-alt);
+                          border-radius: 0 6px 6px 0; font-style: italic; color: var(--text); }
+
+  /* SVG chart containers */
+  .chart-wrap { margin: 1rem 0; background: var(--surface-alt); border: 1px solid var(--border);
+                border-radius: 8px; padding: .75rem; overflow-x: auto; }
+  .chart-caption { font-size: .78rem; color: var(--text-subtle); text-align: center;
+                   margin-top: .5rem; font-style: italic; }
+
+  /* Pill badges */
+  .badge { display: inline-block; padding: .15em .55em; border-radius: 999px; font-size: .75rem;
+           font-weight: 600; margin: 0 .15rem; }
+  .badge-bull  { background: #d1fae5; color: #065f46; }
+  .badge-caution { background: #fef3c7; color: #92400e; }
+  .badge-bear  { background: #fee2e2; color: #991b1b; }
+  .badge-blue  { background: #dbeafe; color: #1e40af; }
+
+  html.dark .badge-bull    { background: #064e3b; color: #6ee7b7; }
+  html.dark .badge-caution { background: #451a03; color: #fbbf24; }
+  html.dark .badge-bear    { background: #450a0a; color: #fca5a5; }
+  html.dark .badge-blue    { background: #1e3a5f; color: #93c5fd; }
+
+  .rule-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; margin: .75rem 0; }
+  @media(max-width:600px) { .rule-grid { grid-template-columns: 1fr; } }
+  .rule-item { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 6px;
+               padding: .45rem .7rem; font-size: .83rem; }
+  .rule-item .r-num { color: var(--t-accent); font-weight: 700; margin-right: .35rem; }
+
+  .toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+         padding: 1rem 1.2rem; margin-bottom: 2rem; }
+  .toc h3 { font-size: .85rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase;
+             letter-spacing: .08em; margin-bottom: .6rem; }
+  .toc-cols { display: grid; grid-template-columns: 1fr 1fr; gap: .15rem 1rem; }
+  @media(max-width:600px) { .toc-cols { grid-template-columns: 1fr; } }
+  .toc a { font-size: .82rem; color: var(--t-accent); text-decoration: none; line-height: 1.9; }
+  .toc a:hover { text-decoration: underline; }
+</style>
+
+<div style="max-width:860px;margin:0 auto;padding:0 1rem 3rem">
+
+  <!-- ── Hero ─────────────────────────────────────────────────────────────── -->
+  <div class="faq-hero">
+    <h1>AstraTrade — Frequently Asked Questions</h1>
+    <p>
+      <strong>AstraTrade</strong> is a multi-market automated stock trading system built on
+      <strong>Mark Minervini's SEPA (Specific Entry Point Analysis)</strong> methodology.
+      It screens ASX equities, US equities (NYSE/NASDAQ), and crypto for the Volatility Contraction
+      Pattern (VCP) — Minervini's signature setup — and executes bracket orders through Interactive
+      Brokers (equities) or Independent Reserve / MEXC (crypto) when a breakout confirms.
+      The system is fully controlled via a web dashboard and WhatsApp commands, runs 24/7 in Docker,
+      and is designed around capital preservation first, growth second.
+    </p>
+
+    <!-- Minervini overview box -->
+    <div style="margin-top:1.25rem;padding:1rem 1.2rem;background:var(--surface);border:1px solid var(--border);border-radius:8px;">
+      <p style="margin:0 0 .5rem;font-weight:700;color:var(--text);">About Mark Minervini's Trading Style</p>
+      <p style="margin:0;font-size:.9rem;color:var(--text-muted);line-height:1.75;">
+        Mark Minervini is a two-time U.S. Investing Champion who turned a small account into tens of millions
+        over a decade, averaging 220% annual returns across a five-year stretch without a losing year.
+        His approach — documented in <em>Trade Like a Stock Market Wizard</em> (2013) and
+        <em>Think &amp; Trade Like a Champion</em> (2017) — blends <strong>Stage Analysis</strong>
+        (Stan Weinstein), <strong>fundamental momentum</strong> (accelerating EPS + revenue growth),
+        and <strong>tight technical setups</strong> (VCP) to buy the strongest stocks in the strongest
+        industries at the precise moment they break out of a low-risk base. Every position carries a
+        defined stop loss entered at the time of purchase, and exits follow a systematic playbook —
+        not emotion.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── Table of contents ─────────────────────────────────────────────────── -->
+  <div class="toc">
+    <h3>Jump to a question</h3>
+    <div class="toc-cols">
+      <a href="#q1">1. What is the VCP pattern?</a>
+      <a href="#q2">2. What is SEPA?</a>
+      <a href="#q3">3. What are the 8 Trend Template criteria?</a>
+      <a href="#q4">4. What is Stage 2?</a>
+      <a href="#q5">5. How does the screener work end-to-end?</a>
+      <a href="#q6">6. Watchlist vs Signals — what's the difference?</a>
+      <a href="#q7">7. What triggers an actual entry order?</a>
+      <a href="#q8">8. What is the Market Regime?</a>
+      <a href="#q9">9. BULL / CAUTION / BEAR — what happens in each?</a>
+      <a href="#q10">10. How are positions sized?</a>
+      <a href="#q11">11. What is the stop loss rule?</a>
+      <a href="#q12">12. What are the exit strategies (defensive)?</a>
+      <a href="#q13">13. What are the exit strategies (offensive)?</a>
+      <a href="#q14">14. What is Relative Strength Rating?</a>
+      <a href="#q15">15. What fundamental rules does AstraTrade check?</a>
+      <a href="#q16">16. Why isn't yfinance returning fundamental data for my stocks?</a>
+      <a href="#q17">17. Why am I not seeing any signals?</a>
+      <a href="#q18">18. How does crypto trading differ from equities?</a>
+      <a href="#q19">19. What WhatsApp commands are available?</a>
+      <a href="#q20">20. How do I add a stock to my watchlist?</a>
+      <a href="#q21">21. What is pyramiding / add-on buying?</a>
+      <a href="#q22">22. What is portfolio heat?</a>
+      <a href="#q23">23. What is a distribution day?</a>
+      <a href="#q24">24. What is the pivot buy point?</a>
+      <a href="#q25">25. What are profit targets T1 and T2?</a>
+      <a href="#q26">26. What is a time stop?</a>
+      <a href="#q27">27. What is the earnings avoid rule?</a>
+      <a href="#q28">28. How do I read the Signals page?</a>
+      <a href="#q29">29. How do I read the Positions page?</a>
+      <a href="#q30">30. What is the daily report?</a>
+      <a href="#q31">31. How does the Trader Terminal work?</a>
+      <a href="#q32">32. What is the Admin Health page for?</a>
+      <a href="#q33">33. How do I start IBKR paper trading?</a>
+      <a href="#q34">34. What is the audit log and why does it matter?</a>
+      <a href="#q35">35. Can AstraTrade trade US stocks?</a>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <div class="section-title">📈 Minervini Methodology</div>
+
+  <!-- Q1 -->
+  <details id="q1">
+    <summary>1. What is the VCP (Volatility Contraction Pattern)?</summary>
+    <div class="faq-body">
+      <p>The VCP is Minervini's core pattern from <em>Trade Like a Stock Market Wizard</em>, Chapter 6.
+      It describes how institutional buyers accumulate a stock quietly: price forms a series of
+      successively tighter consolidation swings (contractions), volume dries up to its lowest point,
+      and then the stock breaks out on a surge in volume — revealing that supply has been absorbed.</p>
+
+      <blockquote>"The tighter the contraction, the more powerful the breakout." — Mark Minervini</blockquote>
+
+      <!-- VCP SVG diagram -->
+      <div class="chart-wrap">
+        <svg viewBox="0 0 700 220" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:700px;display:block;margin:0 auto">
+          <defs>
+            <marker id="arr" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+              <path d="M0,0 L0,6 L6,3 z" fill="#94a3b8"/>
+            </marker>
+          </defs>
+          <!-- baseline -->
+          <line x1="30" y1="185" x2="680" y2="185" stroke="#475569" stroke-width="1" stroke-dasharray="4,3"/>
+          <!-- Price path: uptrend, C1, C2, C3, breakout -->
+          <!-- Uptrend approach -->
+          <polyline points="30,160 90,120 130,100" stroke="#22d3ee" stroke-width="2.5" fill="none"/>
+          <!-- C1: wide contraction ~35% -->
+          <polyline points="130,100 165,148 200,108" stroke="#22d3ee" stroke-width="2.5" fill="none"/>
+          <!-- C2: medium contraction ~22% -->
+          <polyline points="200,108 230,140 265,115" stroke="#22d3ee" stroke-width="2.5" fill="none"/>
+          <!-- C3: tight contraction ~12% -->
+          <polyline points="265,115 290,130 320,118" stroke="#22d3ee" stroke-width="2.5" fill="none"/>
+          <!-- Breakout -->
+          <polyline points="320,118 340,95 390,70 430,55" stroke="#4ade80" stroke-width="2.5" fill="none"/>
+
+          <!-- Contraction depth arrows -->
+          <!-- C1 -->
+          <line x1="165" y1="100" x2="165" y2="148" stroke="#f59e0b" stroke-width="1.2" marker-end="url(#arr)" marker-start="url(#arr)"/>
+          <text x="170" y="130" font-size="10" fill="#f59e0b">C1: 35%</text>
+          <!-- C2 -->
+          <line x1="230" y1="108" x2="230" y2="140" stroke="#f59e0b" stroke-width="1.2" marker-end="url(#arr)" marker-start="url(#arr)"/>
+          <text x="235" y="128" font-size="10" fill="#f59e0b">C2: 22%</text>
+          <!-- C3 -->
+          <line x1="290" y1="118" x2="290" y2="130" stroke="#f59e0b" stroke-width="1.2" marker-end="url(#arr)" marker-start="url(#arr)"/>
+          <text x="295" y="128" font-size="10" fill="#f59e0b">C3: 12%</text>
+
+          <!-- Pivot line -->
+          <line x1="320" y1="118" x2="470" y2="118" stroke="#f97316" stroke-width="1.2" stroke-dasharray="5,3"/>
+          <text x="478" y="122" font-size="10" fill="#f97316" font-weight="bold">Pivot</text>
+
+          <!-- Volume bars at bottom -->
+          <g opacity=".75">
+            <rect x="40"  y="172" width="10" height="12" fill="#64748b"/>
+            <rect x="55"  y="168" width="10" height="16" fill="#64748b"/>
+            <rect x="70"  y="170" width="10" height="14" fill="#64748b"/>
+            <rect x="85"  y="165" width="10" height="19" fill="#64748b"/>
+            <rect x="100" y="167" width="10" height="17" fill="#64748b"/>
+            <rect x="120" y="168" width="10" height="16" fill="#64748b"/>
+            <rect x="135" y="172" width="10" height="12" fill="#94a3b8"/><!-- C1 dry-up -->
+            <rect x="150" y="174" width="10" height="10" fill="#94a3b8"/>
+            <rect x="165" y="176" width="10" height="8"  fill="#94a3b8"/>
+            <rect x="195" y="174" width="10" height="10" fill="#94a3b8"/><!-- C2 -->
+            <rect x="210" y="175" width="10" height="9"  fill="#94a3b8"/>
+            <rect x="225" y="177" width="10" height="7"  fill="#94a3b8"/>
+            <rect x="255" y="176" width="10" height="8"  fill="#94a3b8"/><!-- C3 dry-up -->
+            <rect x="270" y="178" width="10" height="6"  fill="#94a3b8"/>
+            <rect x="285" y="180" width="10" height="4"  fill="#94a3b8"/><!-- lowest vol -->
+            <rect x="325" y="155" width="12" height="29" fill="#4ade80"/><!-- breakout surge -->
+            <rect x="340" y="148" width="12" height="36" fill="#4ade80"/>
+            <rect x="356" y="158" width="12" height="26" fill="#4ade80"/>
+          </g>
+
+          <!-- Labels -->
+          <text x="30"  y="155" font-size="10" fill="#94a3b8">Uptrend</text>
+          <text x="325" y="88"  font-size="10" fill="#4ade80" font-weight="bold">Breakout ▲</text>
+          <text x="330" y="197" font-size="9"  fill="#4ade80">Volume surge ≥ 150%</text>
+          <text x="255" y="197" font-size="9"  fill="#94a3b8">Vol dry-up</text>
+        </svg>
+        <p class="chart-caption">VCP: 3 contractions tightening from 35% → 22% → 12%, volume drying to its quietest point, then breakout on surge volume. Each contraction must be narrower than the last.</p>
+      </div>
+
+      <p>AstraTrade requires <strong>≥ 3 contractions</strong> (configurable), each tighter than the prior,
+      with volume on the final contraction below 50% of the 50-day average. The breakout bar must clear the
+      pivot price on volume ≥ 150% of average.</p>
+    </div>
+  </details>
+
+  <!-- Q2 -->
+  <details id="q2">
+    <summary>2. What is SEPA (Specific Entry Point Analysis)?</summary>
+    <div class="faq-body">
+      <p>SEPA is Minervini's complete framework for stock selection, described throughout
+      <em>Trade Like a Stock Market Wizard</em>. It has five pillars:</p>
+      <ul>
+        <li><strong>Trend</strong> — Stock must be in a Stage 2 uptrend (all MAs properly stacked, slope up)</li>
+        <li><strong>Fundamentals</strong> — Accelerating EPS + revenue growth; strong ROE and margins</li>
+        <li><strong>Catalyst</strong> — A reason the big money is piling in (new product, spin-off, sector leadership)</li>
+        <li><strong>Entry</strong> — Buy on the precise VCP pivot breakout, not a guess</li>
+        <li><strong>Exit</strong> — Pre-defined stop loss and profit targets, rules-based, no emotion</li>
+      </ul>
+      <p>AstraTrade automates pillars 1, 2, 4, and 5. Pillar 3 (catalyst) is checked manually via the
+      Watchlist terminal and Signals page notes.</p>
+    </div>
+  </details>
+
+  <!-- Q3 -->
+  <details id="q3">
+    <summary>3. What are the 8 Trend Template criteria?</summary>
+    <div class="faq-body">
+      <p>Minervini's Trend Template from <em>Trade Like a Stock Market Wizard</em>, Chapter 3. All 8 must pass
+      for a stock to proceed to the fundamentals check. Stocks passing 6–7 out of 8 land on the Watchlist.</p>
+      <div class="rule-grid">
+        <div class="rule-item"><span class="r-num">1</span>Price above 200-day MA</div>
+        <div class="rule-item"><span class="r-num">2</span>Price above 150-day MA</div>
+        <div class="rule-item"><span class="r-num">3</span>150MA above 200MA</div>
+        <div class="rule-item"><span class="r-num">4</span>200MA trending up (slope over 21 days)</div>
+        <div class="rule-item"><span class="r-num">5</span>50MA above both 150MA and 200MA</div>
+        <div class="rule-item"><span class="r-num">6</span>Price above 50-day MA</div>
+        <div class="rule-item"><span class="r-num">7</span>Price ≥ 30% above 52-week low</div>
+        <div class="rule-item"><span class="r-num">8</span>Price within 25% of 52-week high</div>
+      </div>
+
+      <!-- MA stacking SVG -->
+      <div class="chart-wrap">
+        <svg viewBox="0 0 600 180" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:600px;display:block;margin:0 auto">
+          <!-- 200MA — flat then rising -->
+          <polyline points="30,140 200,138 400,115 580,90" stroke="#ef4444" stroke-width="2" fill="none" stroke-dasharray="6,3"/>
+          <!-- 150MA — above 200, rising faster -->
+          <polyline points="30,125 200,120 400,95 580,70" stroke="#a855f7" stroke-width="2" fill="none" stroke-dasharray="4,2"/>
+          <!-- 50MA — above 150, most dynamic -->
+          <polyline points="30,110 200,100 400,72 580,50" stroke="#f59e0b" stroke-width="2.2" fill="none"/>
+          <!-- Price — above all, most volatile -->
+          <polyline points="30,105 80,95 130,85 180,88 230,72 280,65 330,60 380,52 430,45 480,40 530,35 580,30" stroke="#22d3ee" stroke-width="2.5" fill="none"/>
+
+          <!-- Labels right side -->
+          <text x="585" y="33"  font-size="11" fill="#22d3ee" font-weight="600">Price</text>
+          <text x="585" y="53"  font-size="11" fill="#f59e0b">MA50</text>
+          <text x="585" y="73"  font-size="11" fill="#a855f7">MA150</text>
+          <text x="585" y="93"  font-size="11" fill="#ef4444">MA200</text>
+
+          <!-- Slope indicator -->
+          <text x="200" y="160" font-size="10" fill="#94a3b8">200MA must be trending UP (slope over 21d)</text>
+          <text x="200" y="173" font-size="10" fill="#94a3b8">Proper stacking: Price > MA50 > MA150 > MA200</text>
+        </svg>
+        <p class="chart-caption">Proper MA stacking — price sits above MA50 (amber), which sits above MA150 (violet), which sits above the rising MA200 (red). All 5 MA-related criteria in one visual.</p>
+      </div>
+    </div>
+  </details>
+
+  <!-- Q4 -->
+  <details id="q4">
+    <summary>4. What is Stage 2 and why does it matter?</summary>
+    <div class="faq-body">
+      <p>Stan Weinstein's four-stage cycle (referenced by Minervini throughout his books) describes every
+      stock's life cycle. AstraTrade only buys in <strong>Stage 2</strong>.</p>
+
+      <div class="chart-wrap">
+        <svg viewBox="0 0 660 200" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:660px;display:block;margin:0 auto">
+          <!-- MA200 -->
+          <polyline points="30,160 160,160 290,130 380,80 470,75 570,100 640,145" stroke="#ef4444" stroke-width="2" fill="none" stroke-dasharray="5,3"/>
+          <!-- Price path -->
+          <polyline points="30,165 60,162 90,158 120,155 150,162 180,140 210,120 240,105 270,90 300,75 330,65 360,60 390,65 420,70 440,78 460,72 480,80 510,95 540,115 570,130 600,145 630,155" stroke="#22d3ee" stroke-width="2.5" fill="none"/>
+
+          <!-- Stage labels as bands -->
+          <rect x="30"  y="10" width="130" height="16" rx="3" fill="#334155" opacity=".7"/>
+          <text x="35"  y="22" font-size="10" fill="#94a3b8" font-weight="600">Stage 1 — Base</text>
+
+          <rect x="165" y="10" width="210" height="16" rx="3" fill="#14532d" opacity=".7"/>
+          <text x="175" y="22" font-size="10" fill="#4ade80" font-weight="700">Stage 2 — Uptrend ← BUY HERE</text>
+
+          <rect x="380" y="10" width="90" height="16" rx="3" fill="#451a03" opacity=".7"/>
+          <text x="385" y="22" font-size="10" fill="#fbbf24" font-weight="600">Stage 3 — Top</text>
+
+          <rect x="475" y="10" width="160" height="16" rx="3" fill="#450a0a" opacity=".7"/>
+          <text x="485" y="22" font-size="10" fill="#fca5a5" font-weight="600">Stage 4 — Decline</text>
+
+          <!-- Vertical dividers -->
+          <line x1="160" y1="10" x2="160" y2="190" stroke="#475569" stroke-width="1" stroke-dasharray="3,3"/>
+          <line x1="380" y1="10" x2="380" y2="190" stroke="#475569" stroke-width="1" stroke-dasharray="3,3"/>
+          <line x1="470" y1="10" x2="470" y2="190" stroke="#475569" stroke-width="1" stroke-dasharray="3,3"/>
+
+          <text x="30"  y="195" font-size="9" fill="#94a3b8">Accumulation</text>
+          <text x="230" y="195" font-size="9" fill="#4ade80">Institutional demand</text>
+          <text x="390" y="195" font-size="9" fill="#fbbf24">Distribution</text>
+          <text x="490" y="195" font-size="9" fill="#fca5a5">Sell-off</text>
+        </svg>
+        <p class="chart-caption">The four-stage cycle. AstraTrade's Trend Template is designed to confirm Stage 2 — the 200MA must be trending up and price must be well above it.</p>
+      </div>
+
+      <p>Buying in Stage 1 is premature (no institutional demand). Stage 3 is the top (dangerous — late entries). Stage 4 is outright shorting territory. The Trend Template's 8 criteria collectively confirm the stock is firmly in Stage 2.</p>
+    </div>
+  </details>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <div class="section-title">⚙️ How the Screener Works</div>
+
+  <!-- Q5 -->
+  <details id="q5">
+    <summary>5. How does the screener work end-to-end?</summary>
+    <div class="faq-body">
+      <p>The screener is a 3-stage waterfall. A stock must pass each gate to advance:</p>
+      <ul>
+        <li><strong>Gate 1 — Trend Template:</strong> All 8 criteria must pass. Stocks at 6–7/8 go to Watchlist automatically.</li>
+        <li><strong>Gate 2 — Fundamentals:</strong> ≥ 75% of enabled rules must pass (EPS growth, revenue growth, ROE, margin). When yfinance lacks data for a stock the rule auto-passes — see Q16.</li>
+        <li><strong>Gate 3 — VCP:</strong> ≥ 3 tightening contractions detected with volume dry-up. If trend + fundamentals pass but no VCP yet, stock goes to Watchlist and is monitored daily.</li>
+      </ul>
+      <p>When all 3 gates clear, AstraTrade generates a <strong>Signal</strong> with a pivot price, stop price, T1 (+20%), and T2 (+40%), plus a suggested position size. The screener runs:</p>
+      <ul>
+        <li><strong>ASX:</strong> weekdays at 5:30pm AEST (after market close) using the prior day's EOD data</li>
+        <li><strong>Crypto:</strong> 4× daily (12:45am, 6:45am, 12:45pm, 6:45pm AEST)</li>
+        <li><strong>US:</strong> Tuesday–Saturday at 7:30am AEST (after NYSE close)</li>
+        <li><strong>Manual:</strong> Admin Health page → "Run Screener Now" (bypasses trading-day gate)</li>
+      </ul>
+    </div>
+  </details>
+
+  <!-- Q6 -->
+  <details id="q6">
+    <summary>6. Watchlist vs Signals — what's the difference?</summary>
+    <div class="faq-body">
+      <p><strong>Watchlist</strong> — stocks that partially pass the screener. Either 6–7/8 trend criteria (VCP building but MAs not fully stacked) or all trend + fundamentals pass but the VCP hasn't formed yet. These are monitored every screen run. When VCP completes, the stock auto-graduates to a Signal — no manual action needed.</p>
+      <p><strong>Signals</strong> — stocks that pass all 3 gates. A pivot price and stop are calculated. The intraday task (<code>check_entry_triggers</code>) monitors every 5 minutes and submits a bracket order the moment price closes above the pivot on volume ≥ 150% of average.</p>
+      <p>You can also manually promote a Watchlist stock to a Signal from the Watchlist Terminal (⬆ Promote button) if you see a setup the screener has not yet classified as a full VCP.</p>
+    </div>
+  </details>
+
+  <!-- Q7 -->
+  <details id="q7">
+    <summary>7. What actually triggers an entry order?</summary>
+    <div class="faq-body">
+      <p><code>check_entry_triggers</code> runs every 5 minutes during market hours. For each PENDING signal it:</p>
+      <ul>
+        <li>Fetches the current price (IBKR real-time → IR/MEXC live API → yfinance 15-min delayed)</li>
+        <li>Checks price ≥ pivot AND price ≤ pivot + 5% (not extended)</li>
+        <li>Checks intraday volume ≥ 150% of 50-day average</li>
+        <li>Checks market regime is not BEAR</li>
+        <li>Checks portfolio heat is below the maximum</li>
+        <li>Checks max open positions not reached</li>
+      </ul>
+      <p>If all conditions met → submits a bracket order (entry limit at current price, stop at signal stop price, take-profit at T1 = pivot + 20%). Position is immediately written to the DB and WhatsApp alert sent.</p>
+    </div>
+  </details>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <div class="section-title">📊 Market Regime</div>
+
+  <!-- Q8 -->
+  <details id="q8">
+    <summary>8. What is the Market Regime?</summary>
+    <div class="faq-body">
+      <p>The Market Regime is AstraTrade's macro filter — it determines whether the overall market environment is safe for new entries. Minervini is emphatic in <em>Trade Like a Stock Market Wizard</em> that you should only buy individual stocks when the market itself is healthy:</p>
+      <blockquote>"The market is always right. Disagreeing with it has cost more traders more money than any single bad stock pick." — Minervini</blockquote>
+      <p>AstraTrade evaluates regime on 3 criteria (ASX equities):</p>
+      <ul>
+        <li>ASX200 index price above its 200-day MA</li>
+        <li>≥ 60% of ASX200 stocks above their individual 200-day MA (breadth)</li>
+        <li>≤ 4 distribution days in the last 25 sessions</li>
+      </ul>
+      <p>For crypto, only the BTC-USD / BTC-AUD 200-day MA check applies (no breadth or distribution day concept).</p>
+    </div>
+  </details>
+
+  <!-- Q9 -->
+  <details id="q9">
+    <summary>9. BULL / CAUTION / BEAR — what does each mean for trading?</summary>
+    <div class="faq-body">
+      <p>
+        <span class="badge badge-bull">BULL</span> All 3 regime criteria pass — full trading allowed. New entries triggered normally at 100% suggested size.<br><br>
+        <span class="badge badge-caution">CAUTION</span> 2/3 criteria pass — entries still allowed but position size is halved (50% multiplier). Existing positions held. Be selective — only the very best setups.<br><br>
+        <span class="badge badge-bear">BEAR</span> ≤ 1/3 criteria pass — no new entries. The <code>check_entry_triggers</code> task skips all pending signals and logs why. Existing positions should be scrutinised for exit. Cash is a valid position.
+      </p>
+      <p>Regime is evaluated automatically at 5:15pm AEST weekdays. On first start or after a long gap, click <strong>Evaluate Market</strong> on the Admin Health page (requires price data to be refreshed first).</p>
+    </div>
+  </details>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <div class="section-title">💰 Risk & Position Sizing</div>
+
+  <!-- Q10 -->
+  <details id="q10">
+    <summary>10. How are positions sized?</summary>
+    <div class="faq-body">
+      <p>AstraTrade uses Minervini's <strong>risk-based position sizing</strong> from <em>Think &amp; Trade Like a Champion</em>, Chapter 8. The core idea: risk a fixed small percentage of your total account on each trade, not a fixed dollar amount.</p>
+      <p><strong>Formula:</strong></p>
+      <ul>
+        <li><code>Risk per trade = Account capital × max_risk_pct</code> (default 1%)</li>
+        <li><code>Risk per share = Entry price − Stop price</code></li>
+        <li><code>Shares = Risk per trade ÷ Risk per share</code></li>
+      </ul>
+      <p><strong>Example:</strong> $10,000 account, 1% risk = $100 per trade. Entry $5.00, stop $4.75 = $0.25 risk per share → buy 400 shares ($2,000 position = 20% of account). This caps the maximum loss at $100 (1%) regardless of position size.</p>
+      <p>A secondary cap applies: position cannot exceed the max position % (default 20% of account). You can tune both thresholds in <strong>Admin → Rules</strong> under the Position Sizing section.</p>
+    </div>
+  </details>
+
+  <!-- Q11 -->
+  <details id="q11">
+    <summary>11. What is the stop loss rule and how is it set?</summary>
+    <div class="faq-body">
+      <p>The initial stop is set at the <strong>low of the final VCP contraction</strong> — the tightest base low. This is the level below which the pattern is invalidated. If price closes below this on volume, Minervini's rule is to exit without hesitation.</p>
+      <blockquote>"Cut losses quickly and without emotion. The stop loss is not a suggestion." — Minervini</blockquote>
+      <p>AstraTrade's <code>exit_stop_loss</code> rule is the only <strong>mandatory</strong> rule — it cannot be disabled in Admin → Rules (it shows a lock icon). A separate ATR-based trailing stop engages once the position moves into profit, locking in gains progressively.</p>
+      <p>In paper/IBKR mode, the stop is submitted as a stop-market order attached to the bracket at entry time. AstraTrade also monitors the stop in software via <code>sync_stop_orders</code> every 15 minutes as a backstop.</p>
+    </div>
+  </details>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <div class="section-title">🚪 Exit Rules</div>
+
+  <!-- Q12 -->
+  <details id="q12">
+    <summary>12. What are the defensive exit strategies?</summary>
+    <div class="faq-body">
+      <p>Defensive exits protect capital. AstraTrade supports all Minervini defensive exits from <em>Trade Like a Stock Market Wizard</em>, Chapter 12:</p>
+      <ul>
+        <li><strong>Stop Loss</strong> — Price hits the initial hard stop. Mandatory rule. Cannot be disabled.</li>
+        <li><strong>Trailing Stop</strong> — ATR-based trailing stop that tightens as the position profits. Automatically adjusted by <code>sync_stop_orders</code>.</li>
+        <li><strong>Time Stop</strong> — If a position has been open more than N weeks (default 8) with no material gain, exit. A stock that doesn't move is dead capital.</li>
+        <li><strong>Break below 50MA</strong> — If price closes below the 50-day MA on high volume, exit. A Stage 2 stock should hold above its 50MA.</li>
+        <li><strong>Earnings Avoid</strong> — Exit before earnings if the unrealised gain is less than 10%. Earnings introduce binary risk that can gap through your stop.</li>
+        <li><strong>Market Regime shift</strong> — If regime moves to BEAR while holding, tighten stops and be ready to sell into strength.</li>
+      </ul>
+    </div>
+  </details>
+
+  <!-- Q13 -->
+  <details id="q13">
+    <summary>13. What are the offensive exit strategies?</summary>
+    <div class="faq-body">
+      <p>Offensive exits lock in profits systematically. From <em>Think &amp; Trade Like a Champion</em>, Chapter 9:</p>
+      <ul>
+        <li><strong>T1 — +20% Profit Target:</strong> Sell a portion (default 50%) of the position when gain reaches 20%. This secures a concrete win.</li>
+        <li><strong>T2 — +40% Profit Target:</strong> Exit the remainder at 40% gain (or let the trailing stop run if momentum continues).</li>
+        <li><strong>Climax Top:</strong> If the stock surges 20%+ in 1–3 days (parabolic move), sell into strength — the move is likely exhausted.</li>
+        <li><strong>Three Weeks Tight:</strong> Three consecutive weekly closes within 1% of each other after a big run — a distribution warning. Sell before the next down leg.</li>
+        <li><strong>Parabolic Move:</strong> A single-day move of 10%+ above T2 — take profits.</li>
+      </ul>
+      <p>All exits can be triggered manually from the Positions page → Close Position dropdown, which groups all reasons under Defensive / Offensive.</p>
+    </div>
+  </details>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <div class="section-title">📐 Fundamental Rules</div>
+
+  <!-- Q14 -->
+  <details id="q14">
+    <summary>14. What is the Relative Strength (RS) Rating?</summary>
+    <div class="faq-body">
+      <p>RS Rating measures a stock's price performance relative to all other stocks in the same universe over the past 12 months. AstraTrade computes it in the same spirit as Investor's Business Daily's Relative Strength Rating:</p>
+      <ul>
+        <li>A stock in the top 30% gets RS ≥ 70</li>
+        <li>AstraTrade requires RS ≥ 70 as a mandatory filter (enabled via <code>rs_rating_min</code> rule)</li>
+      </ul>
+      <blockquote>"The best stocks usually have an RS Rating of 80 or above before they make their big moves." — Minervini citing O'Neil</blockquote>
+      <p>RS is computed at screener run time by comparing each stock's 12-month return to every other stock in the loaded universe. It is visible on the Watchlist, Signals, and Trader Terminal.</p>
+    </div>
+  </details>
+
+  <!-- Q15 -->
+  <details id="q15">
+    <summary>15. What fundamental rules does AstraTrade check?</summary>
+    <div class="faq-body">
+      <p>Seven fundamental rules (all configurable in Admin → Rules):</p>
+      <div class="rule-grid">
+        <div class="rule-item"><span class="r-num">F1</span>EPS growth ≥ 25% (most recent quarter YoY)</div>
+        <div class="rule-item"><span class="r-num">F2</span>EPS acceleration (latest quarter faster than prior)</div>
+        <div class="rule-item"><span class="r-num">F3</span>Annual EPS growth ≥ 25% (TTM vs prior year TTM)</div>
+        <div class="rule-item"><span class="r-num">F4</span>Revenue growth ≥ 25% (most recent quarter YoY)</div>
+        <div class="rule-item"><span class="r-num">F5</span>Return on Equity ≥ 17%</div>
+        <div class="rule-item"><span class="r-num">F6</span>Net profit margin positive and improving</div>
+        <div class="rule-item"><span class="r-num">F7</span>Institutional ownership between 5% and 80%</div>
+      </div>
+      <p>A stock must pass ≥ 75% of enabled rules (i.e. at least 5–6 out of 7). If data is unavailable from yfinance, the rule auto-passes rather than penalising the stock. You can disable non-critical rules in Admin → Rules if you want a wider funnel.</p>
+    </div>
+  </details>
+
+  <!-- Q16 -->
+  <details id="q16">
+    <summary>16. Why isn't yfinance returning fundamental data for my ASX stocks?</summary>
+    <div class="faq-body">
+      <p>yfinance's free quarterly financials endpoint reliably returns EPS and revenue data for stocks with international analyst coverage — primarily the ASX top 50–80 by market cap. For smaller and mid-cap ASX stocks, <code>quarterly_earnings</code> and <code>quarterly_income_stmt</code> often return empty. This is a yfinance data coverage issue, not a bug in AstraTrade.</p>
+      <p><strong>What AstraTrade does about it:</strong> rules with missing data auto-pass (marked "Data unavailable — pass (no penalty)") instead of failing. This means the stock is judged purely on what data <em>is</em> available. For example, if ROE and profit margin are populated but EPS quarterly is empty, the stock is evaluated on ROE + margin only and needs 75% of those to pass.</p>
+      <p><strong>Alternative data sources (free):</strong></p>
+      <ul>
+        <li><strong>FMP (already integrated):</strong> Set your <code>fmp_api_key</code> in Admin → Config. FMP's free tier gives 250 calls/day with quarterly financials for ASX stocks. AstraTrade uses FMP for supplemental data on stocks that make the watchlist.</li>
+        <li><strong>Alpha Vantage:</strong> Free API key, 25 calls/day for fundamentals — good for manual spot-checks, too limited for batch screening.</li>
+        <li><strong>ASX announcements:</strong> asx.com.au provides company financial announcements as PDFs — not machine-readable for auto-screening, but useful for manual catalyst research.</li>
+      </ul>
+      <p>For testing purposes, the safest approach is to temporarily disable one or two EPS rules in Admin → Rules and re-enable them once you've verified the pipeline is working end-to-end.</p>
+    </div>
+  </details>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <div class="section-title">🔧 Troubleshooting</div>
+
+  <!-- Q17 -->
+  <details id="q17">
+    <summary>17. Why am I not seeing any signals after running the screener?</summary>
+    <div class="faq-body">
+      <p>The most common reasons, in order of likelihood:</p>
+      <ul>
+        <li><strong>Market regime is CAUTION or BEAR.</strong> The screener still runs but signals block entries. Check Admin → Health → Market Regime.</li>
+        <li><strong>Insufficient price data.</strong> If the universe was just seeded, stocks need at least 200 trading days of history before the 200MA can be calculated. Run "Refresh Price Data" and wait for it to complete.</li>
+        <li><strong>VCP not yet formed.</strong> Even with good trend + fundamentals, the VCP requires 3+ tightening contractions. In a volatile or choppy market this is rare. Stocks will appear on the Watchlist and graduate when the VCP forms.</li>
+        <li><strong>Fundamental thresholds too strict.</strong> Go to Admin → Rules and look at the FUNDAMENTAL section. Try disabling <code>fundamental_eps_growth_accel</code> and <code>fundamental_eps_growth_annual</code> temporarily for a wider funnel.</li>
+        <li><strong>Worker not running.</strong> Admin → Health → Worker Status must show "online". If "offline", click Ping Worker. If still offline, check <code>docker compose ps</code>.</li>
+      </ul>
+      <p>The fastest diagnostic: Admin → Health → Run Screener Now, then watch the live progress widget. Colour codes: 🟢 SIGNAL / 🔵 WATCHLIST / 🟡 FAIL fundamentals / 🔴 FAIL trend / ⚪ SKIP (no data).</p>
+    </div>
+  </details>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <div class="section-title">₿ Crypto Trading</div>
+
+  <!-- Q18 -->
+  <details id="q18">
+    <summary>18. How does crypto trading differ from equities?</summary>
+    <div class="faq-body">
+      <p>Several key differences:</p>
+      <ul>
+        <li><strong>No fundamentals:</strong> Crypto fundamental checks are skipped (empty data). Only Trend Template + VCP + crypto-specific rules (RSI, MACD, BTC relative strength, volume ratio, risk:reward) apply.</li>
+        <li><strong>24/7 market:</strong> Entry and exit tasks run every 5 minutes around the clock. There is no trading-day gate for crypto.</li>
+        <li><strong>Regime proxy is BTC:</strong> BTC-AUD (for IR) or BTC-USD is used as the index for regime evaluation. If BTC is below its 200MA, regime is CAUTION and position sizes are halved.</li>
+        <li><strong>Broker:</strong> Crypto orders go to Independent Reserve or MEXC via the ccxt library, not IBKR. Bracket orders are emulated (entry limit + stop market + take-profit limit).</li>
+        <li><strong>AUD pairs:</strong> Independent Reserve trades in AUD (BTC-AUD, ETH-AUD, etc.). MEXC trades in USD pairs.</li>
+        <li><strong>Screener runs 4× daily:</strong> Unlike ASX (once per evening), the crypto screener runs at 12:45am, 6:45am, 12:45pm, and 6:45pm AEST to catch breakouts in any timezone.</li>
+      </ul>
+      <p>To start crypto trading: set <code>crypto_api_key</code> and <code>crypto_api_secret</code> in Admin → Config, set <code>crypto_testnet=false</code> for live, then reseed the crypto universe from Admin → Health.</p>
+    </div>
+  </details>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <div class="section-title">📱 WhatsApp &amp; Controls</div>
+
+  <!-- Q19 -->
+  <details id="q19">
+    <summary>19. What WhatsApp commands are available?</summary>
+    <div class="faq-body">
+      <p>Send any of these from your configured admin WhatsApp number to the AstraTrade bot:</p>
+      <div class="rule-grid">
+        <div class="rule-item"><code>STATUS</code> — System overview</div>
+        <div class="rule-item"><code>POSITIONS</code> — Open positions &amp; P&amp;L</div>
+        <div class="rule-item"><code>SIGNALS</code> — Pending entry signals</div>
+        <div class="rule-item"><code>MARKET</code> — Current regime + index level</div>
+        <div class="rule-item"><code>PAUSE</code> — Halt all new entries</div>
+        <div class="rule-item"><code>RESUME</code> — Re-enable entries</div>
+        <div class="rule-item"><code>REPORT</code> — Send daily P&amp;L summary now</div>
+        <div class="rule-item"><code>SKIP [TICKER]</code> — Skip a specific signal</div>
+        <div class="rule-item"><code>EXIT [TICKER]</code> — Manually close a position</div>
+        <div class="rule-item"><code>STOP</code> — Emergency halt everything</div>
+        <div class="rule-item"><code>RULE [ID] [ON/OFF]</code> — Toggle a rule</div>
+        <div class="rule-item"><code>CONFIG [KEY] [VALUE]</code> — Update a config setting</div>
+        <div class="rule-item"><code>HELP</code> — Full command list</div>
+      </div>
+      <p>Configure your phone number in Admin → Config → <code>whatsapp_admin_number</code> (digits only, e.g. <code>61450325233</code>). Then set up the WAHA session in Admin → WhatsApp → Start Session.</p>
+    </div>
+  </details>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <div class="section-title">🗂️ Dashboard Pages</div>
+
+  <!-- Q20 -->
+  <details id="q20">
+    <summary>20. How do I add a stock to my watchlist manually?</summary>
+    <div class="faq-body">
+      <p>Go to <strong>Watchlist → Add Stock</strong> (top right). Enter the ticker in the exchange's format:</p>
+      <ul>
+        <li>ASX: <code>BHP</code> (AstraTrade appends <code>.AX</code> automatically)</li>
+        <li>US: <code>AAPL</code> or <code>MSFT</code></li>
+        <li>Crypto (IR): <code>BTC</code> or <code>ETH</code> (converted to <code>BTC-AUD</code> for IR)</li>
+        <li>Crypto (MEXC): <code>BTC-USD</code> or <code>ETH-USD</code></li>
+      </ul>
+      <p>Optionally assign a watchlist label (High Priority, VCP Forming, etc.) when adding. AstraTrade will immediately queue a <code>screen_single_ticker</code> task — within a minute the stock's Trend Template, fundamental, and VCP results will populate and it will show on the watchlist with all rule pass/fail chips.</p>
+    </div>
+  </details>
+
+  <!-- Q21 -->
+  <details id="q21">
+    <summary>21. What is pyramiding / add-on buying?</summary>
+    <div class="faq-body">
+      <p>Minervini's pyramid technique adds to a winning position as it moves in your favour, concentrating more capital in the strongest trades:</p>
+      <ul>
+        <li><strong>Add 1:</strong> Once position is up ≥ 5% from entry (configurable via <code>pyramid_min_profit</code>)</li>
+        <li><strong>Size:</strong> Add half the original position (or less)</li>
+        <li><strong>Maximum adds:</strong> 2 (configurable via <code>pyramid_max_count</code>)</li>
+        <li><strong>Rule:</strong> Never add to a losing position</li>
+      </ul>
+      <blockquote>"Only add to positions that are already working." — Minervini, Think &amp; Trade Like a Champion</blockquote>
+      <p><em>Note: Pyramid order logic is seeded in the rules engine but the automated add-on ordering is not yet implemented in the trading task (Phase 4 item). The rules are visible in Admin → Rules → Position Sizing.</em></p>
+    </div>
+  </details>
+
+  <!-- Q22 -->
+  <details id="q22">
+    <summary>22. What is portfolio heat?</summary>
+    <div class="faq-body">
+      <p>Portfolio heat is the total amount of capital currently at risk across all open positions, expressed as a percentage of account capital. It answers: "if every stop fires today, how much do I lose?"</p>
+      <p><strong>Example:</strong> 5 positions each risking 1% = 5% portfolio heat. If 10 positions each risk 1% = 10% heat. The max heat rule (default 10%) prevents AstraTrade from opening new positions if total risk exceeds that level — even if a signal fires.</p>
+      <p>Portfolio heat is shown on the Home dashboard and Positions page. It's enforced in <code>check_entry_triggers</code> before submitting any new order.</p>
+    </div>
+  </details>
+
+  <!-- Q23 -->
+  <details id="q23">
+    <summary>23. What is a distribution day?</summary>
+    <div class="faq-body">
+      <p>A distribution day is a session where the index closes down more than 0.2% on <em>higher volume</em> than the prior day — a sign that institutions are selling into strength (distributing to retail buyers). From <em>Trade Like a Stock Market Wizard</em>, Chapter 5:</p>
+      <blockquote>"Four or five distribution days over a four-to-five week period is a warning sign that the market is under institutional selling pressure."</blockquote>
+      <p>AstraTrade counts distribution days in the last 25 sessions. If ≥ 5 are detected, the regime drops from BULL toward CAUTION or BEAR (depending on the other two criteria). The count is visible on Admin → Health after evaluating market regime.</p>
+    </div>
+  </details>
+
+  <!-- Q24 -->
+  <details id="q24">
+    <summary>24. What is the pivot buy point?</summary>
+    <div class="faq-body">
+      <p>The pivot is the high of the final, tightest VCP contraction — the precise price level where the stock must close above (on volume) to confirm the breakout is real. Buying at or just above the pivot gives you the tightest possible stop (the contraction low) and the best risk:reward ratio.</p>
+      <div class="chart-wrap">
+        <svg viewBox="0 0 500 160" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:500px;display:block;margin:0 auto">
+          <!-- Final contraction box -->
+          <rect x="120" y="60" width="160" height="50" rx="4" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="5,3"/>
+          <text x="126" y="54" font-size="10" fill="#f59e0b">Final contraction (tightest)</text>
+          <!-- Price in contraction -->
+          <polyline points="120,95 150,85 180,90 200,82 240,88 270,78 280,80" stroke="#22d3ee" stroke-width="2" fill="none"/>
+          <!-- Pivot line -->
+          <line x1="90" y1="78" x2="420" y2="78" stroke="#f97316" stroke-width="1.5" stroke-dasharray="5,3"/>
+          <text x="10" y="82" font-size="10" fill="#f97316" font-weight="bold">Pivot</text>
+          <!-- Breakout bar -->
+          <polyline points="280,80 300,65 330,48 360,38" stroke="#4ade80" stroke-width="2.5" fill="none"/>
+          <!-- Stop line -->
+          <line x1="90" y1="110" x2="420" y2="110" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="5,3"/>
+          <text x="10" y="114" font-size="10" fill="#ef4444">Stop</text>
+          <!-- Risk bracket -->
+          <line x1="400" y1="78" x2="400" y2="110" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr)"/>
+          <text x="405" y="97" font-size="9" fill="#94a3b8">Risk</text>
+          <!-- Labels -->
+          <text x="300" y="30" font-size="10" fill="#4ade80" font-weight="bold">Buy here ▲</text>
+          <text x="10"  y="145" font-size="9" fill="#94a3b8">Stop = low of final contraction. Risk = Pivot − Stop. Never buy more than 5% above pivot (extended).</text>
+        </svg>
+        <p class="chart-caption">Pivot buy point: the high of the tightest contraction. Stop sits at its low. The tighter the contraction, the smaller the risk per share and the better the risk:reward.</p>
+      </div>
+    </div>
+  </details>
+
+  <!-- Q25 -->
+  <details id="q25">
+    <summary>25. What are profit targets T1 and T2?</summary>
+    <div class="faq-body">
+      <p>AstraTrade calculates two profit targets from the pivot price at signal creation:</p>
+      <ul>
+        <li><strong>T1 (+20%):</strong> First target. Minervini's rule: "Sell at least half your position when you have a 20% gain." This locks in a concrete profit and often still leaves you holding the best part of the move. Default: sell 50% of shares at T1.</li>
+        <li><strong>T2 (+40%):</strong> Second target for the remaining shares. Either take profit here or let the trailing stop run if momentum is exceptional (a 3-week tight or climax top usually signals the end).</li>
+      </ul>
+      <p>Both prices are visible on the Signal cards, Positions page, and Trader Terminal chart (drawn as dotted price lines). They are configurable in Admin → Rules under the EXIT_OFFENSIVE section.</p>
+    </div>
+  </details>
+
+  <!-- Q26 -->
+  <details id="q26">
+    <summary>26. What is a time stop?</summary>
+    <div class="faq-body">
+      <p>A time stop exits a position that has been open too long without sufficient progress — a concept from <em>Think &amp; Trade Like a Champion</em>:</p>
+      <blockquote>"If a stock isn't acting right by 8 weeks, it's telling you something. Exit and redeploy the capital."</blockquote>
+      <p>AstraTrade's <code>exit_time_stop</code> rule triggers exit if a position's hold time exceeds the configured threshold (default 8 weeks) <em>and</em> the unrealised gain is below a minimum (default 10%). A stock that isn't moving is dead capital that could be deployed elsewhere. The rule is enabled by default and configurable in Admin → Rules.</p>
+    </div>
+  </details>
+
+  <!-- Q27 -->
+  <details id="q27">
+    <summary>27. What is the earnings avoid rule?</summary>
+    <div class="faq-body">
+      <p>Earnings announcements introduce binary risk — the stock can gap 10–20% either direction regardless of the chart setup. Minervini's rule: if you're sitting on an unrealised gain of less than about 10%, the risk of holding through earnings is not worth it.</p>
+      <p>AstraTrade's <code>exit_earnings_avoid</code> rule: if a position has an upcoming earnings date within N days (default 5) and unrealised P&L is below the threshold (default 10%), the exit rule fires and recommends exiting before the announcement. The WhatsApp alert includes the earnings date.</p>
+    </div>
+  </details>
+
+  <!-- Q28 -->
+  <details id="q28">
+    <summary>28. How do I read the Signals page?</summary>
+    <div class="faq-body">
+      <p>Each signal card shows:</p>
+      <ul>
+        <li><strong>Ticker + pivot price</strong> — the buy point</li>
+        <li><strong>Stop price</strong> — your initial risk level, already calculated</li>
+        <li><strong>T1 / T2</strong> — profit targets at +20% and +40%</li>
+        <li><strong>RS Rating</strong> — relative strength vs the universe</li>
+        <li><strong>Trend score</strong> — how many of 8 criteria passed (should be 8/8)</li>
+        <li><strong>Fundamental score</strong> — how many fundamental rules passed</li>
+        <li><strong>VCP contractions</strong> — how many tightening bases were detected</li>
+        <li><strong>Rule badges</strong> — green tick / red cross per rule for instant visual review</li>
+        <li><strong>Live entry check</strong> — the Entry Monitor panel updates every 5 min showing current price vs pivot, volume ratio, and data source (⚡ real-time / 🕐 delayed / 📉 EOD)</li>
+      </ul>
+      <p>Click any signal to open it in the Trader Terminal for a live TradingView chart with MA lines and VCP price overlays.</p>
+    </div>
+  </details>
+
+  <!-- Q29 -->
+  <details id="q29">
+    <summary>29. How do I read the Positions page?</summary>
+    <div class="faq-body">
+      <p>The Positions page shows open positions and closed trades (tabs):</p>
+      <ul>
+        <li><strong>Current price</strong> — live price (polled every 10 min via <code>update_position_pnl_task</code>)</li>
+        <li><strong>Entry price</strong> — the actual fill price from the broker</li>
+        <li><strong>Current stop</strong> — the trailing stop level (updated by <code>sync_stop_orders</code>)</li>
+        <li><strong>Unrealised P&L</strong> — in both AUD and %</li>
+        <li><strong>Exit check sub-row</strong> — last exit-rule evaluation: timestamp, price, P&L%, reason (red if exit triggered, neutral if holding)</li>
+        <li><strong>Close button</strong> — opens an inline dropdown with all Minervini exit reasons grouped Defensive / Offensive. Choose a reason and confirm to close.</li>
+      </ul>
+      <p>Closed trades show hold days, entry/exit prices, gross and net P&L, exit reason, and CGT discount eligibility (12+ months = 50% discount).</p>
+    </div>
+  </details>
+
+  <!-- Q30 -->
+  <details id="q30">
+    <summary>30. What is the daily report?</summary>
+    <div class="faq-body">
+      <p>At 6:00pm AEST weekdays (and any time via WhatsApp <code>REPORT</code> command or Admin → Health), AstraTrade sends a WhatsApp summary to your configured admin number covering:</p>
+      <ul>
+        <li>Open positions with current price, P&L, and stop levels</li>
+        <li>Today's closed trades and realised P&L</li>
+        <li>Signals generated by today's screener run</li>
+        <li>Current market regime</li>
+        <li>Portfolio total value and heat</li>
+      </ul>
+      <p>Configure your phone number in Admin → Config (<code>whatsapp_admin_number</code>, digits only).</p>
+    </div>
+  </details>
+
+  <!-- Q31 -->
+  <details id="q31">
+    <summary>31. How does the Trader Terminal work?</summary>
+    <div class="faq-body">
+      <p>The Trader Terminal (<code>/trader</code>) is a Bloomberg-style fullscreen live view — dark, no sidebars, built for active monitoring. Three columns:</p>
+      <ul>
+        <li><strong>Left panel:</strong> Tabbed lists — Signals (PENDING), Watchlist, Open Positions. Click any row to load its chart. Signal cards show live price vs pivot, colour-coded.</li>
+        <li><strong>Centre:</strong> TradingView chart with MA50/150/200 + Volume studies auto-loaded, VCP price lines (pivot / stop / T1 / T2) drawn on the chart, timezone shown in AEST.</li>
+        <li><strong>Right panel (contextual):</strong> Changes based on active tab — Entry Monitor (signals), Signal Monitor (watchlist with ⚡ live signals first), Exit Monitor (positions with latest exit-check result).</li>
+      </ul>
+      <p>Prices are polled every 10 seconds. P&L updates live without page reload. The scroll ticker tape at the top shows all active tickers with live prices.</p>
+      <p>The Watchlist Terminal (<code>/trader/watchlist</code>) is a companion view for the watchlist — same chart but with full Minervini rule breakdown on the right and a one-click Promote to Signal button.</p>
+    </div>
+  </details>
+
+  <!-- Q32 -->
+  <details id="q32">
+    <summary>32. What is the Admin Health page for?</summary>
+    <div class="faq-body">
+      <p>Admin → Health is the operations control centre. Key sections:</p>
+      <ul>
+        <li><strong>Worker Status</strong> — "online" (heartbeat within 15 min) / "starting" / "offline". If offline, click Ping Worker.</li>
+        <li><strong>Market Regime</strong> — current BULL/CAUTION/BEAR per exchange, last evaluated time. Click Evaluate Market to refresh (requires price data first).</li>
+        <li><strong>Manual Triggers:</strong> Refresh Price Data, Evaluate Market, Run Screener Now, Refresh ASX Universe, Seed Crypto Universe, Send Report, Ping Worker, Re-categorise Labels.</li>
+        <li><strong>Schedule reference</strong> — shows exactly when each automated task runs (AEST).</li>
+      </ul>
+      <p>On first start or after a long absence, the order is: Refresh Price Data → Evaluate Market → Run Screener Now.</p>
+    </div>
+  </details>
+
+  <!-- Q33 -->
+  <details id="q33">
+    <summary>33. How do I start IBKR paper trading?</summary>
+    <div class="faq-body">
+      <p>IBKR paper trading tests the full execution pipeline without real money:</p>
+      <ol>
+        <li>Set <code>IBKR_PAPER_MODE=true</code> and <code>IBKR_PORT=4002</code> in your <code>.env</code> file</li>
+        <li>Set <code>ibkr_username</code>, <code>ibkr_password</code>, and <code>ibkr_account</code> in Admin → Config (or <code>.env</code>)</li>
+        <li>Start the IBKR Gateway container: <code>docker compose --profile trading up ibkr -d</code></li>
+        <li>Wait ~60 seconds for the gateway to log in (check <code>docker logs vcpilot-ibkr-1</code>)</li>
+        <li>Run a screener → generate a signal → watch the Trader Terminal for the entry check to fire</li>
+      </ol>
+      <p>The IBKR container does <strong>not</strong> start with <code>docker compose up</code> — the <code>--profile trading</code> flag is required to prevent accidental live connections. When IBKR is not connected, AstraTrade falls back to simulated orders (logged as <code>[SIMULATED]</code> in the audit log).</p>
+    </div>
+  </details>
+
+  <!-- Q34 -->
+  <details id="q34">
+    <summary>34. What is the audit log and why does it matter?</summary>
+    <div class="faq-body">
+      <p>The audit log (Admin → Audit Log) is AstraTrade's append-only compliance trail. Every system event is written here:</p>
+      <ul>
+        <li>Every screener run and per-ticker result</li>
+        <li>Every entry trigger check per signal (why it fired or was skipped)</li>
+        <li>Every exit rule evaluation per position</li>
+        <li>Every order submitted / filled / rejected</li>
+        <li>Every config change, rule toggle, manual action</li>
+        <li>Every WhatsApp command received</li>
+      </ul>
+      <p>Rows are <strong>never updated or deleted</strong>. This is critical for debugging ("why did this trade fire?"), CGT reporting ("what was the exact fill price?"), and rule auditing ("was the stop correctly set?"). The actor field records your email for manual actions and "system" for automated tasks.</p>
+      <p>The Data Log page (Admin → Data Log) is a specialised view showing just the intraday entry-check snapshots — price vs pivot, volume ratio, data source, delay — useful for diagnosing why an entry didn't fire.</p>
+    </div>
+  </details>
+
+  <!-- Q35 -->
+  <details id="q35">
+    <summary>35. Can AstraTrade trade US stocks (NYSE/NASDAQ)?</summary>
+    <div class="faq-body">
+      <p>Yes. US equities support is built in. To enable:</p>
+      <ol>
+        <li>Super Admin enables NYSE/NASDAQ exchanges in Superadmin → Exchanges</li>
+        <li>Org Admin adds <code>NYSE</code> or <code>NASDAQ</code> to <code>active_exchanges</code> in Admin → Config</li>
+        <li>IBKR is required for US order execution (the same IBKR gateway handles both ASX and US)</li>
+        <li>Price data is fetched from yfinance — the US universe uses the same screener pipeline</li>
+      </ol>
+      <p>US tickers don't have a <code>.AX</code> suffix. Position sizing is AUD-denominated and AstraTrade automatically fetches the AUD/USD FX rate from yfinance (cached hourly) to convert US positions to AUD-equivalent for portfolio heat and reporting.</p>
+      <p>The US screener runs Tuesday–Saturday at 7:30am AEST (after NYSE closes at ~6am AEST). Entry/exit checks run during NYSE hours: ~11pm–6am AEST weeknights.</p>
+    </div>
+  </details>
+
+</div>
+{% endblock %}

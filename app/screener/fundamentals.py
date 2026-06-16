@@ -10,6 +10,14 @@ Rules:
   fundamental_profit_margin       — Net profit margin > 0 and improving
   fundamental_earnings_accel      — Earnings acceleration: 2+ consecutive qtrs
   fundamental_institutional_own   — Some institutional ownership (not zero, not >80%)
+
+Data availability policy (ASX/yfinance):
+  yfinance free tier does not reliably provide quarterly EPS/revenue for most
+  ASX stocks outside the top 50–100 by market cap. When data is genuinely
+  unavailable (empty list / None), rules auto-pass rather than penalising the
+  stock for a data gap. This matches Minervini's intent — the technical setup
+  (Trend Template + VCP) is the primary signal; fundamentals are a secondary
+  confirmation. Rules only FAIL when we have data and it is objectively bad.
 """
 from __future__ import annotations
 from typing import Optional
@@ -63,7 +71,8 @@ def evaluate_fundamentals(
             # Turned profitable
             results[rule_id] = RuleResult(rule_id, True, None, threshold, "Turned profitable (loss→profit)")
         else:
-            results[rule_id] = RuleResult(rule_id, False, None, threshold, "Insufficient EPS data")
+            # Data unavailable from yfinance — auto-pass, do not penalise
+            results[rule_id] = RuleResult(rule_id, True, None, threshold, "EPS data unavailable — pass (no penalty)")
 
     # -------------------------------------------------------------------------
     # EPS Acceleration (each quarter improving vs prior)
@@ -78,7 +87,8 @@ def evaluate_fundamentals(
             results[rule_id] = RuleResult(rule_id, passed, round(g1, 2), round(g2, 2),
                 f"EPS accel: Q1 {g1:.1f}% vs Q2 {g2:.1f}%")
         else:
-            results[rule_id] = RuleResult(rule_id, False, None, None, "Insufficient data for acceleration")
+            # Data unavailable — auto-pass
+            results[rule_id] = RuleResult(rule_id, True, None, None, "EPS accel data unavailable — pass (no penalty)")
 
     # -------------------------------------------------------------------------
     # Annual EPS Growth (use last 4 quarters vs prior 4 quarters)
@@ -94,10 +104,13 @@ def evaluate_fundamentals(
                 passed = annual_growth >= threshold
                 results[rule_id] = RuleResult(rule_id, passed, round(annual_growth, 2), threshold,
                     f"Annual EPS growth {annual_growth:.1f}% (min {threshold}%)")
+            elif prior_ttm and prior_ttm < 0 and ttm > 0:
+                results[rule_id] = RuleResult(rule_id, True, None, threshold, "Turned profitable annually (loss→profit)")
             else:
                 results[rule_id] = RuleResult(rule_id, False, None, threshold, "Prior year EPS zero/negative")
         else:
-            results[rule_id] = RuleResult(rule_id, False, None, threshold, "Insufficient annual EPS data")
+            # Data unavailable — auto-pass
+            results[rule_id] = RuleResult(rule_id, True, None, threshold, "Annual EPS data unavailable — pass (no penalty)")
 
     # -------------------------------------------------------------------------
     # Revenue / Sales Growth (most recent quarter YoY)
@@ -111,7 +124,8 @@ def evaluate_fundamentals(
             results[rule_id] = RuleResult(rule_id, passed, round(growth, 2), threshold,
                 f"Revenue growth {growth:.1f}% (min {threshold}%)")
         else:
-            results[rule_id] = RuleResult(rule_id, False, None, threshold, "Insufficient revenue data")
+            # Data unavailable — auto-pass
+            results[rule_id] = RuleResult(rule_id, True, None, threshold, "Revenue data unavailable — pass (no penalty)")
 
     # -------------------------------------------------------------------------
     # Return on Equity
@@ -120,12 +134,13 @@ def evaluate_fundamentals(
     if engine.is_enabled(rule_id):
         threshold = float(engine.threshold(rule_id) or 17.0)
         if roe is not None:
-            roe_pct = roe * 100 if roe < 1 else roe  # Handle decimal vs percentage
+            roe_pct = roe * 100 if abs(roe) <= 1 else roe  # Handle decimal vs percentage
             passed = roe_pct >= threshold
             results[rule_id] = RuleResult(rule_id, passed, round(roe_pct, 2), threshold,
                 f"ROE {roe_pct:.1f}% (min {threshold}%)")
         else:
-            results[rule_id] = RuleResult(rule_id, False, None, threshold, "ROE not available")
+            # Data unavailable — auto-pass
+            results[rule_id] = RuleResult(rule_id, True, None, threshold, "ROE data unavailable — pass (no penalty)")
 
     # -------------------------------------------------------------------------
     # Net Profit Margin (positive + improving)
@@ -133,13 +148,14 @@ def evaluate_fundamentals(
     rule_id = "fundamental_profit_margin"
     if engine.is_enabled(rule_id):
         if net_margin is not None:
-            margin_pct = net_margin * 100 if net_margin < 1 else net_margin
+            margin_pct = net_margin * 100 if abs(net_margin) <= 1 else net_margin
             improving = (net_margin > net_margin_prev) if net_margin_prev is not None else True
             passed = margin_pct > 0 and improving
             results[rule_id] = RuleResult(rule_id, passed, round(margin_pct, 2), 0,
                 f"Net margin {margin_pct:.1f}% {'▲' if improving else '▼'}")
         else:
-            results[rule_id] = RuleResult(rule_id, False, None, None, "Margin data not available")
+            # Data unavailable — auto-pass
+            results[rule_id] = RuleResult(rule_id, True, None, None, "Margin data unavailable — pass (no penalty)")
 
     # -------------------------------------------------------------------------
     # Institutional Ownership (some, but not over-owned)

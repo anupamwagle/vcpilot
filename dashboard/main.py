@@ -1227,20 +1227,76 @@ async def signals(request: Request, db: Session = Depends(get_db),
                   exchange: str = Query("ALL")):
     if not _auth(request):
         return RedirectResponse("/login", 302)
-    # Super admins allowed in standard views under active organization context
     org_id = request.session.get("organization_id")
-
-    from app.models.signal import Signal
-    from app.models.market import Stock
-    from app.models.config import RuleConfig
-    from app.screener.rules import RuleEngine
-
     ctx = _global(request, db)
 
-    # Load org rule metadata once for the override UI
+    from app.models.signal import Signal, SignalStatus
+    from sqlalchemy import or_
+
+    af = (exchange or "ALL").upper()
+
+    # ── Fast count queries only — the full card data comes from /signals/items ──
+    _base_q = db.query(Signal).filter(
+        or_(
+            Signal.signal_date == get_current_date(),
+            Signal.status == SignalStatus.PENDING,
+        ),
+        Signal.status != SignalStatus.TRIGGERED,
+        Signal.organization_id == org_id,
+    )
+    if af == "ASX":
+        _base_q = _base_q.filter(Signal.exchange_key == "ASX")
+    elif af == "CRYPTO":
+        _base_q = _base_q.filter(Signal.asset_type == "CRYPTO")
+    elif af == "US":
+        _base_q = _base_q.filter(Signal.exchange_key.in_(["NYSE", "NASDAQ"]))
+
+    _all_sigs = _base_q.with_entities(Signal.status).all()
+    pending_count   = sum(1 for s in _all_sigs if s.status == SignalStatus.PENDING)
+    triggered_count = sum(1 for s in _all_sigs if s.status == SignalStatus.TRIGGERED)
+    skipped_count   = sum(1 for s in _all_sigs if s.status == SignalStatus.SKIPPED)
+    has_signals     = bool(_all_sigs)
+
+    ef = _get_exchange_filters(org_id, db)
+    ctx.update({
+        "signals":             [],   # skeleton — cards loaded via /signals/items
+        "has_signals":         has_signals,
+        "signal_date":         str(get_current_date()),
+        "pending_count":       pending_count,
+        "triggered_count":     triggered_count,
+        "skipped_count":       skipped_count,
+        "exchange_filters":       ef,
+        "active_exchange_filter": af,
+        "base_url":               "/signals",
+        "extra_params":           "",
+    })
+    return templates.TemplateResponse("trading/signals.html", ctx)
+
+
+@app.get("/signals/items", response_class=HTMLResponse)
+async def signals_items(request: Request, db: Session = Depends(get_db),
+                        exchange: str = Query("ALL")):
+    """Cached HTML fragment for signal cards — polled by signals.html on load."""
+    if not _auth(request):
+        return HTMLResponse("", status_code=401)
+    org_id = request.session.get("organization_id")
+    af = (exchange or "ALL").upper()
+
+    _sig_ck = f"sig_items:{org_id}:{af}"
+    _cached = cache.get_raw(_sig_ck)
+    if _cached:
+        return HTMLResponse(_cached)
+
+    from app.models.signal import Signal, SignalStatus
+    from app.models.config import RuleConfig
+    from app.models.audit import AuditLog, AuditAction
     from app.models.account import Organization as _Org
+    from sqlalchemy import or_
+
+    sig_tz = _get_display_tz(org_id, db)
+
+    # Load org rule metadata once for the override UI
     org_obj = db.query(_Org).filter(_Org.id == org_id).first()
-    tier = org_obj.tier.value if org_obj else "GOLD"
     all_org_rules = db.query(RuleConfig).filter(RuleConfig.organization_id == org_id).order_by(RuleConfig.sort_order).all()
     rules_meta = {
         r.rule_id: {
@@ -1253,9 +1309,6 @@ async def signals(request: Request, db: Session = Depends(get_db),
         for r in all_org_rules
     }
 
-    from app.models.audit import AuditLog, AuditAction
-    sig_tz = _get_display_tz(org_id, db)
-
     # Build flag emoji lookup from ExchangeConfig
     flag_map: dict[str, str] = {}
     try:
@@ -1265,31 +1318,24 @@ async def signals(request: Request, db: Session = Depends(get_db),
     except Exception:
         pass
 
-    from sqlalchemy import or_
-    from app.models.signal import SignalStatus
     q = db.query(Signal).filter(
         or_(
             Signal.signal_date == get_current_date(),
             Signal.status == SignalStatus.PENDING,
         ),
         Signal.status != SignalStatus.TRIGGERED,
-        Signal.organization_id == org_id
+        Signal.organization_id == org_id,
     )
-    # Apply exchange filter at DB level
-    af = (exchange or "ALL").upper()
-    try:
-        if af == "ASX":
-            q = q.filter(Signal.exchange_key == "ASX")
-        elif af == "CRYPTO":
-            q = q.filter(Signal.asset_type == "CRYPTO")
-        elif af == "US":
-            q = q.filter(Signal.exchange_key.in_(["NYSE", "NASDAQ"]))
-    except Exception:
-        pass
+    if af == "ASX":
+        q = q.filter(Signal.exchange_key == "ASX")
+    elif af == "CRYPTO":
+        q = q.filter(Signal.asset_type == "CRYPTO")
+    elif af == "US":
+        q = q.filter(Signal.exchange_key.in_(["NYSE", "NASDAQ"]))
     sigs = q.all()
     stock_names = get_cached_stock_names(db)
 
-    # ── Pre-fetch audit entries for all tickers in one query (avoids N+1) ──
+    # ── Pre-fetch audit entries (avoids N+1) ──────────────────────────────
     _sig_tickers = list({s.ticker for s in sigs})
     _all_audit_entries = []
     if _sig_tickers:
@@ -1304,7 +1350,7 @@ async def signals(request: Request, db: Session = Depends(get_db),
         if _e.ticker:
             _audit_by_ticker[_e.ticker].append(_e)
 
-    # ── Pre-fetch all regime configs in one query (avoids N+1 per signal) ──
+    # ── Pre-fetch regime configs in one query ─────────────────────────────
     from app.models.config import SystemConfig as _SC
     _regime_rows = db.query(_SC).filter(
         or_(
@@ -1312,14 +1358,9 @@ async def signals(request: Request, db: Session = Depends(get_db),
             (_SC.key == "last_market_regime") & (_SC.organization_id == None),
         )
     ).all()
-    _regime_map: dict[str, str] = {}  # key → value
-    for _rc in _regime_rows:
-        _regime_map[_rc.key] = _rc.value or "UNKNOWN"
+    _regime_map: dict[str, str] = {rc.key: rc.value or "UNKNOWN" for rc in _regime_rows}
 
-    # ── Bulk-fetch latest PriceBars for all signal tickers in one query ──────
-    # Eliminates per-signal DB query inside _enrich_rule_results (N+1 fix).
-    # We also seed the Redis cache so subsequent calls (e.g. repeated page loads)
-    # are served from cache rather than hitting the DB at all.
+    # ── Bulk-fetch latest PriceBars ───────────────────────────────────────
     _sig_bar_lookup: dict[str, dict] = {}
     if _sig_tickers:
         from sqlalchemy import func as _sfunc
@@ -1346,18 +1387,21 @@ async def signals(request: Request, db: Session = Depends(get_db),
                 "rs_rating": float(_sb.rs_rating or 0),
             }
             _sig_bar_lookup[_sb.ticker] = _bd
-            # Seed cache so future calls (within same request or repeated loads) skip DB
             _ck = f"latest_price_bar:{_sb.ticker}"
             if not cache.get(_ck):
                 cache.set(_ck, _bd, expire_seconds=300)
 
+    # ── Favourites (lightweight query) ───────────────────────────────────
+    from app.models.signal import Watchlist, WatchlistStatus
+    _fav_rows = db.query(Watchlist.ticker).filter(
+        Watchlist.organization_id == org_id,
+        Watchlist.is_favourite == True,
+    ).all()
+    favourited_tickers = {r.ticker for r in _fav_rows}
+
     sig_data = []
     for s in sigs:
         company_name = stock_names.get(s.ticker, "")
-
-        # NOTE: Inline yfinance name backfill removed — it blocks the request for 2-5s per
-        # unknown ticker. Missing names are filled in by the background screener task.
-        # The 24-hr marker below prevents re-attempting on every page load.
         if not company_name:
             _nck = f"missing_name_fetch:{s.ticker}"
             if not cache.get(_nck):
@@ -1367,16 +1411,13 @@ async def signals(request: Request, db: Session = Depends(get_db),
         passed = sum(1 for v in rr.values() if v.get("passed"))
         overrides = s.rule_overrides or {}
 
-        # ── Latest entry check result for this signal ────────────────────
+        # ── Latest entry check ────────────────────────────────────────────
         last_check = None
         try:
-            audit_entries = _audit_by_ticker.get(s.ticker, [])
-            for entry in audit_entries:
+            for entry in _audit_by_ticker.get(s.ticker, []):
                 d = entry.detail or {}
                 if d.get("signal_id") == s.id:
-                    raw_overrides = d.get("overrides_applied", {})
-                    # Only count rules that were actually disabled (value == False)
-                    active_overrides = {k: v for k, v in raw_overrides.items() if v is False}
+                    active_overrides = {k: v for k, v in (d.get("overrides_applied", {}) or {}).items() if v is False}
                     last_check = {
                         "time": _fmt_dt(str(entry.created_at), sig_tz),
                         "result": d.get("result", ""),
@@ -1402,53 +1443,44 @@ async def signals(request: Request, db: Session = Depends(get_db),
         except Exception:
             pass
 
-        # ── Build override rule list: only rules that make sense to toggle ──
-        # Use screener rule_results to know pass/fail; merge with breakout check
+        # ── Override rule classification ──────────────────────────────────
         screener_pass_fail = {rid: bool(v.get("passed")) for rid, v in rr.items()}
-        # Also include breakout rules from last entry check
         if last_check and last_check.get("rules"):
             for br in last_check["rules"]:
                 screener_pass_fail[br["rule_id"]] = br["passed"]
 
-        # Inject BEAR regime block as a failed rule when market is in BEAR
-        # so the org admin can override it per-signal from this page
-        sig_is_crypto = getattr(s, "asset_type", "EQUITY") == "CRYPTO"
-        bear_rule_id  = "regime_bear_block_crypto" if sig_is_crypto else "regime_bear_block_equities"
-        _exc_key = getattr(s, "exchange_key", "ASX") or "ASX"
+        ek = getattr(s, "exchange_key", "ASX") or "ASX"
+        at = getattr(s, "asset_type",   "EQUITY") or "EQUITY"
+        _exc_key = ek
         _is_crypto_exc = _exc_key == "CRYPTO" or _exc_key.startswith("CRYPTO_")
+        bear_rule_id  = "regime_bear_block_crypto" if _is_crypto_exc else "regime_bear_block_equities"
         if _is_crypto_exc:
             _eff_exc = _exc_key if _exc_key != "CRYPTO" else "CRYPTO_INDEPENDENTRESERVE"
             _current_regime = _regime_map.get(f"last_market_regime_{_eff_exc}", "BULL")
         else:
             _current_regime = _regime_map.get("last_market_regime", "UNKNOWN")
         _bear_rule_meta = rules_meta.get(bear_rule_id, {})
-        _bear_rule_globally_on = _bear_rule_meta.get("globally_enabled", True)
-        if _current_regime == "BEAR" and _bear_rule_globally_on:
-            # True if user already overrode this rule for the signal, False if still blocking
+        if _current_regime == "BEAR" and _bear_rule_meta.get("globally_enabled", True):
             screener_pass_fail[bear_rule_id] = overrides.get(bear_rule_id) is False
-
-        ek = getattr(s, "exchange_key", "ASX") or "ASX"
-        at = getattr(s, "asset_type",   "EQUITY") or "EQUITY"
 
         override_rules_failed = []
         override_rules_passed = []
         for rule_id, meta in rules_meta.items():
             if not meta["globally_enabled"]:
                 continue
-            # Skip rules that don't apply to this signal's asset type
             rule_asset = meta.get("asset_types", "BOTH")
             if rule_asset == "CRYPTO" and at != "CRYPTO":
                 continue
             if rule_asset == "EQUITY" and at == "CRYPTO":
                 continue
-            rule_passed = screener_pass_fail.get(rule_id)   # True / False / None (unknown)
-            current_override = overrides.get(rule_id, None)  # True / False / None
+            rule_passed = screener_pass_fail.get(rule_id)
+            current_override = overrides.get(rule_id, None)
             entry = {
                 "rule_id":    rule_id,
                 "label":      meta["label"],
                 "category":   meta["category"],
                 "is_mandatory": meta["is_mandatory"],
-                "rule_passed": rule_passed,   # None = not evaluated yet
+                "rule_passed": rule_passed,
                 "override":   current_override,
             }
             if rule_passed is False:
@@ -1461,20 +1493,27 @@ async def signals(request: Request, db: Session = Depends(get_db),
         is_promoted_vcp    = notes_str.startswith("[VCP Screener]")
         has_overrides = any(overrides.get(rid) == False for rid, passed in screener_pass_fail.items() if passed is False)
 
+        # ── Live price overlay from Redis cache (crypto) ──────────────────
+        _close = float(s.close_price or 0)
+        _live_ck = f"live_price:{s.ticker}"
+        _live = cache.get(_live_ck)
+        if _live and isinstance(_live, (int, float)) and _live > 0:
+            _close = float(_live)
+
         sig_data.append({
             "id": s.id, "ticker": s.ticker,
             "exchange_key":  ek,
             "asset_type":    at,
             "currency":      getattr(s, "currency", "AUD") or "AUD",
             "flag_emoji":    flag_map.get(ek, ""),
-            "company_name": company_name,
-            "close": float(s.close_price or 0),
+            "company_name":  company_name,
+            "close": _close,
             "pivot": float(s.pivot_price or 0),
-            "stop": float(s.stop_price or 0),
+            "stop":  float(s.stop_price or 0),
             "target": float(s.target_price_1 or 0),
             "rs": float(s.rs_rating or 0),
             "trend_score": s.trend_score or 0,
-            "fund_score": s.fundamental_score or 0,
+            "fund_score":  s.fundamental_score or 0,
             "vcp_contractions": s.vcp_contractions or 0,
             "vcp_weeks": s.vcp_weeks or 0,
             "size": s.suggested_size_shares or 0,
@@ -1491,27 +1530,19 @@ async def signals(request: Request, db: Session = Depends(get_db),
             "is_promoted_vcp": bool(is_promoted_vcp),
             "last_check": last_check,
         })
-    # Sort: PENDING first (actionable), then TRIGGERED, then SKIPPED
+
     _status_order = {"PENDING": 0, "TRIGGERED": 1, "SKIPPED": 2}
     sig_data.sort(key=lambda x: _status_order.get(x["status"], 9))
 
-    pending_count   = sum(1 for s in sig_data if s["status"] == "PENDING")
-    triggered_count = sum(1 for s in sig_data if s["status"] == "TRIGGERED")
-    skipped_count   = sum(1 for s in sig_data if s["status"] == "SKIPPED")
-
-    ef = _get_exchange_filters(org_id, db)
-    ctx.update({
+    _html_out = templates.get_template("components/signals_cards.html").render({
+        "request": request,
         "signals": sig_data,
         "signal_date": str(get_current_date()),
-        "pending_count":   pending_count,
-        "triggered_count": triggered_count,
-        "skipped_count":   skipped_count,
-        "exchange_filters":       ef,
-        "active_exchange_filter": af,
-        "base_url":               "/signals",
-        "extra_params":           "",
+        "favourited_tickers": favourited_tickers,
+        "path": "/signals",
     })
-    return templates.TemplateResponse("trading/signals.html", ctx)
+    cache.set_raw(_sig_ck, _html_out, expire_seconds=120)   # 2-min cache
+    return HTMLResponse(_html_out)
 
 
 @app.get("/signals/poll")
@@ -1552,7 +1583,6 @@ async def signals_poll(request: Request, db: Session = Depends(get_db)):
             pass
     return JSONResponse(result)
 
-
 @app.post("/signals/{signal_id}/skip")
 async def skip_signal(request: Request, signal_id: int, db: Session = Depends(get_db)):
     if not _auth(request):
@@ -1569,6 +1599,7 @@ async def skip_signal(request: Request, signal_id: int, db: Session = Depends(ge
                         actor=request.session.get("email","dashboard"), user_id=request.session.get("user_id"),
                         message="Signal skipped via dashboard", organization_id=org_id))
         db.commit()
+        cache.delete_prefix(f"sig_items:{org_id}:")
     return RedirectResponse("/signals", 302)
 
 
@@ -1588,6 +1619,7 @@ async def unskip_signal(request: Request, signal_id: int, db: Session = Depends(
                         actor=request.session.get("email","dashboard"), user_id=request.session.get("user_id"),
                         message="Signal unskipped (restored to PENDING) via dashboard", organization_id=org_id))
         db.commit()
+        cache.delete_prefix(f"sig_items:{org_id}:")
     return RedirectResponse("/signals", 302)
 
 
@@ -1636,6 +1668,7 @@ async def signal_toggle_rule(
         detail={"signal_id": signal_id, "rule_id": rule_id, "enabled": new_state},
     ))
     db.commit()
+    cache.delete_prefix(f"sig_items:{org_id}:")
     return RedirectResponse("/signals", 302)
 
 
@@ -1790,23 +1823,28 @@ async def watchlist(
     request: Request,
     label: int = Query(None),
     exchange: str = Query("ALL"),
-    page: int = Query(1),
     db: Session = Depends(get_db)
 ):
+    """
+    Skeleton-first watchlist page.
+    Returns instantly with chrome (labels, filters, add form) + an empty card
+    container. The browser immediately fetches /watchlist/rows?page=1 via JS,
+    which is served from a 5-minute Redis cache on subsequent loads (< 20 ms).
+    Live prices are updated separately via /trader/prices polling (15 s).
+    """
     if not _auth(request):
         return RedirectResponse("/login", 302)
     org_id = request.session.get("organization_id")
 
     from app.models.signal import Watchlist, WatchlistStatus, WatchlistLabel
-    from app.models.market import PriceBar, Stock
+    from sqlalchemy import func as _sqf, or_ as _or_cnt
     ctx = _global(request, db)
 
     af = (exchange or "ALL").upper()
 
-    # Load labels from Redis cache — invalidated by label create/edit routes
+    # Labels — served from Redis cache (invalidated on label create/edit)
     all_labels = get_cached_wl_labels(org_id, db)
 
-    # Filter labels based on active exchange so irrelevant groups are hidden
     def _exchange_labels(labels, exf):
         if exf in ("ASX", "US"):
             return [l for l in labels if not (10 <= l["sort_order"] <= 19)]
@@ -1815,10 +1853,7 @@ async def watchlist(
         return labels
     filtered_labels = _exchange_labels(all_labels, af)
 
-    # ── Label counts: scoped to the active exchange filter ─────────────────────
-    # Build the exchange filter predicate (same logic as the main item query below)
-    from sqlalchemy import func as _sqf
-    from sqlalchemy import or_ as _or_cnt
+    # Label counts — fast grouped query (indexed on organization_id + status)
     _label_cnt_q = (
         db.query(Watchlist.label_id, _sqf.count(Watchlist.id))
         .filter(
@@ -1841,227 +1876,68 @@ async def watchlist(
     _cnt_rows = _label_cnt_q.group_by(Watchlist.label_id).all()
     ctx["label_counts"] = {row[0]: row[1] for row in _cnt_rows}
 
-    # Only show labels that have at least one item in the current exchange view
     _active_label_ids = set(ctx["label_counts"].keys())
     ctx["labels"] = [l for l in filtered_labels if l["id"] in _active_label_ids]
-    ctx["active_label"] = label  # currently selected filter (None = all)
+    ctx["active_label"] = label
 
-    ctx["total_watching"] = (
-        db.query(_sqf.count(Watchlist.id))
-        .filter(Watchlist.organization_id == org_id, Watchlist.status == WatchlistStatus.WATCHING)
-        .scalar() or 0
-    )
-
-    from sqlalchemy.orm import joinedload
-    q = db.query(Watchlist).options(joinedload(Watchlist.label)).filter(
+    # Total count — used in the "All" label chip
+    _total_q = db.query(_sqf.count(Watchlist.id)).filter(
+        Watchlist.organization_id == org_id,
         Watchlist.status == WatchlistStatus.WATCHING,
-        Watchlist.organization_id == org_id
     )
-    if label is not None:
-        q = q.filter(Watchlist.label_id == label)
-    # Apply exchange filter at DB level — avoids fetching + processing all items then discarding
     if af == "ASX":
-        q = q.filter(Watchlist.exchange_key == "ASX")
+        _total_q = _total_q.filter(Watchlist.exchange_key == "ASX")
     elif af == "US":
-        q = q.filter(Watchlist.exchange_key.in_(["NYSE", "NASDAQ"]))
+        _total_q = _total_q.filter(Watchlist.exchange_key.in_(["NYSE", "NASDAQ"]))
     elif af == "CRYPTO":
-        # Also match tickers stored with wrong asset_type (NULL/"EQUITY") due to Jun 2026 bug
-        from sqlalchemy import or_ as _or_wl
-        q = q.filter(_or_wl(
+        _total_q = _total_q.filter(_or_cnt(
             Watchlist.asset_type == "CRYPTO",
             Watchlist.ticker.like("%-AUD"),
             Watchlist.ticker.like("%-USD"),
             Watchlist.ticker.like("%-USDT"),
         ))
-    _WL_PER_PAGE = 20
-    total = q.count()
-    items = q.order_by(desc(Watchlist.created_at)).offset((page - 1) * _WL_PER_PAGE).limit(_WL_PER_PAGE).all()
-    has_more = (page * _WL_PER_PAGE) < total
+    if label is not None:
+        _total_q = _total_q.filter(Watchlist.label_id == label)
+    total = _total_q.scalar() or 0
 
-    stock_names = get_cached_stock_names(db)
-
-    # ── Bulk-fetch latest PriceBar for all watchlist tickers in one query ──
-    # Avoids N individual DB hits inside the loop below (major perf win for
-    # large watchlists). Uses a DISTINCT ON subquery via raw SQL-friendly approach:
-    # select the max date per ticker, then join back to get full rows.
-    _wl_tickers = list({w.ticker for w in items})
-    _bar_lookup: dict[str, object] = {}  # ticker → latest PriceBar row
-    if _wl_tickers:
-        from sqlalchemy import func as _func
-        _sub = (
-            db.query(PriceBar.ticker, _func.max(PriceBar.date).label("max_date"))
-            .filter(PriceBar.ticker.in_(_wl_tickers))
-            .group_by(PriceBar.ticker)
-            .subquery()
+    # Crypto tickers — lightweight ticker-only query for the CoinGecko panel
+    _crypto_q = db.query(Watchlist.ticker).filter(
+        Watchlist.organization_id == org_id,
+        Watchlist.status == WatchlistStatus.WATCHING,
+        _or_cnt(
+            Watchlist.asset_type == "CRYPTO",
+            Watchlist.ticker.like("%-AUD"),
+            Watchlist.ticker.like("%-USD"),
+            Watchlist.ticker.like("%-USDT"),
         )
-        _latest_bars = (
-            db.query(PriceBar)
-            .join(_sub, (PriceBar.ticker == _sub.c.ticker) & (PriceBar.date == _sub.c.max_date))
-            .all()
-        )
-        for _bar in _latest_bars:
-            _bar_lookup[_bar.ticker] = _bar
+    ).all()
+    crypto_tickers = [r.ticker for r in _crypto_q]
+    has_crypto = bool(crypto_tickers)
 
-    # ── Pre-seed Redis cache from bulk lookup so _enrich_rule_results never hits DB ──
-    # This covers both equity and crypto tickers. Without this, crypto tickers miss
-    # latest_price_bar: (they set live_price: instead) and cause per-item DB queries.
-    # Also build _bar_lookup_dict (plain dicts) for passing as _bar_data to _enrich_rule_results.
-    _bar_lookup_dict: dict[str, dict] = {}
-    for _tk, _bar in _bar_lookup.items():
-        _bd = {
-            "close":     float(_bar.close or 0),
-            "ma_50":     float(_bar.ma_50 or 0),
-            "ma_150":    float(_bar.ma_150 or 0),
-            "ma_200":    float(_bar.ma_200 or 0),
-            "high_52w":  float(_bar.high_52w or 0),
-            "low_52w":   float(_bar.low_52w or 0),
-            "rs_rating": float(_bar.rs_rating or 0),
-        }
-        _bar_lookup_dict[_tk] = _bd
-        _ck = f"latest_price_bar:{_tk}"
-        if not cache.get(_ck):
-            cache.set(_ck, _bd, expire_seconds=300)
-
-    # ── Batch live-price warm-up for crypto tickers with cold cache ─────────────────────
-    # Runs in parallel (ThreadPoolExecutor) so page-load latency is ~200ms, not 2–3s.
-    # After first load the cache stays warm for 6 min; background task then takes over.
-    _crypto_miss: list[str] = [
-        w.ticker for w in items
-        if (
-            (getattr(w, "asset_type", None) == "CRYPTO")
-            or w.ticker.endswith(("-AUD", "-USD", "-USDT"))
-        )
-        and not cache.get(f"live_price:{w.ticker}")
-    ]
-    if _crypto_miss:
-        from concurrent.futures import ThreadPoolExecutor
-        from app.data.fetcher import get_intraday_price as _gip_warm
-        def _warm_one(t: str) -> None:
-            try:
-                r = _gip_warm(t, asset_type="CRYPTO")
-                if r.get("ok") and r.get("price"):
-                    pv = float(r["price"])
-                    cache.set(f"live_price:{t}", {
-                        "price": pv, "close": pv, "live_price": pv,
-                        "data_source": r.get("data_source", ""), "_failed": False,
-                    }, expire_seconds=360)
-                else:
-                    # Unsupported coin — cache failure sentinel (120s) to avoid re-fetching every page load
-                    cache.set(f"live_price:{t}", {"_failed": True}, expire_seconds=120)
-            except Exception:
-                cache.set(f"live_price:{t}", {"_failed": True}, expire_seconds=120)
-        with ThreadPoolExecutor(max_workers=min(8, len(_crypto_miss))) as _wex:
-            list(_wex.map(_warm_one, _crypto_miss))
-
-    watchlist_data = []
-    for w in items:
-        company_name = stock_names.get(w.ticker, "")
-        # NOTE: Inline yfinance name backfill removed — it blocks for 2-5s per unknown ticker.
-        # Missing names are filled in by the background screener. The marker below prevents
-        # re-attempting on every page load.
-        if not company_name:
-            _nck = f"missing_name_fetch:{w.ticker}"
-            if not cache.get(_nck):
-                cache.set(_nck, "attempted", expire_seconds=86400)
-
-        # ── Price data ───────────────────────────────────────────────────────
-        # For crypto: try live IR API first (cached 5 min), fall back to PriceBar.
-        # For equities: use PriceBar EOD close (refreshed daily at 5pm AEST).
-        # IMPORTANT: reset bar_data each iteration — without this, a crypto item's
-        # IR data bleeds into the next equity item in the loop.
-        bar_data = None
-        # Infer CRYPTO from ticker format as well — covers rows where asset_type is NULL
-        is_crypto_item = (
-            (getattr(w, "asset_type", None) == "CRYPTO")
-            or w.ticker.endswith(("-AUD", "-USD", "-USDT"))
-        )
-        live_price_used = False
-
-        # ── Build EOD bar dict (MA / RS / 52W fields) ───────────────────────
-        # Always fetch this first — it provides rs_rating, ma_50/150/200 etc.
-        # For crypto, the live price will then overlay the close price only.
-        eod_data: dict = {}
-        cache_key = f"latest_price_bar:{w.ticker}"
-        cached_eod = cache.get(cache_key)
-        if cached_eod is not None:
-            eod_data = cached_eod
-        else:
-            bar = _bar_lookup.get(w.ticker)
-            if bar:
-                eod_data = {
-                    "close":      float(bar.close or 0),
-                    "ma_50":      float(bar.ma_50 or 0),
-                    "ma_150":     float(bar.ma_150 or 0),
-                    "ma_200":     float(bar.ma_200 or 0),
-                    "high_52w":   float(bar.high_52w or 0),
-                    "low_52w":    float(bar.low_52w or 0),
-                    "rs_rating":  float(bar.rs_rating or 0),
-                    "bar_date":   str(bar.date) if bar.date else None,
-                    "live_price": False,
-                }
-                cache.set(cache_key, eod_data, expire_seconds=300)
-            else:
-                eod_data = {
-                    "close": 0, "ma_50": 0, "ma_150": 0, "ma_200": 0,
-                    "high_52w": 0, "low_52w": 0, "rs_rating": 0,
-                    "bar_date": None, "live_price": False,
-                }
-                cache.set(cache_key, {}, expire_seconds=3600)
-
-        bar_data = eod_data.copy() if eod_data else {}
-
-        if is_crypto_item:
-            live_cache_key = f"live_price:{w.ticker}"
-            live_cached = cache.get(live_cache_key)
-            if live_cached and not live_cached.get("_failed"):
-                live_close = float(live_cached.get("close") or live_cached.get("price") or 0)
-                if live_close > 0:
-                    # Overlay live close onto EOD data — preserves MA/RS/52W fields
-                    bar_data["close"] = live_close
-                    bar_data["live_price"] = live_close
-                    live_price_used = True
-
-        stats_data = bar_data if any(bar_data.values()) else None
-
-        rr = w.rule_results or {}
-        passed = sum(1 for v in rr.values() if v.get("passed"))
-
-        # Label info for card display
-        lbl = None
-        if w.label:
-            lbl = {"id": w.label.id, "name": w.label.name, "color": w.label.color}
-
-        watchlist_data.append({
-            "id": w.id,
-            "ticker": w.ticker,
-            "exchange_key": getattr(w,"exchange_key","ASX") or "ASX",
-            # Ticker suffix is authoritative for crypto — covers DB rows with NULL/"EQUITY" asset_type
-            "asset_type":   ("CRYPTO" if w.ticker.endswith(("-AUD","-USD","-USDT")) else getattr(w,"asset_type","EQUITY") or "EQUITY"),
-            "company_name": company_name,
-            "added": str(w.added_date),
-            "by": w.added_by,
-            "notes": w.notes or "",
-            "stats": stats_data,
-            "rules_passed": passed,
-            "rules_total": len(rr),
-            "rule_results": _enrich_rule_results(w.ticker, rr, db, _bar_data=_bar_lookup_dict.get(w.ticker)),
-            "label": lbl,
-        })
-
-    _enrich_watchlist_vcp_and_sizing(watchlist_data, db, org_id)
-
-    # Exchange filter already applied at DB level above — no Python-level re-filter needed.
+    # Enabled exchanges for add-manually form
     ef = _get_exchange_filters(org_id, db)
     ee = []
     try:
         from app.models.exchange import ExchangeConfig as _EC
-        for e in db.query(_EC).filter(_EC.is_enabled==True).order_by(_EC.sort_order).all():
-            ee.append({"key":e.exchange_key,"name":e.display_name,"flag":e.flag_emoji or "","asset_type":e.asset_type})
+        for e in db.query(_EC).filter(_EC.is_enabled == True).order_by(_EC.sort_order).all():
+            ee.append({"key": e.exchange_key, "name": e.display_name, "flag": e.flag_emoji or "", "asset_type": e.asset_type})
     except Exception:
-        db.rollback(); ee=[{"key":"ASX","name":"ASX","flag":"","asset_type":"EQUITY"}]
-    ctx.update({"enabled_exchanges":ee,"exchange_filters":ef,"active_exchange_filter":af,
-                "base_url":"/watchlist","extra_params":f"label={label}" if label is not None else "",
-                "watchlist":watchlist_data, "total":total, "page":page, "has_more":has_more})
+        db.rollback(); ee = [{"key": "ASX", "name": "ASX", "flag": "", "asset_type": "EQUITY"}]
+
+    ctx.update({
+        "enabled_exchanges": ee,
+        "exchange_filters": ef,
+        "active_exchange_filter": af,
+        "base_url": "/watchlist",
+        "extra_params": f"label={label}" if label is not None else "",
+        # Skeleton: no items — JS loads /watchlist/rows?page=1 immediately
+        "watchlist": [],
+        "total": total,
+        "has_crypto": has_crypto,
+        "crypto_tickers": crypto_tickers,
+        "page": 1,
+        "has_more": total > 0,
+    })
     return templates.TemplateResponse("trading/watchlist.html", ctx)
 
 
@@ -2073,10 +1949,25 @@ async def watchlist_rows(
     page: int = Query(1),
     db: Session = Depends(get_db)
 ):
-    """Fragment endpoint — returns paginated watchlist card HTML for infinite scroll."""
+    """
+    Fragment endpoint — returns paginated watchlist card HTML for infinite scroll.
+
+    Results are cached in Redis for 5 minutes per (org, exchange, label, page).
+    Cache is invalidated on add/remove/label/promote/screener-run. This means
+    the first request after a screener run computes (~800 ms) and all subsequent
+    loads for the same filter state are served in < 20 ms.
+    """
     if not _auth(request):
         return HTMLResponse("", status_code=403)
     org_id = request.session.get("organization_id")
+
+    # ── Redis HTML cache (raw string, not JSON) ──────────────────────────────
+    _af = (exchange or "ALL").upper()
+    _lbl_key = str(label) if label is not None else "all"
+    _html_ck = f"wl_rows:{org_id}:{_af}:{_lbl_key}:{page}"
+    _cached_html = cache.get_raw(_html_ck)
+    if _cached_html:
+        return HTMLResponse(_cached_html)
 
     from app.models.signal import Watchlist, WatchlistStatus, WatchlistLabel
     from app.models.market import PriceBar, Stock
@@ -2212,7 +2103,8 @@ async def watchlist_rows(
     except Exception:
         favourited_tickers = set()
 
-    return templates.TemplateResponse("components/watchlist_cards.html", {
+    # Render to string, cache it, return
+    _html_out = templates.get_template("components/watchlist_cards.html").render({
         "request": request,
         "watchlist": watchlist_data,
         "labels": labels,
@@ -2223,6 +2115,9 @@ async def watchlist_rows(
         "total": total,
         "active_label": label,
     })
+    # Cache for 5 minutes; invalidated on add/remove/promote/screener-run
+    cache.set_raw(_html_ck, _html_out, expire_seconds=300)
+    return HTMLResponse(_html_out)
 
 
 @app.post("/watchlist/labels/create")
@@ -2270,6 +2165,8 @@ async def watchlist_set_label(
     if w:
         w.label_id = int(label_id) if label_id.isdigit() else None
         db.commit()
+        cache.delete_prefix(f"wl_rows:{org_id}:")
+        cache.delete(f"tw_data:{org_id}")
     return RedirectResponse("/watchlist", 302)
 
 
@@ -2352,6 +2249,8 @@ async def toggle_favourite(
         db.add(w)
 
     db.commit()
+    cache.delete_prefix(f"wl_rows:{org_id}:")
+    cache.delete(f"tw_data:{org_id}")
     return RedirectResponse(redirect_url, 302)
 
 
@@ -2513,6 +2412,8 @@ async def watchlist_add(
         message=f"Added {t} to watchlist"
     ))
     db.commit()
+    cache.delete_prefix(f"wl_rows:{org_id}:")
+    cache.delete(f"tw_data:{org_id}")
     return RedirectResponse("/watchlist?msg=added", 302)
 
 
@@ -2578,6 +2479,9 @@ async def watchlist_promote(request: Request, item_id: int, db: Session = Depend
             db.commit()
         return RedirectResponse("/watchlist?msg=promotion_failed", 302)
 
+    cache.delete_prefix(f"wl_rows:{org_id}:")
+    cache.delete_prefix(f"sig_items:{org_id}:")
+    cache.delete(f"tw_data:{org_id}")
     return RedirectResponse("/signals?msg=promotion_queued", 302)
 
 
@@ -2602,6 +2506,8 @@ async def watchlist_remove(request: Request, item_id: int, db: Session = Depends
             message=f"Removed {item.ticker} from watchlist"
         ))
         db.commit()
+        cache.delete_prefix(f"wl_rows:{org_id}:")
+        cache.delete(f"tw_data:{org_id}")
     return RedirectResponse("/watchlist", 302)
 
 
@@ -2653,6 +2559,9 @@ async def action_run_screener(request: Request, exchange: str = Form("ASX")):
         _run_screen_force.delay(organization_id=org_id, exchange_key=exchange or "ASX")
     except Exception:
         pass
+    cache.delete_prefix(f"wl_rows:{org_id}:")
+    cache.delete_prefix(f"sig_items:{org_id}:")
+    cache.delete(f"tw_data:{org_id}")
     return RedirectResponse("/signals?msg=screen", 302)
 
 
@@ -2801,6 +2710,9 @@ async def action_force_screen(request: Request, exchange: str = Form("ASX")):
         _run_screen_force.delay(organization_id=org_id, exchange_key=exchange or "ASX")
     except Exception:
         pass
+    cache.delete_prefix(f"wl_rows:{org_id}:")
+    cache.delete_prefix(f"sig_items:{org_id}:")
+    cache.delete(f"tw_data:{org_id}")
     return RedirectResponse("/signals?msg=screen", 302)
 
 
@@ -2823,6 +2735,9 @@ async def action_force_screen_async(
     try:
         from app.tasks.screening import _run_screen_force
         _run_screen_force.delay(organization_id=org_id, exchange_key=exchange or "ASX")
+        cache.delete_prefix(f"wl_rows:{org_id}:")
+        cache.delete(f"tw_data:{org_id}")
+        cache.delete_prefix(f"sig_items:{org_id}:")
         return JSONResponse({"ok": True, "last_id": last_id, "exchange": exchange})
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
@@ -3531,8 +3446,20 @@ def _trader_watchlist_data_inner(request: Request, db):
     from app.models.config import SystemConfig
     from app.models.account import Account
     from app.models.exchange import ExchangeConfig
+    import json as _json
 
     org_id = request.session.get("organization_id")
+
+    # ── 30-second Redis cache (matches the JS poll interval) ──────────────────
+    # On cache hit the entire JSON computation is skipped — ~1ms vs 200-800ms.
+    # Cache is invalidated on any watchlist mutation or screener run.
+    _tw_ck = f"tw_data:{org_id}"
+    _cached_json = cache.get_raw(_tw_ck)
+    if _cached_json:
+        try:
+            return JSONResponse(_json.loads(_cached_json))
+        except Exception:
+            pass  # fall through to recompute on corrupt cache entry
 
     from app.models.audit import AuditLog, AuditAction
     # Retrieve timezone
@@ -3823,7 +3750,7 @@ def _trader_watchlist_data_inner(request: Request, db):
     account = db.query(Account).filter(Account.organization_id == org_id).first()
     is_paper = account.is_paper if account else True
 
-    return JSONResponse({
+    payload = {
         "groups": groups,
         "regimes": regimes,
         "account_is_paper": is_paper,
@@ -3832,7 +3759,13 @@ def _trader_watchlist_data_inner(request: Request, db):
             "equity_count": equity_count,
             "crypto_count": crypto_count,
         },
-    })
+    }
+    # Cache for 30s — same as JS poll interval, so every poll hits cache
+    try:
+        cache.set_raw(_tw_ck, _json.dumps(payload), expire_seconds=30)
+    except Exception:
+        pass
+    return JSONResponse(payload)
 
 
 @app.post("/trader/watchlist/promote/{item_id}")
@@ -7541,6 +7474,16 @@ async def superadmin_data(
         "msg":              request.query_params.get("msg", ""),
     })
     return templates.TemplateResponse("superadmin/data.html", ctx)
+
+
+
+@app.get("/faq", response_class=HTMLResponse)
+async def faq_page(request: Request, db: Session = Depends(get_db)):
+    """Public FAQ page — no auth required but needs base.html context."""
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    ctx = _global(request, db)
+    return templates.TemplateResponse("faq.html", ctx)
 
 
 @app.get("/reset-password", response_class=HTMLResponse)

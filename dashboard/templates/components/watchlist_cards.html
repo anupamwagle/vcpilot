@@ -85,7 +85,9 @@
   <div class="metrics-grid" style="border-bottom:1px solid var(--border); background:var(--surface-alt)">
     <div class="metric-cell" style="padding:.6rem .75rem;border-right:1px solid var(--border)">
       <p class="field-label" style="font-size:.6rem">Close</p>
-      <p class="mono font-bold" style="font-size:.82rem;color:var(--text)">${{ "%.3f"|format(st.close) if st.close else '—' }}</p>
+      <p class="mono font-bold" style="font-size:.82rem;color:var(--text)"
+         data-ticker-price="{{ w.ticker }}"
+         data-prev-price="{{ st.close }}">${{ "%.3f"|format(st.close) if st.close else '—' }}</p>
       {% if pct_from_pivot is not none %}
       <p class="dist-pill {% if pct_from_pivot <= 0 %}chip-pos{% elif pct_from_pivot <= 3 %}chip-warn{% else %}chip-neg{% endif %}" style="margin-top:.18rem;font-size:.62rem;padding:.05rem .3rem;display:inline-block">
         {{ "{:+.1f}".format(pct_from_pivot) }}% vs pivot

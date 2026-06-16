@@ -273,10 +273,22 @@
     </div>
 
     <div id="wl-cards">
-      {% include "components/watchlist_cards.html" %}
+      {# ── Loading skeleton — replaced immediately by JS fetch ─────────── #}
+      <div id="wl-skeleton" style="display:flex;flex-direction:column;gap:.75rem">
+        {% for _ in range(6) %}
+        <div class="card" style="padding:.875rem 1rem;opacity:.45;display:flex;align-items:center;gap:1rem">
+          <div style="width:3.5rem;height:.875rem;border-radius:.25rem;background:var(--border)"></div>
+          <div style="width:7rem;height:.75rem;border-radius:.25rem;background:var(--border)"></div>
+          <div style="margin-left:auto;display:flex;gap:.5rem">
+            <div style="width:2.5rem;height:.75rem;border-radius:.25rem;background:var(--border)"></div>
+            <div style="width:2.5rem;height:.75rem;border-radius:.25rem;background:var(--border)"></div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
     </div>
     <!-- Sentinel — IntersectionObserver watches this to trigger next page load -->
-    <div id="wl-sentinel" style="height:1px;margin:.5rem 0"></div>
+    <div id="wl-sentinel" style="height:1px;margin:.5rem 0;display:none"></div>
     <div id="wl-loading" style="display:none;text-align:center;padding:1rem 0">
       <svg style="width:1.2rem;height:1.2rem;animation:spin 1s linear infinite;display:inline-block;color:var(--t-accent)" fill="none" viewBox="0 0 24 24">
         <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" style="opacity:.25"></circle>
@@ -400,74 +412,112 @@ if (checked) {
 </script>
 <style>@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}</style>
 <script>
-// ── Infinite scroll pagination ───────────────────────────────────────────────
+// ── Watchlist cards — load page 1 from Redis cache immediately ───────────────
 (function() {
   const container = document.getElementById('wl-cards');
+  const skeleton  = document.getElementById('wl-skeleton');
   const sentinel  = document.getElementById('wl-sentinel');
   const loading   = document.getElementById('wl-loading');
-  if (!sentinel || !container) return;
+  if (!container) return;
 
-  // Read initial state from the meta div rendered by the partial
+  const urlParams = new URLSearchParams(window.location.search);
+  urlParams.delete('page');
+  const baseParams = urlParams.toString();
+
+  // Read pagination state from the meta div appended by the partial
   function readMeta() {
     const m = container.querySelector('[data-wl-meta]');
-    return m ? { hasMore: m.dataset.hasMore === 'true', page: parseInt(m.dataset.page) } : { hasMore: false, page: 1 };
+    return m ? { hasMore: m.dataset.hasMore === 'true', page: parseInt(m.dataset.page || '1') } : { hasMore: false, page: 1 };
   }
 
-  let state = readMeta();
+  let state = { hasMore: false, page: 1 };
   let fetching = false;
+  let observer = null;
 
-  // Build base URL preserving label + exchange filters from current URL
-  const urlParams = new URLSearchParams(window.location.search);
-  urlParams.delete('page'); // page is managed by the loader
-  const baseParams = urlParams.toString(); // e.g. "label=2&exchange=CRYPTO"
+  function appendCards(html, replace) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    if (replace) {
+      // First page — replace skeleton with real content
+      container.innerHTML = '';
+    } else {
+      const oldMeta = container.querySelector('[data-wl-meta]');
+      if (oldMeta) oldMeta.remove();
+    }
+    let delay = replace ? 0 : 0;
+    Array.from(tmp.childNodes).forEach(n => {
+      if (n.nodeType === 1 && n.classList && n.classList.contains('card')) {
+        n.style.animationDelay = delay + 'ms';
+        delay += 30;
+      }
+      container.appendChild(n);
+    });
+    state = readMeta();
+    if (state.hasMore && sentinel) {
+      sentinel.style.display = 'block';
+      if (!observer) {
+        observer = new IntersectionObserver(entries => {
+          if (entries[0].isIntersecting) loadNext();
+        }, { rootMargin: '300px' });
+      }
+      observer.observe(sentinel);
+    } else {
+      if (sentinel) sentinel.style.display = 'none';
+    }
+  }
+
+  // Load page 1 immediately (Redis cache = <5ms)
+  fetch('/watchlist/rows?page=1' + (baseParams ? '&' + baseParams : ''), { credentials: 'same-origin' })
+    .then(r => r.text())
+    .then(html => appendCards(html, true))
+    .catch(() => { /* keep skeleton */ });
 
   function loadNext() {
     if (fetching || !state.hasMore) return;
     fetching = true;
     if (loading) loading.style.display = 'block';
-
-    const nextPage = state.page + 1;
-    const url = '/watchlist/rows?page=' + nextPage + (baseParams ? '&' + baseParams : '');
-
+    const url = '/watchlist/rows?page=' + (state.page + 1) + (baseParams ? '&' + baseParams : '');
     fetch(url, { credentials: 'same-origin' })
       .then(r => r.text())
       .then(html => {
         if (loading) loading.style.display = 'none';
-        // Remove old meta div before appending new content
-        const oldMeta = container.querySelector('[data-wl-meta]');
-        if (oldMeta) oldMeta.remove();
-        // Insert new cards HTML with staggered entrance animation
-        const tmp = document.createElement('div');
-        tmp.innerHTML = html;
-        let delay = 0;
-        Array.from(tmp.childNodes).forEach(n => {
-          if (n.nodeType === 1 && n.classList && n.classList.contains('card')) {
-            n.style.animationDelay = delay + 'ms';
-            delay += 40;
-          }
-          container.appendChild(n);
-        });
-        // Read updated state from new meta div
-        state = readMeta();
+        appendCards(html, false);
         fetching = false;
-        // If no more items, disconnect observer and hide sentinel
-        if (!state.hasMore) {
-          observer.disconnect();
-          if (sentinel) sentinel.remove();
-        }
       })
       .catch(() => { fetching = false; if (loading) loading.style.display = 'none'; });
   }
+})();
 
-  const observer = new IntersectionObserver(entries => {
-    if (entries[0].isIntersecting) loadNext();
-  }, { rootMargin: '300px' }); // start loading 300px before sentinel hits viewport
-
-  if (state.hasMore) {
-    observer.observe(sentinel);
-  } else {
-    sentinel.remove();
+// ── Live price polling via /trader/prices (15s) ──────────────────────────────
+// Updates [data-ticker-price="TICKER"] spans in-place without a page reload.
+(function() {
+  async function pollPrices() {
+    try {
+      const r = await fetch('/trader/prices');
+      if (!r.ok) return;
+      const data = await r.json();
+      // data is {ticker: price, ...}
+      for (const [ticker, price] of Object.entries(data)) {
+        if (!price || price <= 0) continue;
+        document.querySelectorAll('[data-ticker-price="' + ticker + '"]').forEach(el => {
+          const prev = parseFloat(el.dataset.prevPrice || '0');
+          const dec  = price < 0.01 ? 5 : price < 1 ? 4 : price < 100 ? 3 : 2;
+          el.textContent = '$' + price.toFixed(dec);
+          el.dataset.prevPrice = price;
+          // Flash green/red on price change
+          if (prev > 0 && price !== prev) {
+            el.style.color = price > prev ? 'var(--pos)' : 'var(--neg)';
+            setTimeout(() => { el.style.color = ''; }, 1200);
+          }
+        });
+      }
+    } catch(e) { /* silent */ }
   }
+  // Start polling after cards have loaded (give 2s for first fetch)
+  setTimeout(() => {
+    pollPrices();
+    setInterval(pollPrices, 15000);
+  }, 2000);
 })();
 
 // ── Watchlist search ──────────────────────────────────────────────────────
