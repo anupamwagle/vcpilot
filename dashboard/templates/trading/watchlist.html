@@ -26,14 +26,17 @@
   </div>
 </div>
 
-<!-- ── Sticky filter bar ─────────────────────────────────────────────── -->
-<div class="sticky-filters">
-  {% set base_url = "/watchlist" %}
-  {% set extra_params = ("label=" ~ active_label) if active_label is not none else "" %}
-  {% include "components/exchange_filter.html" %}
-</div>
+{# ── Effective exchange: default to first tab if 'ALL' ──────────────────── #}
+{% set _tabs = exchange_filters | selectattr('key', 'ne', 'ALL') | list %}
+{% set _has_tabs = _tabs | length > 1 %}
+{% set _eff_exchange = active_exchange_filter if (active_exchange_filter and active_exchange_filter != 'ALL') else (_tabs[0].key if _tabs else 'ASX') %}
 
-{% if has_crypto and crypto_tickers %}
+<!-- ── Exchange tabs ──────────────────────────────────────────────────── -->
+{% set base_url = "/watchlist" %}
+{% set extra_params = ("label=" ~ active_label) if active_label is not none else "" %}
+{% include "components/exchange_tabs.html" %}
+
+{% if has_crypto and crypto_tickers and _eff_exchange == 'CRYPTO' %}
 <!-- ── Crypto Live Market Data ──────────────────────────────────────────── -->
 <div class="card overflow-hidden mb-5" id="crypto-live-panel">
   <div style="display:flex;align-items:center;justify-content:space-between;padding:.75rem 1rem;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:.5rem">
@@ -191,8 +194,8 @@
 <!-- ── Label filter chips ─────────────────────────────────────────────── -->
 <div style="display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin-bottom:1.25rem;padding:.125rem 0">
   <!-- All labels -->
-  {% set exc_param = ("&exchange=" ~ active_exchange_filter) if active_exchange_filter and active_exchange_filter != 'ALL' else "" %}
-  <a href="/watchlist{{ exc_param.replace('&','?') }}"
+  {% set _exc_q = ("&exchange=" ~ _eff_exchange) if _has_tabs else "" %}
+  <a href="/watchlist{{ ('?exchange=' ~ _eff_exchange) if _has_tabs else '' }}"
      style="display:inline-flex;align-items:center;gap:.35rem;padding:.3rem .85rem;border-radius:999px;font-size:.75rem;font-weight:600;border:2px solid;text-decoration:none;transition:opacity .15s;
      {% if active_label is none %}background:var(--t-accent);color:white;border-color:var(--t-accent)
      {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
@@ -200,7 +203,7 @@
   </a>
 
   {% for lbl in labels %}
-  <a href="/watchlist?label={{ lbl.id }}{% if active_exchange_filter and active_exchange_filter != 'ALL' %}&exchange={{ active_exchange_filter }}{% endif %}"
+  <a href="/watchlist?label={{ lbl.id }}{{ _exc_q }}"
      style="display:inline-flex;align-items:center;gap:.35rem;padding:.3rem .85rem;border-radius:999px;font-size:.75rem;font-weight:600;border:2px solid;text-decoration:none;transition:opacity .15s;
      {% if active_label == lbl.id %}background:{{ lbl.color }};color:white;border-color:{{ lbl.color }}
      {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
@@ -422,6 +425,8 @@ if (checked) {
 
   const urlParams = new URLSearchParams(window.location.search);
   urlParams.delete('page');
+  // Ensure effective exchange is always in the params (tab default may not be in URL)
+  if (!urlParams.get('exchange')) urlParams.set('exchange', '{{ _eff_exchange }}');
   const baseParams = urlParams.toString();
 
   // Read pagination state from the meta div appended by the partial

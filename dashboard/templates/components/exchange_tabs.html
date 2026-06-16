@@ -1,0 +1,21 @@
+{#
+  Exchange tab bar — rendered only when org has 2+ active exchanges.
+  Required context vars (same names used by exchange_filter.html):
+    exchange_filters        – list of {key, label, flag, asset_type} from _get_exchange_filters()
+    active_exchange_filter  – currently active key ("ALL", "ASX", "CRYPTO", "US", …)
+    base_url                – page base path, e.g. "/watchlist"
+    extra_params            – extra query string (no leading ?/&), e.g. "label=3"
+#}
+{% set _tabs = exchange_filters | selectattr('key', 'ne', 'ALL') | list %}
+{% if _tabs | length > 1 %}
+{% set _eff = active_exchange_filter if (active_exchange_filter and active_exchange_filter != 'ALL') else _tabs[0].key %}
+<div style="display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:1.25rem">
+  {% for f in _tabs %}
+  <a href="{{ base_url }}?exchange={{ f.key }}{{ ('&' ~ extra_params) if extra_params else '' }}"
+     style="display:inline-flex;align-items:center;gap:.4rem;padding:.55rem 1.25rem;font-size:.82rem;font-weight:600;text-decoration:none;border-bottom:2.5px solid transparent;margin-bottom:-2px;white-space:nowrap;transition:color .15s,border-color .15s;
+     {% if _eff == f.key %}border-bottom-color:var(--t-accent);color:var(--t-accent){% else %}color:var(--text-muted){% endif %}">
+    <span>{{ f.flag }}</span> {{ f.label }}
+  </a>
+  {% endfor %}
+</div>
+{% endif %}

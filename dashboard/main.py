@@ -1391,13 +1391,20 @@ async def signals_items(request: Request, db: Session = Depends(get_db),
             if not cache.get(_ck):
                 cache.set(_ck, _bd, expire_seconds=300)
 
-    # ── Favourites (lightweight query) ───────────────────────────────────
-    from app.models.signal import Watchlist, WatchlistStatus
-    _fav_rows = db.query(Watchlist.ticker).filter(
-        Watchlist.organization_id == org_id,
-        Watchlist.is_favourite == True,
-    ).all()
-    favourited_tickers = {r.ticker for r in _fav_rows}
+    # ── Favourites — tickers assigned to the "Favourites" label ─────────
+    from app.models.signal import Watchlist, WatchlistStatus, WatchlistLabel
+    _fav_label = db.query(WatchlistLabel.id).filter(
+        WatchlistLabel.organization_id == org_id,
+        WatchlistLabel.name == "Favourites",
+    ).first()
+    if _fav_label:
+        _fav_rows = db.query(Watchlist.ticker).filter(
+            Watchlist.organization_id == org_id,
+            Watchlist.label_id == _fav_label.id,
+        ).all()
+        favourited_tickers = {r.ticker for r in _fav_rows}
+    else:
+        favourited_tickers = set()
 
     sig_data = []
     for s in sigs:

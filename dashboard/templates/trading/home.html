@@ -225,27 +225,6 @@
 
 <!-- ── Quick actions ──────────────────────────────────────────── -->
 <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.75rem">
-  <div style="display:flex;align-items:center;gap:.35rem">
-    {% if has_asx or has_us or has_crypto %}
-    <select id="screen-exchange" class="input py-1 text-xs" style="width: auto; height: 2.25rem; min-height: 2.25rem; padding-top: 0; padding-bottom: 0;">
-      {% if has_asx %}<option value="ASX">🇦🇺 ASX Screener</option>{% endif %}
-      {% if has_us %}<option value="US">🇺🇸 US Screener</option>{% endif %}
-      {% if has_crypto %}<option value="CRYPTO">₿ Crypto Screener</option>{% endif %}
-    </select>
-    {% endif %}
-    <button id="run-screener-btn" onclick="runScreener()" type="button" class="btn-primary" style="height: 2.25rem;">
-      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-      </svg><span id="run-screener-label">Run Screener</span>
-    </button>
-  </div>
-  <form method="post" action="/action/send-report">
-    <button type="submit" class="btn-ghost">
-      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
-      </svg>{% if notification_channel == 'telegram' %}Telegram Report{% else %}WhatsApp Report{% endif %}
-    </button>
-  </form>
   {% if trading_active %}
   <form method="post" action="/action/pause" class="sm:hidden">
     <button type="submit" class="btn-ghost">⏸ Pause</button>
@@ -445,7 +424,7 @@ function _swFinish(finalMsg) {
     {% else %}
     <div class="empty">
       <p class="empty-title">No signals today</p>
-      <p class="empty-sub">Screener runs at 5:30pm AEST · Use "Run Screener" above</p>
+      <p class="empty-sub">Screener runs at 5:30pm AEST · Trigger manually from System Health</p>
     </div>
     {% endif %}
   </div>
