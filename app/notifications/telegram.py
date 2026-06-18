@@ -60,10 +60,37 @@ class TelegramNotifier(BaseNotifier):
         if enabled_val is None:
             self.telegram_enabled = os.getenv("TELEGRAM_ENABLED", "true").lower() in ("true", "1", "yes")
 
+    def _audit_send_failure(self, reason: str, message: str) -> None:
+        """Write a TASK_ERROR audit row so notification failures are visible in
+        /admin/tasks without needing server log access. Never raises.
+        Mirrors WhatsAppNotifier._audit_send_failure — Telegram is the default
+        notification_channel (see app/notifications/__init__.py::get_notifier),
+        so this is the audit path that actually fires for most orgs."""
+        try:
+            from app.database import SessionLocal
+            from app.models.audit import AuditLog, AuditAction
+            db = SessionLocal()
+            try:
+                AuditLog.safe(
+                    db,
+                    action=AuditAction.TASK_ERROR,
+                    organization_id=self.organization_id,
+                    actor="system",
+                    entity_type="TelegramNotification",
+                    message=f"⚠️ Telegram send failed: {reason} | {message[:80]}",
+                    detail={"reason": reason},
+                )
+                db.commit()
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"Telegram failure audit write failed (non-fatal): {e}")
+
     def send(self, message: str, chat_id: str | None = None) -> bool:
         """Send a markdown text message to Telegram."""
         if not self.telegram_enabled:
             logger.info(f"Telegram alerts are disabled for Org {self.organization_id}. Did not send message: {message[:60]}...")
+            self._audit_send_failure("telegram_enabled is False for this org", message)
             return False
 
         token = self.token
@@ -71,6 +98,7 @@ class TelegramNotifier(BaseNotifier):
 
         if not token or not target:
             logger.warning(f"Telegram send skipped: Bot Token or Chat ID not configured (Org: {self.organization_id})")
+            self._audit_send_failure("telegram_bot_token or telegram_chat_id not configured", message)
             return False
 
         # Clean markdown formatting issues (Telegram Markdown can be strict)
@@ -88,9 +116,11 @@ class TelegramNotifier(BaseNotifier):
                 return True
             else:
                 logger.warning(f"Telegram send failed ({resp.status_code}): {resp.text[:120]}")
+                self._audit_send_failure(f"HTTP {resp.status_code}: {resp.text[:120]}", message)
                 return False
         except Exception as e:
             logger.error(f"Telegram send error: {e}")
+            self._audit_send_failure(f"exception: {e}", message)
             return False
 
     def send_signal_alert(self, signal_data: dict) -> bool:
