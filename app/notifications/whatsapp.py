@@ -225,6 +225,29 @@ class WhatsAppNotifier(BaseNotifier):
     # Sending
     # -------------------------------------------------------------------------
 
+    def _audit_send_failure(self, reason: str, message: str) -> None:
+        """Write a TASK_ERROR audit row so notification failures are visible in
+        /admin/tasks without needing server log access. Never raises."""
+        try:
+            from app.database import SessionLocal
+            from app.models.audit import AuditLog, AuditAction
+            db = SessionLocal()
+            try:
+                AuditLog.safe(
+                    db,
+                    action=AuditAction.TASK_ERROR,
+                    organization_id=self.organization_id,
+                    actor="system",
+                    entity_type="WhatsAppNotification",
+                    message=f"⚠️ WhatsApp send failed: {reason} | {message[:80]}",
+                    detail={"reason": reason, "session": self.session},
+                )
+                db.commit()
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"WhatsApp failure audit write failed (non-fatal): {e}")
+
     def send(self, message: str, chat_id: str = None) -> bool:
         """Send a text message. Defaults to admin chat."""
         if not self.whatsapp_enabled:
@@ -235,6 +258,7 @@ class WhatsAppNotifier(BaseNotifier):
         target = chat_id or self.admin_jid
         if not target:
             logger.warning("WhatsApp: no target JID configured — set WHATSAPP_ADMIN_NUMBER in .env")
+            self._audit_send_failure("no target JID configured", message)
             return False
 
         url = f"{self.base_url}/api/sendText"
@@ -253,9 +277,11 @@ class WhatsAppNotifier(BaseNotifier):
                     f"WhatsApp send failed ({resp.status_code}): {resp.text[:120]}\n"
                     f"  → session='{self.session}' target='{target}' waha='{self.base_url}'"
                 )
+                self._audit_send_failure(f"HTTP {resp.status_code} (is WAHA session connected? scan QR at /admin/whatsapp)", message)
                 return False
         except Exception as e:
             logger.error(f"WhatsApp send error: {e}")
+            self._audit_send_failure(f"exception: {e}", message)
             return False
 
     def send_signal_alert(self, signal_data: dict) -> bool:

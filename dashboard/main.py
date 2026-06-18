@@ -895,7 +895,7 @@ async def home(
     if active_label_id is not None:
         wq = wq.filter(Watchlist.label_id == active_label_id)
 
-    wl_items = wq.all()
+    wl_items = wq.order_by(desc(Watchlist.created_at)).all()
     wl_tickers = [w.ticker for w in wl_items]
     wl_stock_map = {}
     wl_bar_map = {}

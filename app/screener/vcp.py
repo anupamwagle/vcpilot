@@ -89,15 +89,34 @@ def detect_vcp(
         )
         return vcp, rule_results
 
-    # Calculate % contraction between each successive high and low pair
+    # Calculate % contraction between each successive high and low pair.
+    # IMPORTANT: pivot_highs and pivot_lows are detected independently (separate
+    # scans over the highs/lows series), so they are NOT guaranteed to line up
+    # index-for-index as the same physical swing. Zipping them by raw list
+    # position (the old approach) could pair a high from one swing with a low
+    # from an unrelated, later swing — and since price generally trends upward
+    # over the life of a base, that later low can sit ABOVE the mismatched
+    # high, producing a "contraction" with stop_price > pivot_price (the VMC
+    # bug). Instead, pair each swing high with the next swing low that
+    # actually follows it in time, which is what a real peak→trough
+    # contraction means.
     contractions: list[dict] = []
-    for i in range(min(len(pivot_highs) - 1, len(pivot_lows) - 1)):
-        high_val = highs[pivot_highs[i]]
-        low_val  = lows[pivot_lows[i]]
+    for h_idx in pivot_highs:
+        candidate_lows = [l_idx for l_idx in pivot_lows if l_idx > h_idx]
+        if not candidate_lows:
+            continue
+        low_idx = min(candidate_lows)
+        high_val = highs[h_idx]
+        low_val  = lows[low_idx]
+        if high_val <= low_val:
+            # Defensive guard — a valid contraction must have the high above
+            # the low. Skip anything that doesn't (shouldn't happen once
+            # pairing is chronological, but never trust it blindly).
+            continue
         contraction_pct = ((high_val - low_val) / high_val) * 100 if high_val > 0 else 0
         contractions.append({
-            "high_idx": pivot_highs[i],
-            "low_idx": pivot_lows[i],
+            "high_idx": h_idx,
+            "low_idx": low_idx,
             "high_val": high_val,
             "low_val": low_val,
             "contraction_pct": contraction_pct,

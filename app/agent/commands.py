@@ -516,8 +516,14 @@ class AgentCommandHandler:
             cfg.updated_by = "agent"
             db.add(cfg)
 
-            # Synchronize working capital configuration with active Account capital
-            if key in ("working_capital_aud", "weekly_injection_aud") and self.organization_id:
+            # Synchronize working capital configuration with active Account capital.
+            # NOTE: only working_capital_aud drives account.capital_aud — it is the
+            # position-sizing basis. weekly_injection_aud is a reference/planning value
+            # only and must NOT overwrite capital_aud (previously it did, which meant
+            # setting CONFIG WEEKLY_INJECTION_AUD <amount> would silently replace the
+            # account's entire capital with that amount instead of adding to it).
+            # Matches the dashboard's /admin/config behaviour in dashboard/main.py.
+            if key == "working_capital_aud" and self.organization_id:
                 from app.models.account import Account
                 account = db.query(Account).filter(
                     Account.is_active == True,

@@ -815,8 +815,16 @@ def close_position(
                 f"Exit: ${price:.4f}\n"
                 f"P&L: {pnl_str}"
             )
-        except Exception:
-            pass
+        except Exception as notify_err:
+            try:
+                _audit_action(
+                    db, AuditAction.TASK_ERROR,
+                    f"⚠️ [MCP] Position {position_id} closed but alert failed to send: {notify_err}",
+                    ticker=pos.ticker,
+                )
+                db.commit()
+            except Exception:
+                pass
 
         return {
             "ok":           True,

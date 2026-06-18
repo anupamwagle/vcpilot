@@ -568,15 +568,49 @@ if (checked) {
 })();
 
 // ── Watchlist search ──────────────────────────────────────────────────────
+// Ranks matches so ticker hits always outrank company-name hits:
+//   0 = exact ticker match, 1 = ticker starts-with, 2 = ticker contains,
+//   3 = company name contains, -1 = no match (hidden)
+function wlMatchRank(card, term) {
+  const ticker = (card.getAttribute('data-ticker') || '').toLowerCase();
+  const name = (card.getAttribute('data-name') || '').toLowerCase();
+  if (!term) return 0;
+  if (ticker === term) return 0;
+  if (ticker.startsWith(term)) return 1;
+  if (ticker.includes(term)) return 2;
+  if (name.includes(term)) return 3;
+  return -1;
+}
+
 function wlSearch(q) {
   const term = q.trim().toLowerCase();
-  const cards = document.querySelectorAll('#wl-cards [data-search]');
+  const container = document.getElementById('wl-cards');
+  const cards = Array.from(container.querySelectorAll('[data-ticker]'));
   let visible = 0;
-  cards.forEach(function(card) {
-    const match = !term || card.getAttribute('data-search').toLowerCase().includes(term);
-    card.style.display = match ? '' : 'none';
-    if (match) visible++;
+
+  const ranked = cards.map(function(card) {
+    const rank = wlMatchRank(card, term);
+    return { card: card, rank: rank };
   });
+
+  ranked.forEach(function(item) {
+    if (item.rank === -1) {
+      item.card.style.display = 'none';
+    } else {
+      item.card.style.display = '';
+      visible++;
+    }
+  });
+
+  // Re-order DOM so best matches (lowest rank) appear first. Only reorder
+  // when actively searching — leave natural (newest-first) order when empty.
+  if (term) {
+    ranked
+      .filter(function(item) { return item.rank !== -1; })
+      .sort(function(a, b) { return a.rank - b.rank; })
+      .forEach(function(item) { container.appendChild(item.card); });
+  }
+
   const noRes = document.getElementById('wl-no-results');
   if (noRes) noRes.style.display = (term && visible === 0) ? '' : 'none';
 }

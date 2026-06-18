@@ -900,8 +900,19 @@ def sync_stop_orders(self):
                             f"Stop was A${stop_price:.4f}\n"
                             f"P&L: A${realised_pnl:+.2f}"
                         )
-                    except Exception:
-                        pass
+                    except Exception as notify_err:
+                        logger.error(f"sync_stop_orders: WhatsApp alert failed for {pos.ticker}: {notify_err}")
+                        try:
+                            with get_db() as _db3:
+                                _db3.add(AuditLog(
+                                    action=AuditAction.TASK_ERROR,
+                                    organization_id=org.id,
+                                    ticker=pos.ticker,
+                                    entity_type="WhatsAppNotification",
+                                    message=f"⚠️ Stop-out alert failed to send for {pos.ticker}: {notify_err}",
+                                ))
+                        except Exception:
+                            pass
                     continue
 
                 # ── ATR-based trailing stop ───────────────────────────────
