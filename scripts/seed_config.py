@@ -418,6 +418,26 @@ RULE_CONFIGS = [
          enabled_globally=True, is_mandatory=False,
          threshold=100.0, threshold_label="Max % run from last base before skipping"),
 
+    dict(rule_id="entry_min_share_price",
+         category="ENTRY", sort_order=52, asset_types="EQUITY",
+         label="Minimum share price",
+         description="Skip equities trading below this price — avoids illiquid penny "
+                      "stocks and lets you tune position sizing toward a preferred price band.",
+         minervini_ref="Avoid low-priced, illiquid stocks (institutional sponsorship filter)",
+         enabled_globally=False, is_mandatory=False,
+         threshold=0.10, threshold_label="Minimum share price (AUD/USD)",
+         threshold_min=0.0, threshold_max=50.0),
+
+    dict(rule_id="entry_max_share_price",
+         category="ENTRY", sort_order=53, asset_types="EQUITY",
+         label="Maximum share price",
+         description="Skip equities trading above this price — keeps the watchlist within "
+                      "a preferred price band for position sizing and capital allocation.",
+         minervini_ref="Custom AstraTrade portfolio-construction preference",
+         enabled_globally=False, is_mandatory=False,
+         threshold=1.00, threshold_label="Maximum share price (AUD/USD)",
+         threshold_min=0.0, threshold_max=10000.0),
+
     # =========================================================================
     # DEFENSIVE EXIT RULES
     # =========================================================================

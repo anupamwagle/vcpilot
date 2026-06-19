@@ -25,6 +25,7 @@ from app.screener.rules import RuleEngine
 from app.screener.trend_template import evaluate_trend_template
 from app.screener.fundamentals import evaluate_fundamentals
 from app.screener.vcp import detect_vcp
+from app.screener.price_filter import price_in_range
 from app.screener.market_regime import evaluate_market_regime, MarketRegime
 from app.screener.crypto_rules import evaluate_crypto_rules, get_crypto_fundamental_data
 from app.risk.manager import calculate_position_size
@@ -46,11 +47,11 @@ def serialize_rule_results(rule_results: dict) -> dict:
             passed = bool(v)
             val = None
             msg = None
-        
+
         # Handle numpy float/int/bool
         if hasattr(val, "item"):
             val = val.item()
-            
+
         serialized[k] = {
             "passed": passed,
             "value": val,
@@ -525,7 +526,7 @@ def refresh_price_data(self, exchange_key: str = None):
                 bar.atr_14    = _safe_float(latest.get("atr_14"))
                 bar.rs_rating = _safe_float(rs_ratings.get(ticker))
 
-            
+
             db.add(AuditLog(
                 action=AuditAction.TASK_RUN,
                 message=f"[{exchange_key or 'ALL'}] Price data refreshed for {len(all_prices)} stocks",
@@ -707,7 +708,7 @@ def run_daily_screen(self, exchange_key: str = "ASX"):
         with get_db() as db:
             from app.models.account import Organization
             orgs = db.query(Organization).filter(Organization.is_active == True).all()
-            
+
             stock_query = db.query(Stock).filter(
                 Stock.is_active == True, Stock.blacklisted == False
             )
@@ -758,7 +759,25 @@ def run_daily_screen(self, exchange_key: str = "ASX"):
 
                     # Select engine based on asset type
                     stock_obj = stocks_map.get(ticker)
-                    ticker_engine = engine_crypto if (stock_obj and stock_obj.asset_type == "CRYPTO") else engine
+                    ticker_asset_type = stock_obj.asset_type if stock_obj else "EQUITY"
+                    ticker_engine = engine_crypto if ticker_asset_type == "CRYPTO" else engine
+
+                    # --- Share Price Range Filter (equity only, opt-in) ---
+                    # Hard exclude before running any other rule — this is a
+                    # portfolio-construction preference, not a "partial pass"
+                    # signal, so out-of-range tickers are skipped entirely
+                    # (not added to watchlist).
+                    last_close = float(df["close"].iloc[-1])
+                    in_range, range_reason = price_in_range(ticker, last_close, ticker_engine, ticker_asset_type)
+                    if not in_range:
+                        with get_db() as db:
+                            db.add(AuditLog(
+                                action=AuditAction.TASK_RUN,
+                                organization_id=org.id,
+                                ticker=ticker,
+                                message=f"SCREENER_SKIP price_range: {range_reason}",
+                            ))
+                        continue
 
                     # --- Trend Template ---
                     trend_results = evaluate_trend_template(ticker, df, ticker_engine)
@@ -827,7 +846,7 @@ def run_daily_screen(self, exchange_key: str = "ASX"):
                     with get_db() as db2:
                         from app.models.account import Account
                         account = db2.query(Account).filter(
-                            Account.organization_id == org.id, 
+                            Account.organization_id == org.id,
                             Account.is_active == True
                         ).first()
                         capital = float(account.capital_aud) if account else 1000.0
@@ -1073,7 +1092,7 @@ def _run_screen_force(self, organization_id: int = None, exchange_key: str = "AS
             engine        = RuleEngine(organization_id=org.id, tier=org.tier.value, asset_type="EQUITY")
             engine_crypto = RuleEngine(organization_id=org.id, tier=org.tier.value, asset_type="CRYPTO")
             notifier = get_notifier(organization_id=org.id)
-            
+
             signals_generated = 0
             watchlist_added   = 0
             skipped_no_data   = 0
@@ -1113,6 +1132,22 @@ def _run_screen_force(self, organization_id: int = None, exchange_key: str = "AS
                     stock_obj  = stocks_map.get(ticker)
                     asset_type = stock_obj.asset_type if stock_obj else "EQUITY"
                     ticker_engine = engine_crypto if asset_type == "CRYPTO" else engine
+
+                    # ── Share Price Range Filter (equity only, opt-in) ──────────
+                    # Hard exclude before any other rule runs — portfolio-construction
+                    # preference, not a "partial pass" signal.
+                    last_close = float(df["close"].iloc[-1])
+                    in_range, range_reason = price_in_range(ticker, last_close, ticker_engine, asset_type)
+                    if not in_range:
+                        with get_db() as db:
+                            db.add(AuditLog(
+                                action=AuditAction.SCREENER_TICKER,
+                                organization_id=org.id,
+                                ticker=ticker,
+                                message=f"⚪ SKIP — {range_reason}",
+                                detail={"reason": "price_out_of_range"},
+                            ))
+                        continue
 
                     # ── Trend Template ──────────────────────────────────────────
                     trend_results = evaluate_trend_template(ticker, df, ticker_engine)
@@ -1661,7 +1696,7 @@ def screen_single_ticker(
             bar.pct_from_52w_high = _safe_float(latest_row.get("pct_from_52w_high"))
             bar.pct_from_52w_low  = _safe_float(latest_row.get("pct_from_52w_low"))
             bar.atr_14    = _safe_float(latest_row.get("atr_14"))
-            
+
             rs_val = _safe_float(latest_row.get("rs_rating"))
             if rs_val is not None:
                 bar.rs_rating = rs_val
@@ -1686,6 +1721,23 @@ def screen_single_ticker(
                         stock_db.industry = fundamentals["industry"]
                     db.add(stock_db)
                     db.commit()
+
+        # 4b. Share Price Range Filter (equity only, opt-in) — hard exclude,
+        # even on manual add, so a configured price-band preference is never
+        # bypassed by adding a ticker directly.
+        last_close = float(df["close"].iloc[-1])
+        in_range, range_reason = price_in_range(ticker, last_close, engine, asset_type)
+        if not in_range:
+            with get_db() as db:
+                db.add(AuditLog(
+                    action=AuditAction.SCREENER_TICKER,
+                    organization_id=organization_id,
+                    ticker=ticker,
+                    message=f"⚪ SKIP manual add — {range_reason}",
+                    detail={"result": "skip_price_out_of_range"},
+                ))
+                db.commit()
+            return
 
         # 5. Run AstraTrade Screener check
         # --- Trend Template ---
@@ -1728,7 +1780,7 @@ def screen_single_ticker(
             with get_db() as db:
                 from app.models.account import Account
                 account = db.query(Account).filter(
-                    Account.organization_id == organization_id, 
+                    Account.organization_id == organization_id,
                     Account.is_active == True
                 ).first()
                 capital = float(account.capital_aud) if account else 1000.0

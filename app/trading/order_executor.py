@@ -146,6 +146,21 @@ def execute_signal_order(
             tier=org.tier.value if org else "BRONZE",
             asset_type=asset_type,
         )
+
+        # Share Price Range Filter (equity only, opt-in) — final defensive
+        # gate before any capital is committed. Applies to every caller of
+        # this function: MCP place_order, WhatsApp agent, and any future
+        # entry point, since this is the single shared order-submission
+        # path (see module docstring).
+        if asset_type != "CRYPTO":
+            from app.screener.price_filter import price_in_range
+            in_range, range_reason = price_in_range(ticker, entry_price, engine, asset_type)
+            if not in_range:
+                with get_db() as db_pf:
+                    _audit(db_pf, AuditAction.TASK_RUN, f"Order rejected — {range_reason}", ticker=ticker)
+                    db_pf.commit()
+                return {"ok": False, "error": f"Price out of configured range — {range_reason}"}
+
         sizing = calculate_position_size(
             capital_aud=capital,
             entry_price=entry_price,

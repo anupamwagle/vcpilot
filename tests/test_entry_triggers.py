@@ -249,6 +249,77 @@ def test_entry_check_max_positions_blocks_new_entry(db_session, org_and_account,
 
 
 # ---------------------------------------------------------------------------
+# Test: portfolio heat exceeded
+#
+# calculate_portfolio_heat()/check_portfolio_heat() in app/risk/manager.py were
+# fully implemented and unit-tested but never wired into check_entry_triggers —
+# the only pre-trade portfolio-level brake enforced was portfolio_max_positions.
+# This verifies the new gate actually blocks entries once total open risk
+# (as % of account capital) reaches the configured portfolio_max_heat_pct.
+# ---------------------------------------------------------------------------
+
+def test_entry_check_portfolio_heat_blocks_new_entry(db_session, org_and_account, monkeypatch):
+    from app.tasks.trading import check_entry_triggers
+    org, account = org_and_account
+    # account.capital_aud = 1000.0 (from fixture). One open position with
+    # risk = (45-30)*20 = 300 → heat = 300/1000 = 30%, well above the default 15% max.
+    pos = Position(
+        ticker="BHP.AX", exchange_key="ASX", asset_type="EQUITY", currency="AUD",
+        account_id=account.id, organization_id=org.id,
+        entry_date=date(2026, 1, 1), entry_price=Decimal("45.0"),
+        qty=Decimal("20"), initial_stop=Decimal("30.0"), current_stop=Decimal("30.0"),
+        status=TradeStatus.OPEN, is_paper=True,
+    )
+    db_session.add(pos)
+    _make_signal(db_session, org.id, account.id, ticker="WOW.AX")
+    db_session.commit()
+
+    _patch_market_open(monkeypatch, is_open=True)
+    _patch_trading_paused(monkeypatch, paused=False)
+    _seed_regime(db_session, org.id, "BULL")
+    _patch_notifier(monkeypatch)
+
+    check_entry_triggers.run(exchange_key="ASX")
+
+    # No new position opened for WOW.AX — only the pre-seeded BHP.AX position exists
+    assert db_session.query(Position).filter(Position.status == TradeStatus.OPEN).count() == 1
+    heat_logs = db_session.query(AuditLog).filter(
+        AuditLog.message.like("%Portfolio heat%"),
+    ).all()
+    assert heat_logs, "Should write a portfolio-heat skip audit log"
+
+
+def test_entry_check_portfolio_heat_within_limit_allows_entry(db_session, org_and_account, monkeypatch):
+    from app.tasks.trading import check_entry_triggers
+    org, account = org_and_account
+    # Small open position: risk = (45-44)*1 = 1 → heat = 0.1%, well under 15% max.
+    pos = Position(
+        ticker="BHP.AX", exchange_key="ASX", asset_type="EQUITY", currency="AUD",
+        account_id=account.id, organization_id=org.id,
+        entry_date=date(2026, 1, 1), entry_price=Decimal("45.0"),
+        qty=Decimal("1"), initial_stop=Decimal("44.0"), current_stop=Decimal("44.0"),
+        status=TradeStatus.OPEN, is_paper=True,
+    )
+    db_session.add(pos)
+    sig = _make_signal(db_session, org.id, account.id, ticker="WOW.AX", pivot=37.0)
+    db_session.commit()
+
+    _patch_market_open(monkeypatch, is_open=True)
+    _patch_trading_paused(monkeypatch, paused=False)
+    _seed_regime(db_session, org.id, "BULL")
+    _patch_price_data(monkeypatch, close=37.5)
+    _patch_rule_engine(monkeypatch, breakout_passes=True)
+    _patch_sizing(monkeypatch)
+    _patch_broker_simulate(monkeypatch)
+    _patch_notifier(monkeypatch)
+
+    check_entry_triggers.run(exchange_key="ASX")
+
+    new_pos = db_session.query(Position).filter(Position.ticker == "WOW.AX").all()
+    assert new_pos, "Entry should proceed when portfolio heat is within the configured limit"
+
+
+# ---------------------------------------------------------------------------
 # Test: no price data
 # ---------------------------------------------------------------------------
 

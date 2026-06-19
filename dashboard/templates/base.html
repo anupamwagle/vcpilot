@@ -486,6 +486,34 @@
     }
 
     /* =============================================================
+       GENERIC COLLAPSIBLE CARD-DETAIL TOGGLE (uses <details> — zero JS)
+       Same convention as rule-toggle, used to fold the heavier metric
+       grids / charts / breakdowns on Watchlist & Signal cards behind
+       a single "Full details" row, so the at-a-glance summary above
+       it (.quick-stats) stays the focal point.
+    ============================================================= */
+    details.card-toggle > summary {
+      list-style:none; cursor:pointer;
+      display:flex; align-items:center; gap:.4rem;
+      padding:.5rem 1rem;
+      font-size:.7rem; font-weight:600; color:var(--text-muted);
+      border-top:1px solid var(--border);
+      user-select:none; transition:background .1s;
+    }
+    details.card-toggle > summary:hover { background:var(--surface-alt); }
+    details.card-toggle > summary::-webkit-details-marker { display:none; }
+    details.card-toggle > summary::after {
+      content:'▸ Expand'; margin-left:auto; font-size:.62rem; flex-shrink:0;
+      transition:transform .15s ease;
+    }
+    details.card-toggle[open] > summary::after { content:'▾ Collapse'; }
+
+    /* Compact at-a-glance chip strip shown above a collapsed card-toggle */
+    .quick-stats { display:flex; flex-wrap:wrap; gap:.55rem; align-items:center; padding:.6rem 1rem; }
+    .quick-stat { display:inline-flex; align-items:center; gap:.3rem; font-size:.72rem; color:var(--text-subtle); }
+    .quick-stat strong { color:var(--text); font-family:'SF Mono',Monaco,monospace; font-size:.8rem; }
+
+    /* =============================================================
        MOBILE OVERRIDES FOR SECTION-HEAD (existing component)
     ============================================================= */
     @media (max-width:639px) {

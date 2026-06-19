@@ -16,8 +16,9 @@ from app.data.fetcher import get_price_history, get_intraday_price
 from app.data.calendar import market_is_open_now
 from app.screener.rules import RuleEngine
 from app.screener.vcp import check_breakout
+from app.screener.price_filter import price_in_range
 from app.screener.exit_rules import evaluate_exit_rules
-from app.risk.manager import calculate_position_size
+from app.risk.manager import calculate_position_size, check_portfolio_heat
 from app.broker.ibkr import IBKRBroker
 from app.notifications import get_notifier
 
@@ -175,7 +176,7 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
             # Get account capital
             from app.models.account import Account
             account = db.query(Account).filter(
-                Account.organization_id == org.id, 
+                Account.organization_id == org.id,
                 Account.is_active == True
             ).first()
             capital = float(account.capital_aud) if account else 1000.0
@@ -197,7 +198,7 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
 
             # Count open positions
             open_count = db.query(Position).filter(
-                Position.organization_id == org.id, 
+                Position.organization_id == org.id,
                 Position.status == TradeStatus.OPEN
             ).count()
             max_positions = int(engine.threshold("portfolio_max_positions") or 5)
@@ -215,6 +216,42 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                         ))
                 except Exception as e:
                     logger.error(f"Failed to log max positions check for {org.name}: {e}")
+                continue
+
+            # Portfolio heat gate — previously calculate_portfolio_heat()/check_portfolio_heat()
+            # in app/risk/manager.py were fully implemented and unit-tested but never called
+            # from any production code path; the only pre-trade portfolio-level brake actually
+            # enforced was the raw position-count cap above. This mirrors the same
+            # total_risk / account_capital % already shown on the dashboard's Portfolio Heat
+            # gauge (previously informational only) and finally enforces portfolio_max_heat_pct.
+            open_positions_for_heat = db.query(Position).filter(
+                Position.organization_id == org.id,
+                Position.status == TradeStatus.OPEN,
+            ).all()
+            total_open_risk_aud = 0.0
+            for _p in open_positions_for_heat:
+                _entry = float(_p.entry_price or 0)
+                _stop  = float(_p.current_stop or 0)
+                _qty   = float(_p.qty or 0)
+                _fx    = float(_p.current_fx_rate or _p.entry_fx_rate or 1.0) or 1.0
+                if _entry > 0 and _stop > 0:
+                    total_open_risk_aud += ((_entry - _stop) * _qty) / _fx
+            current_heat = (total_open_risk_aud / capital * 100) if capital else 0.0
+            heat_ok, heat_msg = check_portfolio_heat(current_heat, engine)
+            if not heat_ok:
+                logger.warning(f"Portfolio heat check for '{org.name}': {heat_msg}")
+                try:
+                    for signal in pending_signals:
+                        db.add(AuditLog(
+                            action=AuditAction.TASK_RUN,
+                            organization_id=org.id,
+                            ticker=signal.ticker,
+                            message=f"Entry check: skipped — {heat_msg}",
+                            detail={"signal_id": signal.id, "result": "skipped_portfolio_heat",
+                                    "heat_pct": round(current_heat, 2)},
+                        ))
+                except Exception as e:
+                    logger.error(f"Failed to log portfolio heat check for {org.name}: {e}")
                 continue
 
         for signal in pending_signals:
@@ -273,6 +310,27 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                         ))
                     engine.clear_signal_overrides()
                     continue
+
+                # Share Price Range Filter (equity only, opt-in) — re-check live
+                # price before confirming breakout. signal.asset_type (not the
+                # engine's own asset_type, which is hardcoded to EQUITY above and
+                # shared across crypto signals too) is the authoritative gate
+                # here. Per-signal rule_overrides are already applied to `engine`
+                # above (line ~297), so is_enabled() inside price_in_range()
+                # automatically respects any override for these two rule_ids.
+                if signal.asset_type != "CRYPTO":
+                    in_range, range_reason = price_in_range(signal.ticker, close_price, engine, signal.asset_type)
+                    if not in_range:
+                        with get_db() as _db:
+                            _db.add(AuditLog(
+                                action=AuditAction.TASK_RUN,
+                                organization_id=org.id,
+                                ticker=signal.ticker,
+                                message=f"Entry check: skipped — {range_reason}",
+                                detail={"signal_id": signal.id, "result": "skipped_price_out_of_range"},
+                            ))
+                        engine.clear_signal_overrides()
+                        continue
 
                 # Check breakout conditions
                 breakout_rules = check_breakout(
@@ -1194,7 +1252,7 @@ def promote_watchlist_item_task(self, item_id: int, organization_id: int, user_e
         pivot = close_price
         # Crypto uses wider initial stop (20%) to account for volatility; equities use 8%
         stop = close_price * (0.80 if is_crypto else 0.92)
-        
+
         today = get_current_date()
         existing = db.query(Signal).filter(
             Signal.ticker == w.ticker,
@@ -1226,11 +1284,11 @@ def promote_watchlist_item_task(self, item_id: int, organization_id: int, user_e
             from app.risk.manager import calculate_position_size
 
             account = db.query(Account).filter(
-                Account.organization_id == organization_id, 
+                Account.organization_id == organization_id,
                 Account.is_active == True
             ).first()
             capital = float(account.capital_aud) if account else 1000.0
-            
+
             # Get working capital currency from SystemConfig
             currency_cfg = db.query(SystemConfig).filter(
                 SystemConfig.key == "working_capital_currency",
@@ -1243,7 +1301,7 @@ def promote_watchlist_item_task(self, item_id: int, organization_id: int, user_e
                              "USD" if w.exchange_key in ("NYSE", "NASDAQ") else "AUD")
 
             engine = RuleEngine(organization_id=organization_id, asset_type=("CRYPTO" if is_crypto else "EQUITY"))
-            
+
             sizing = calculate_position_size(
                 capital_aud=capital,
                 entry_price=pivot,
@@ -1276,7 +1334,7 @@ def promote_watchlist_item_task(self, item_id: int, organization_id: int, user_e
                 organization_id=organization_id,
             )
             db.add(sig)
-            
+
         w.status = WatchlistStatus.SIGNALLED
         db.add(AuditLog(
             action=AuditAction.MANUAL_OVERRIDE,
@@ -1333,4 +1391,3 @@ def promote_watchlist_item_task(self, item_id: int, organization_id: int, user_e
 def sync_ibkr_positions_task(self):
     """Sync position data from IBKR to DB."""
     logger.debug("Position sync task: placeholder — implement IBKR position sync")
-

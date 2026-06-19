@@ -86,6 +86,27 @@
   {% set pct_from_pivot = ((st.close - w.pivot) / w.pivot * 100) if w.pivot and w.pivot > 0 else none %}
   {% set rr_ratio = ((w.target - w.pivot) / (w.pivot - w.stop)) if w.target and w.pivot and w.stop and (w.pivot - w.stop) > 0 else none %}
 
+  <!-- Quick-stats strip — always-visible at-a-glance summary -->
+  <div class="quick-stats" style="border-bottom:1px solid var(--border)">
+    <span class="quick-stat">Close
+      <strong data-ticker-price="{{ w.ticker }}" data-prev-price="{{ st.close }}">${{ "%.3f"|format(st.close) if st.close else '—' }}</strong>
+    </span>
+    {% if pct_from_pivot is not none %}
+    <span class="chip chip-sm {% if pct_from_pivot <= 0 %}chip-pos{% elif pct_from_pivot <= 3 %}chip-warn{% else %}chip-neg{% endif %}">{{ "{:+.1f}".format(pct_from_pivot) }}% vs pivot</span>
+    {% endif %}
+    <span class="rs-pill {% if rs_v >= 80 %}rs-hi{% elif rs_v >= 60 %}rs-mid{% else %}rs-low{% endif %}" style="font-size:.68rem">RS {{ rs_v }}</span>
+    {% if w.vcp_contractions is not none and w.vcp_contractions > 0 %}
+    <span class="quick-stat">{{ w.vcp_contractions }}c / {{ w.vcp_weeks }}w base</span>
+    {% endif %}
+    {% if w.size %}
+    <span class="quick-stat">{% if w.asset_type == 'CRYPTO' %}{{ "%.4f"|format(w.size) }} units{% else %}{{ w.size|int }} sh{% endif %} <span style="color:var(--text-subtle)">(R ${{ w.risk_aud|int }})</span></span>
+    {% endif %}
+  </div>
+
+  <!-- Expandable full detail — price/sizing grid, MA/technical grid, data source note -->
+  <details class="card-toggle">
+    <summary><span>Full metrics — pivot, stop, target, moving averages, 52w range</span></summary>
+
   <!-- Primary price & sizing metrics (like signals page) -->
   <div class="metrics-grid" style="border-bottom:1px solid var(--border); background:var(--surface-alt)">
     <div class="metric-cell" style="padding:.6rem .75rem;border-right:1px solid var(--border)">
@@ -198,6 +219,7 @@
     {% endif %}
   </div>
   {% endif %}
+  </details>
   {% endif %}
 
   {% if w.rule_results %}
