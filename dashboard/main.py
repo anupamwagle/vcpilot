@@ -6117,16 +6117,20 @@ async def superadmin_rules_sync_all(request: Request, db: Session = Depends(get_
 
     force = request.query_params.get("force", "0") == "1"
     from app.models.config import RuleConfig
+    from app.models.account import Organization
     from sqlalchemy.orm.attributes import flag_modified
 
     global_rules = db.query(RuleConfig).filter(RuleConfig.organization_id == None).all()
+    all_org_ids = [o.id for o in db.query(Organization.id).all()]
     synced = 0
     skipped = 0
+    created = 0
     for g in global_rules:
         org_rules = db.query(RuleConfig).filter(
             RuleConfig.rule_id == g.rule_id,
             RuleConfig.organization_id != None,
         ).all()
+        org_rules_by_org = {r.organization_id: r for r in org_rules}
         for org_rule in org_rules:
             if not force and org_rule.updated_by not in (None, "superadmin", "migration", "system", "admin"):
                 skipped += 1
@@ -6138,8 +6142,33 @@ async def superadmin_rules_sync_all(request: Request, db: Session = Depends(get_
             org_rule.updated_by = "superadmin:sync"
             synced += 1
 
+        # Backfill: any org missing a row for this rule_id (e.g. rule added
+        # after the org was created) gets a fresh clone of the global template.
+        for org_id in all_org_ids:
+            if org_id in org_rules_by_org:
+                continue
+            db.add(RuleConfig(
+                rule_id=g.rule_id,
+                organization_id=org_id,
+                category=g.category,
+                label=g.label,
+                description=g.description,
+                minervini_ref=g.minervini_ref,
+                enabled_globally=g.enabled_globally,
+                threshold=g.threshold,
+                threshold_label=g.threshold_label,
+                threshold_min=g.threshold_min,
+                threshold_max=g.threshold_max,
+                tier_overrides=dict(g.tier_overrides or {}),
+                is_mandatory=g.is_mandatory,
+                sort_order=g.sort_order,
+                asset_types=g.asset_types,
+                updated_by="superadmin:sync",
+            ))
+            created += 1
+
     db.commit()
-    return RedirectResponse(f"/superadmin/rules?saved=1&synced={synced}&skipped={skipped}", 302)
+    return RedirectResponse(f"/superadmin/rules?saved=1&synced={synced}&skipped={skipped}&created={created}", 302)
 
 
 @app.post("/superadmin/rules/{rule_id}/threshold")
