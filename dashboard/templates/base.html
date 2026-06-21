@@ -687,7 +687,7 @@
     {% endif %}
   </nav>
 
-  <!-- Sidebar footer — worker status only -->
+  <!-- Sidebar footer — worker status, heartbeat, FAQ & Help -->
   <div id="sidebar-footer" class="flex-shrink-0" style="border-top:1px solid var(--border)">
     <div class="px-4 py-3 flex items-center gap-1.5 text-xs" style="color:var(--text-subtle)">
       {% if worker_status == 'online' %}
@@ -697,6 +697,10 @@
       {% else %}
         <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" style="background:var(--neg)"></span>Worker offline
       {% endif %}
+    </div>
+    <div class="px-4 pb-3 flex items-center justify-between text-xs" style="color:var(--text-subtle)">
+      <span>Heartbeat: {{ heartbeat }}</span>
+      <a href="/faq" style="color:var(--t-accent);text-decoration:none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">FAQ &amp; Help</a>
     </div>
   </div>
 </aside>
@@ -843,9 +847,8 @@
     {% block content %}{% endblock %}
   </main>
 
-  <footer style="padding:.75rem 1rem;font-size:.75rem;display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--border);color:var(--text-subtle)">
-    <span>AstraTrade · Algo Trading · <a href="/faq" style="color:var(--t-accent);text-decoration:none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">FAQ &amp; Help</a></span>
-    <span>Heartbeat: {{ heartbeat }}</span>
+  <footer style="padding:.75rem 1rem;font-size:.75rem;border-top:1px solid var(--border);color:var(--text-subtle)">
+    <span>AstraTrade · Algo Trading</span>
   </footer>
 </div>
 
