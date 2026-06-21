@@ -272,4 +272,4 @@
 {% endif %}
 
 {# Hidden meta element — JS reads this to decide whether to keep observing #}
-<div data-wl-meta data-has-more="{{ 'true' if has_more else 'false' }}" data-page="{{ page }}" style="display:none"></div>
+<div data-wl-meta data-has-more="{{ 'true' if has_more else 'false' }}" data-page="{{ page }}" data-total="{{ total }}" style="display:none"></div>

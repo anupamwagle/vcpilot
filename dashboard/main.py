@@ -2401,6 +2401,20 @@ async def watchlist_rows(
         total = min(total, _SEARCH_CAP)
         items = _ranked_matches[(page - 1) * _WL_PER_PAGE: page * _WL_PER_PAGE]
         has_more = (page * _WL_PER_PAGE) < total
+    elif _tier_filter:
+        # setup_tier (A/B/C) is derived from rule_results JSON + RS rating,
+        # not a stored column, so it can't be filtered in SQL. Pulling only
+        # one DB-side page (20 most-recently-added rows) and THEN filtering
+        # by tier — like the normal branch below does — means the filter
+        # only ever sees whichever handful of that page happen to match,
+        # which is why "★ A — Best" looked like it returned almost nothing.
+        # Instead pull the whole exchange/label-filtered set (capped),
+        # compute tier for all of it below, then filter + paginate in
+        # Python — same approach as the search branch above.
+        _TIER_CAP = 1000
+        items = wl_q.order_by(desc(Watchlist.created_at)).limit(_TIER_CAP).all()
+        total = None    # finalised after tier filter is applied, below
+        has_more = None
     else:
         total = wl_q.count()
         items = wl_q.order_by(desc(Watchlist.created_at)).offset((page - 1) * _WL_PER_PAGE).limit(_WL_PER_PAGE).all()
@@ -2510,6 +2524,13 @@ async def watchlist_rows(
     # ── Tier filter (post-compute, since setup_tier is derived not stored) ──
     if _tier_filter:
         watchlist_data = [w for w in watchlist_data if w.get("setup_tier") == _tier_filter]
+        # Pagination was deferred until after the tier filter (see the
+        # _tier_filter branch above) — apply it now against the FILTERED
+        # count, so `total`/`has_more` reflect the actual tier subset
+        # instead of the unfiltered exchange/label total.
+        total = len(watchlist_data)
+        has_more = (page * _WL_PER_PAGE) < total
+        watchlist_data = watchlist_data[(page - 1) * _WL_PER_PAGE: page * _WL_PER_PAGE]
 
     # Favourites — same query as _global()
     try:

@@ -303,7 +303,7 @@
           {% else %}
             In Formation
           {% endif %}
-          <span style="margin-left:.5rem;font-size:.8rem;font-weight:normal;color:var(--text-subtle)">({{ total }})</span>
+          <span id="wl-total-count" style="margin-left:.5rem;font-size:.8rem;font-weight:normal;color:var(--text-subtle)">({{ total }})</span>
         </h2>
         <div style="position:relative;flex-shrink:0">
           <svg style="position:absolute;left:.5rem;top:50%;transform:translateY(-50%);width:.75rem;height:.75rem;color:var(--text-subtle);pointer-events:none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
@@ -474,6 +474,10 @@ if (checked) {
   // Read pagination state from the meta div appended by the partial
   function readMeta() {
     const m = container.querySelector('[data-wl-meta]');
+    if (m && m.dataset.total !== undefined) {
+      const tc = document.getElementById('wl-total-count');
+      if (tc) tc.textContent = '(' + m.dataset.total + ')';
+    }
     return m ? { hasMore: m.dataset.hasMore === 'true', page: parseInt(m.dataset.page || '1') } : { hasMore: false, page: 1 };
   }
 
