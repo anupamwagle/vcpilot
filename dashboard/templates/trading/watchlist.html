@@ -480,6 +480,7 @@ if (checked) {
   let state = { hasMore: false, page: 1 };
   let fetching = false;
   let observer = null;
+  let currentSearchTerm = ''; // '' = normal feed; non-empty = active search
 
   function appendCards(html, replace) {
     const tmp = document.createElement('div');
@@ -519,11 +520,16 @@ if (checked) {
     .then(html => appendCards(html, true))
     .catch(() => { /* keep skeleton */ });
 
+  // Loads the next page of whatever's currently active — the normal feed,
+  // OR (if a search is active) the next page of search results. Either way
+  // results stream in via the same infinite-scroll sentinel instead of one
+  // big payload, so a search with hundreds of matches still loads fast.
   function loadNext() {
     if (fetching || !state.hasMore) return;
     fetching = true;
     if (loading) loading.style.display = 'block';
-    const url = '/watchlist/rows?page=' + (state.page + 1) + (baseParams ? '&' + baseParams : '');
+    const qParam = currentSearchTerm ? '&q=' + encodeURIComponent(currentSearchTerm) : '';
+    const url = '/watchlist/rows?page=' + (state.page + 1) + (baseParams ? '&' + baseParams : '') + qParam;
     fetch(url, { credentials: 'same-origin' })
       .then(r => r.text())
       .then(html => {
@@ -539,22 +545,25 @@ if (checked) {
   // have been scrolled into view — so this hits /watchlist/rows?q=... on the
   // server (ticker match always ranked above company-name match, and works
   // for both equity tickers like MIN.AX and crypto tickers like BTC-USD)
-  // instead of filtering only the cards already sitting in the DOM.
-  let searchFetching = false;
+  // instead of filtering only the cards already sitting in the DOM. Results
+  // are paginated server-side too (20 at a time) so a broad search term
+  // doesn't dump hundreds of cards into the DOM in one go — scrolling loads
+  // more, same as the normal feed.
   window.__wlSearch = function(term) {
-    searchFetching = true;
+    currentSearchTerm = term;
+    fetching = true;
     const qParam = term ? '&q=' + encodeURIComponent(term) : '';
     const url = '/watchlist/rows?page=1' + (baseParams ? '&' + baseParams : '') + qParam;
     fetch(url, { credentials: 'same-origin' })
       .then(r => r.text())
       .then(html => {
-        searchFetching = false;
+        fetching = false;
         appendCards(html, true);
         const noRes = document.getElementById('wl-no-results');
         const hasCards = !!container.querySelector('[data-ticker]');
         if (noRes) noRes.style.display = (term && !hasCards) ? '' : 'none';
       })
-      .catch(() => { searchFetching = false; });
+      .catch(() => { fetching = false; });
   };
 })();
 

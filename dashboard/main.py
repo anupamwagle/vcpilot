@@ -679,6 +679,7 @@ def _get_exchange_filters(org_id: int, db) -> list:
 async def home(
     request: Request,
     exchange: str = Query("ALL"),
+    wl_exchange: str = Query(None),
     db: Session = Depends(get_db)
 ):
     if not _auth(request):
@@ -698,16 +699,17 @@ async def home(
     # Single query for all company names — used across positions + signals
     stock_names = {s.ticker: (s.name or "") for s in db.query(Stock).all()}
 
-    active_exchange = (exchange or "ALL").upper()
+    # NOTE: the home dashboard's "Today's Signals" / "Open Positions" / P&L
+    # cards always show ALL exchanges, unfiltered. There is no on-page control
+    # for the `exchange` param at this scope — it used to be silently shared
+    # with the Watchlist card's exchange tabs (see wl_exchange below), which
+    # caused clicking a Watchlist tab to also hide signals/positions from
+    # other markets, and that filter then persisted indefinitely via the
+    # home_wl_filters localStorage key. Use /signals, /positions, or the
+    # per-page exchange filters for a scoped view.
 
     # Open positions
     pos_q = db.query(Position).filter(Position.status == TradeStatus.OPEN, Position.organization_id == org_id)
-    if active_exchange == "ASX":
-        pos_q = pos_q.filter(Position.exchange_key == "ASX")
-    elif active_exchange == "US":
-        pos_q = pos_q.filter(Position.exchange_key.in_(["NYSE", "NASDAQ"]))
-    elif active_exchange == "CRYPTO":
-        pos_q = pos_q.filter(Position.asset_type == "CRYPTO")
     positions = pos_q.all()
 
     pos_data, total_risk = [], 0.0
@@ -740,12 +742,6 @@ async def home(
         ),
         Signal.organization_id == org_id
     )
-    if active_exchange == "ASX":
-        sig_q = sig_q.filter(Signal.exchange_key == "ASX")
-    elif active_exchange == "US":
-        sig_q = sig_q.filter(Signal.exchange_key.in_(["NYSE", "NASDAQ"]))
-    elif active_exchange == "CRYPTO":
-        sig_q = sig_q.filter(Signal.asset_type == "CRYPTO")
     signals = sig_q.all()
 
     sig_data = [{
@@ -764,15 +760,6 @@ async def home(
     # P&L
     today_trades_q = db.query(Trade).filter(Trade.exit_date == get_current_date(), Trade.organization_id == org_id)
     all_trades_q   = db.query(Trade).filter(Trade.organization_id == org_id)
-    if active_exchange == "ASX":
-        today_trades_q = today_trades_q.filter(Trade.exchange_key == "ASX")
-        all_trades_q   = all_trades_q.filter(Trade.exchange_key == "ASX")
-    elif active_exchange == "US":
-        today_trades_q = today_trades_q.filter(Trade.exchange_key.in_(["NYSE", "NASDAQ"]))
-        all_trades_q   = all_trades_q.filter(Trade.exchange_key.in_(["NYSE", "NASDAQ"]))
-    elif active_exchange == "CRYPTO":
-        today_trades_q = today_trades_q.filter(Trade.asset_type == "CRYPTO")
-        all_trades_q   = all_trades_q.filter(Trade.asset_type == "CRYPTO")
     today_trades = today_trades_q.all()
     all_trades   = all_trades_q.all()
 
@@ -958,13 +945,18 @@ async def home(
             "setup_tier": _h_tier,
         })
 
-    # Filter by exchange
-    active_exchange = (exchange or "ALL").upper()
-    if active_exchange not in ("", "ALL"):
+    # Filter by exchange — uses its own wl_exchange param, independent of the
+    # page-wide `exchange` param (which only scopes Positions/Signals/Trades
+    # above). Without this split, clicking a Watchlist-card exchange tab also
+    # silently filtered "Today's Signals" / "Open Positions", and that filter
+    # then persisted via the home_wl_filters localStorage key — hiding signals
+    # from other exchanges on every subsequent home page load.
+    wl_active_exchange_filter = (wl_exchange or "ALL").upper()
+    if wl_active_exchange_filter not in ("", "ALL"):
         watchlist_rows = [row for row in watchlist_rows if
-            (active_exchange == "ASX" and row.get("exchange_key") == "ASX") or
-            (active_exchange == "US"  and row.get("exchange_key") in ("NYSE", "NASDAQ")) or
-            (active_exchange == "CRYPTO" and row.get("asset_type") == "CRYPTO")]
+            (wl_active_exchange_filter == "ASX" and row.get("exchange_key") == "ASX") or
+            (wl_active_exchange_filter == "US"  and row.get("exchange_key") in ("NYSE", "NASDAQ")) or
+            (wl_active_exchange_filter == "CRYPTO" and row.get("asset_type") == "CRYPTO")]
 
     # Working capital currency
     try:
@@ -1027,7 +1019,7 @@ async def home(
         "wl_active_label": active_label_id,
         "wl_only_custom": only_custom,
         "wl_exchange_filters": _get_exchange_filters(org_id, db),
-        "wl_active_exchange": active_exchange,
+        "wl_active_exchange": wl_active_exchange_filter,
     })
     return templates.TemplateResponse("trading/home.html", ctx)
 
@@ -2380,10 +2372,12 @@ async def watchlist_rows(
         ))
 
     if _search_term:
-        # Search the WHOLE filtered set (no offset/limit yet) — ticker match
-        # (covers both equities like "MIN.AX" and crypto like "BTC-USD") OR
-        # company-name match via a Stock subquery. Ranked in Python below so
-        # ticker hits always outrank company-name hits.
+        # Search the WHOLE filtered set, not just the current page's 20 rows —
+        # ticker match (covers both equities like "MIN.AX" and crypto like
+        # "BTC-USD") OR company-name match via a Stock subquery. Ranked in
+        # Python so ticker hits always outrank company-name hits, THEN paged
+        # the same way as the normal feed so a large match set still loads
+        # incrementally via infinite scroll instead of one big payload.
         from sqlalchemy import or_ as _or_wlsearch
         _name_match_tickers = db.query(Stock.ticker).filter(Stock.name.ilike(f"%{_search_term}%"))
         wl_q = wl_q.filter(_or_wlsearch(
@@ -2391,7 +2385,10 @@ async def watchlist_rows(
             Watchlist.ticker.in_(_name_match_tickers),
         ))
         total = wl_q.count()
-        _all_matches = wl_q.order_by(desc(Watchlist.created_at)).limit(200).all()
+        # Rank requires the full match set in hand before paging — cap at a
+        # sane ceiling so one search term can't pull thousands of rows.
+        _SEARCH_CAP = 500
+        _all_matches = wl_q.order_by(desc(Watchlist.created_at)).limit(_SEARCH_CAP).all()
 
         def _rank(ticker: str) -> int:
             t = ticker.lower()
@@ -2399,8 +2396,11 @@ async def watchlist_rows(
             if t.startswith(_search_term): return 1
             if _search_term in t: return 2
             return 3  # matched only via company name
-        items = sorted(_all_matches, key=lambda w: _rank(w.ticker))
-        has_more = False
+        _ranked_matches = sorted(_all_matches, key=lambda w: _rank(w.ticker))
+
+        total = min(total, _SEARCH_CAP)
+        items = _ranked_matches[(page - 1) * _WL_PER_PAGE: page * _WL_PER_PAGE]
+        has_more = (page * _WL_PER_PAGE) < total
     else:
         total = wl_q.count()
         items = wl_q.order_by(desc(Watchlist.created_at)).offset((page - 1) * _WL_PER_PAGE).limit(_WL_PER_PAGE).all()

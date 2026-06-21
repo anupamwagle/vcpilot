@@ -586,7 +586,7 @@ function _swFinish(finalMsg) {
     <span style="font-size:.65rem;font-weight:600;color:var(--text-subtle);text-transform:uppercase;letter-spacing:.05em;min-width:3.5rem">Market</span>
     {% for ef in wl_exchange_filters %}
     {% set is_active = (wl_active_exchange == ef.key) or (wl_active_exchange in ('', 'ALL') and ef.key == 'ALL') %}
-    <a href="javascript:void(0)" onclick="wlFilter('{% if wl_active_label %}label={{ wl_active_label }}&{% endif %}{% if wl_only_custom %}custom=true&{% endif %}exchange={{ ef.key }}')"
+    <a href="javascript:void(0)" onclick="wlFilter('{% if wl_active_label %}label={{ wl_active_label }}&{% endif %}{% if wl_only_custom %}custom=true&{% endif %}wl_exchange={{ ef.key }}')"
        style="padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
        {% if is_active %}background:var(--t-accent);color:white;border-color:var(--t-accent)
        {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
@@ -600,7 +600,7 @@ function _swFinish(finalMsg) {
   <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;padding:.4rem 1rem .5rem">
     <span style="font-size:.65rem;font-weight:600;color:var(--text-subtle);text-transform:uppercase;letter-spacing:.05em;min-width:3.5rem">Label</span>
     <!-- All label -->
-    <a href="javascript:void(0)" onclick="wlFilter('{% if wl_only_custom %}custom=true{% endif %}{% if wl_active_exchange and wl_active_exchange != "ALL" %}{% if wl_only_custom %}&{% endif %}exchange={{ wl_active_exchange }}{% endif %}')"
+    <a href="javascript:void(0)" onclick="wlFilter('{% if wl_only_custom %}custom=true{% endif %}{% if wl_active_exchange and wl_active_exchange != "ALL" %}{% if wl_only_custom %}&{% endif %}wl_exchange={{ wl_active_exchange }}{% endif %}')"
        style="display:inline-flex;align-items:center;gap:.3rem;padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
        {% if wl_active_label is none %}background:var(--t-accent);color:white;border-color:var(--t-accent)
        {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
@@ -610,7 +610,7 @@ function _swFinish(finalMsg) {
     {% for lbl in wl_labels %}
     {% if not (wl_active_exchange in ('ASX', 'US') and lbl.sort_order >= 10 and lbl.sort_order <= 19)
        and not (wl_active_exchange == 'CRYPTO' and ((lbl.sort_order >= 20 and lbl.sort_order <= 38) or lbl.sort_order >= 100)) %}
-    <a href="javascript:void(0)" onclick="wlFilter('label={{ lbl.id }}{% if wl_only_custom %}&custom=true{% endif %}{% if wl_active_exchange and wl_active_exchange != "ALL" %}&exchange={{ wl_active_exchange }}{% endif %}')"
+    <a href="javascript:void(0)" onclick="wlFilter('label={{ lbl.id }}{% if wl_only_custom %}&custom=true{% endif %}{% if wl_active_exchange and wl_active_exchange != "ALL" %}&wl_exchange={{ wl_active_exchange }}{% endif %}')"
        style="display:inline-flex;align-items:center;gap:.3rem;padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
        {% if wl_active_label == lbl.id %}background:{{ lbl.color }};color:white;border-color:{{ lbl.color }}
        {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
@@ -623,7 +623,7 @@ function _swFinish(finalMsg) {
     {% endif %}
     {% endfor %}
     <!-- Custom stocks toggle -->
-    <a href="javascript:void(0)" onclick="wlFilter('{% if wl_active_label %}label={{ wl_active_label }}&{% endif %}custom={% if wl_only_custom %}false{% else %}true{% endif %}{% if wl_active_exchange and wl_active_exchange != "ALL" %}&exchange={{ wl_active_exchange }}{% endif %}')"
+    <a href="javascript:void(0)" onclick="wlFilter('{% if wl_active_label %}label={{ wl_active_label }}&{% endif %}custom={% if wl_only_custom %}false{% else %}true{% endif %}{% if wl_active_exchange and wl_active_exchange != "ALL" %}&wl_exchange={{ wl_active_exchange }}{% endif %}')"
        class="btn-ghost" style="padding:.2rem .6rem;font-size:.7rem;height:auto;border-radius:999px;font-weight:600;margin-left:auto;
        {% if wl_only_custom %}background:var(--t-accent-bg);color:var(--t-accent);border-color:var(--t-accent-mid){% endif %}">
       Custom Stocks {% if wl_only_custom %}🟢{% else %}⚪{% endif %}
