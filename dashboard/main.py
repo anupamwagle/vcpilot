@@ -2316,6 +2316,7 @@ async def watchlist_rows(
     exchange: str = Query("ALL"),
     tier: str = Query(None),
     page: int = Query(1),
+    q: str = Query(None),
     db: Session = Depends(get_db)
 ):
     """
@@ -2325,21 +2326,29 @@ async def watchlist_rows(
     Cache is invalidated on add/remove/label/promote/screener-run. This means
     the first request after a screener run computes (~800 ms) and all subsequent
     loads for the same filter state are served in < 20 ms.
+
+    `q` — optional search term. When present this bypasses normal pagination
+    entirely and searches the ORG'S FULL watchlist (not just whatever pages
+    have been scrolled into view), ranking ticker matches (exact > prefix >
+    contains) above company-name matches. Not cached — search terms are
+    too varied to be worth caching and results need to be live.
     """
     if not _auth(request):
         return HTMLResponse("", status_code=403)
     org_id = request.session.get("organization_id")
 
     _tier_filter = (tier or "").upper() if tier in ("A", "B", "C") else None
+    _search_term = (q or "").strip().lower()
 
-    # ── Redis HTML cache (raw string, not JSON) ──────────────────────────────
+    # ── Redis HTML cache (raw string, not JSON) — skipped entirely for searches ──
     _af = (exchange or "ALL").upper()
     _lbl_key = str(label) if label is not None else "all"
     _tier_key = _tier_filter or "all"
     _html_ck = f"wl_rows:{org_id}:{_af}:{_lbl_key}:{_tier_key}:{page}"
-    _cached_html = cache.get_raw(_html_ck)
-    if _cached_html:
-        return HTMLResponse(_cached_html)
+    if not _search_term:
+        _cached_html = cache.get_raw(_html_ck)
+        if _cached_html:
+            return HTMLResponse(_cached_html)
 
     from app.models.signal import Watchlist, WatchlistStatus, WatchlistLabel
     from app.models.market import PriceBar, Stock
@@ -2351,28 +2360,51 @@ async def watchlist_rows(
     # Same paginated query as the main route
     _WL_PER_PAGE = 20
     af = (exchange or "ALL").upper()
-    q = db.query(Watchlist).options(joinedload(Watchlist.label)).filter(
+    wl_q = db.query(Watchlist).options(joinedload(Watchlist.label)).filter(
         Watchlist.status == WatchlistStatus.WATCHING,
         Watchlist.organization_id == org_id
     )
     if label is not None:
-        q = q.filter(Watchlist.label_id == label)
+        wl_q = wl_q.filter(Watchlist.label_id == label)
     if af == "ASX":
-        q = q.filter(Watchlist.exchange_key == "ASX")
+        wl_q = wl_q.filter(Watchlist.exchange_key == "ASX")
     elif af == "US":
-        q = q.filter(Watchlist.exchange_key.in_(["NYSE", "NASDAQ"]))
+        wl_q = wl_q.filter(Watchlist.exchange_key.in_(["NYSE", "NASDAQ"]))
     elif af == "CRYPTO":
         from sqlalchemy import or_ as _or_wlr
-        q = q.filter(_or_wlr(
+        wl_q = wl_q.filter(_or_wlr(
             Watchlist.asset_type == "CRYPTO",
             Watchlist.ticker.like("%-AUD"),
             Watchlist.ticker.like("%-USD"),
             Watchlist.ticker.like("%-USDT"),
         ))
 
-    total = q.count()
-    items = q.order_by(desc(Watchlist.created_at)).offset((page - 1) * _WL_PER_PAGE).limit(_WL_PER_PAGE).all()
-    has_more = (page * _WL_PER_PAGE) < total
+    if _search_term:
+        # Search the WHOLE filtered set (no offset/limit yet) — ticker match
+        # (covers both equities like "MIN.AX" and crypto like "BTC-USD") OR
+        # company-name match via a Stock subquery. Ranked in Python below so
+        # ticker hits always outrank company-name hits.
+        from sqlalchemy import or_ as _or_wlsearch
+        _name_match_tickers = db.query(Stock.ticker).filter(Stock.name.ilike(f"%{_search_term}%"))
+        wl_q = wl_q.filter(_or_wlsearch(
+            Watchlist.ticker.ilike(f"%{_search_term}%"),
+            Watchlist.ticker.in_(_name_match_tickers),
+        ))
+        total = wl_q.count()
+        _all_matches = wl_q.order_by(desc(Watchlist.created_at)).limit(200).all()
+
+        def _rank(ticker: str) -> int:
+            t = ticker.lower()
+            if t == _search_term: return 0
+            if t.startswith(_search_term): return 1
+            if _search_term in t: return 2
+            return 3  # matched only via company name
+        items = sorted(_all_matches, key=lambda w: _rank(w.ticker))
+        has_more = False
+    else:
+        total = wl_q.count()
+        items = wl_q.order_by(desc(Watchlist.created_at)).offset((page - 1) * _WL_PER_PAGE).limit(_WL_PER_PAGE).all()
+        has_more = (page * _WL_PER_PAGE) < total
 
     stock_names = get_cached_stock_names(db)
 
@@ -2504,8 +2536,10 @@ async def watchlist_rows(
         "total": total,
         "active_label": label,
     })
-    # Cache for 5 minutes; invalidated on add/remove/promote/screener-run
-    cache.set_raw(_html_ck, _html_out, expire_seconds=300)
+    # Cache for 5 minutes; invalidated on add/remove/promote/screener-run.
+    # Search results are never cached (see _search_term check above).
+    if not _search_term:
+        cache.set_raw(_html_ck, _html_out, expire_seconds=300)
     return HTMLResponse(_html_out)
 
 
