@@ -229,14 +229,15 @@
               {% set curr_v = p.current|float %}
               {% set rng = target_v - stop_v %}
               {% if rng > 0 %}
-                {% set ep = ((entry_v - stop_v) / rng * 100)|round(1) %}
+                {% set ep_raw = (entry_v - stop_v) / rng * 100 %}
+                {% set ep = [ep_raw, 100]|min if ep_raw > 0 else 0 %}
                 {% set cp_raw = (curr_v - stop_v) / rng * 100 %}
                 {% set cp = [cp_raw, 100]|min if cp_raw > 0 else 0 %}
                 <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
                   <div class="trade-bar-wrap" style="width:96px" title="Stop→Entry→Current→Target">
                     <div class="trade-bar-range" style="left:{{ ep }}%;width:{{ [cp - ep, 0]|max }}%"></div>
                     <span class="trade-dot" style="left:0%;color:var(--neg)" title="Stop ${{ '%.3f'|format(p.stop) }}"></span>
-                    <span class="trade-dot" style="left:{{ ep }}%;color:var(--t-accent)" title="Entry ${{ '%.3f'|format(p.entry) }}"></span>
+                    <span class="trade-dot" style="left:{{ [ep, 98]|min }}%;color:var(--t-accent)" title="Entry ${{ '%.3f'|format(p.entry) }}{% if ep_raw > 100 or ep_raw < 0 %} (stop has moved past entry — off natural range){% endif %}"></span>
                     <span class="trade-dot" style="left:{{ [cp, 98]|min }}%;color:var(--warn);width:.75rem;height:.75rem;z-index:2" title="Now ${{ '%.3f'|format(p.current) }}"></span>
                     <span class="trade-dot" style="left:100%;color:var(--pos)" title="T1 ${{ '%.3f'|format(p.target_1) }}"></span>
                   </div>
