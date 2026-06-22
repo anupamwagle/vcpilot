@@ -59,6 +59,7 @@ app.conf.update(
         "refresh-price-data": {
             "task": "app.tasks.screening.refresh_price_data",
             "schedule": crontab(hour=17, minute=0, day_of_week="mon-fri"),
+            "kwargs": {"exchange_key": "ASX"},
             "options": {"queue": "screening_equities"},
         },
 
@@ -71,6 +72,7 @@ app.conf.update(
         "refresh-price-data-morning": {
             "task": "app.tasks.screening.refresh_price_data",
             "schedule": crontab(hour=8, minute=0, day_of_week="mon-fri"),
+            "kwargs": {"exchange_key": "ASX"},
             "options": {"queue": "screening_equities"},
         },
 

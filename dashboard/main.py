@@ -897,22 +897,29 @@ async def home(
     total_pnl = total_realised_pnl + total_unrealised_pnl
 
     # ── Automated System Checks ──
+    # Scoped to ASX (exch="ASX") to match the exchange-specific lookups on
+    # /admin/health's Scheduled Tasks table (_lr helper) — these labels/frequencies
+    # ("5pm", "5:15pm", "5:30pm", "10am-4:12pm") are the ASX schedule specifically,
+    # so without this filter this widget could pick up a more-recent NYSE/CRYPTO
+    # audit row instead and disagree with the admin/health page for the same task.
     from app.models.audit import AuditLog, AuditAction
-    def get_latest_check(action, message_like=None):
+    def get_latest_check(action, message_like=None, exch=None):
         q = db.query(AuditLog).filter(
             or_(AuditLog.organization_id == org_id, AuditLog.organization_id == None),
             AuditLog.action == action
         )
         if message_like:
             q = q.filter(AuditLog.message.ilike(f"%{message_like}%"))
+        if exch:
+            q = q.filter(AuditLog.message.ilike(f"%{exch}%"))
         return q.order_by(desc(AuditLog.created_at)).first()
 
     latest_universe = get_latest_check(AuditAction.SYSTEM_STARTED, "Universe")
-    latest_price = get_latest_check(AuditAction.TASK_RUN, "Price data")
-    latest_regime = get_latest_check(AuditAction.MARKET_REGIME_CHANGE)
-    latest_screen = get_latest_check(AuditAction.SCREENER_RUN)
-    latest_entry = get_latest_check(AuditAction.TASK_RUN, "Entry check")
-    latest_exit = get_latest_check(AuditAction.TASK_RUN, "Exit check")
+    latest_price = get_latest_check(AuditAction.TASK_RUN, "Price data", exch="ASX")
+    latest_regime = get_latest_check(AuditAction.MARKET_REGIME_CHANGE, exch="ASX")
+    latest_screen = get_latest_check(AuditAction.SCREENER_RUN, exch="ASX")
+    latest_entry = get_latest_check(AuditAction.TASK_RUN, "Entry check", exch="ASX")
+    latest_exit = get_latest_check(AuditAction.TASK_RUN, "Exit check", exch="ASX")
 
     from app.models.config import SystemConfig
     cfg_last = db.query(SystemConfig).filter(SystemConfig.key == "last_market_regime", SystemConfig.organization_id == None).first()
