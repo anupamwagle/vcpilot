@@ -1546,11 +1546,25 @@ async def signals(request: Request, db: Session = Depends(get_db),
     ).first()
     _display_tz = _tz_row.value if _tz_row else "Australia/Sydney"
 
-    _recent_runs_q = db.query(AuditLog).filter(
+    _runs_filter = db.query(AuditLog).filter(
         AuditLog.action == AuditAction.SCREENER_RUN,
         AuditLog.organization_id == org_id,
         ~AuditLog.message.like("%started%"),
-    ).order_by(AuditLog.created_at.desc()).limit(3).all()
+    )
+    # Scope to the active exchange tab — message is always "[{exchange_key}] ...".
+    # Without this, the ASX tab was showing the last 3 runs org-wide (often all
+    # CRYPTO, since crypto screens 4x/day vs ASX's 1x/day).
+    if af == "ASX":
+        _runs_filter = _runs_filter.filter(AuditLog.message.like("[ASX]%"))
+    elif af == "US":
+        _runs_filter = _runs_filter.filter(or_(
+            AuditLog.message.like("[NYSE]%"),
+            AuditLog.message.like("[NASDAQ]%"),
+        ))
+    elif af == "CRYPTO":
+        _runs_filter = _runs_filter.filter(AuditLog.message.like("[CRYPTO%"))
+
+    _recent_runs_q = _runs_filter.order_by(AuditLog.created_at.desc()).limit(3).all()
 
     recent_screen_runs = []
     for _log in _recent_runs_q:
