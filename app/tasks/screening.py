@@ -1429,6 +1429,17 @@ def _get_or_create_sector_label(label_name: str, organization_id: int, db) -> in
         "Telco / Media":      "#0891b2",   # cyan-dark
         "Utilities":          "#65a30d",   # lime
         "Crypto Core":        "#06b6d4",   # cyan
+        "Layer 1":            "#2563eb",   # blue
+        "Layer 2":            "#7c3aed",   # violet
+        "Stablecoin":         "#16a34a",   # green
+        "Exchange Token":     "#0f766e",   # teal
+        "Meme Coin":          "#f59e0b",   # amber
+        "Gaming & Metaverse": "#db2777",   # pink
+        "AI & Data":          "#9333ea",   # purple
+        "Oracle & Infra":     "#0ea5e9",   # sky
+        "Privacy Coin":       "#475569",   # slate-dark
+        "Payments":           "#ca8a04",   # yellow-dark
+        "Altcoins":           "#6b7280",   # gray
     }
 
     try:
@@ -1484,16 +1495,21 @@ def _auto_assign_sector_label(ticker: str, wl_item, organization_id: int, db, fo
         return
 
     stock = db.query(Stock).filter(Stock.ticker == ticker).first()
-    sector   = (stock.sector   if stock else "") or ""
-    industry = (stock.industry if stock else "") or ""
+    sector     = (stock.sector     if stock else "") or ""
+    industry   = (stock.industry   if stock else "") or ""
+    asset_type = (stock.asset_type if stock else None)
 
-    # Deterministic ticker override is checked first inside
-    # infer_sector_label_for_ticker() — works even with blank sector/industry.
-    label_name = infer_sector_label_for_ticker(ticker, sector, industry)
+    # Deterministic ticker override (and crypto routing) is checked first
+    # inside infer_sector_label_for_ticker() — works even with blank
+    # sector/industry, and always resolves for crypto.
+    label_name = infer_sector_label_for_ticker(ticker, sector, industry, asset_type=asset_type)
 
-    # No override match and no sector/industry data yet — try a live, throttled
-    # fetch before giving up. Throttled to once per 24h per ticker so a bulk
-    # re-categorise run doesn't hammer yfinance for every miss.
+    # No match and no sector/industry data yet — try a live, throttled fetch
+    # before giving up. Throttled to once per 24h per ticker so a bulk
+    # re-categorise run doesn't hammer yfinance for every miss. Skipped for
+    # crypto entirely since infer_sector_label_for_ticker always resolves a
+    # crypto ticker via infer_crypto_category() and yfinance has no
+    # sector/industry data for crypto anyway.
     if not label_name and not sector and not industry and stock and stock.asset_type != "CRYPTO":
         from app.utils.cache import cache
         _throttle_key = f"sector_fetch_attempted:{ticker}"
@@ -1506,7 +1522,7 @@ def _auto_assign_sector_label(ticker: str, wl_item, organization_id: int, db, fo
                 if f_sector or f_industry:
                     stock.sector   = f_sector   or stock.sector
                     stock.industry = f_industry or stock.industry
-                    label_name = infer_sector_label_for_ticker(ticker, f_sector, f_industry)
+                    label_name = infer_sector_label_for_ticker(ticker, f_sector, f_industry, asset_type=asset_type)
             except Exception as e:
                 logger.warning(f"Live sector/industry fetch failed for {ticker}: {e}")
 
@@ -1979,3 +1995,66 @@ def recategorise_watchlist_labels(self, organization_id: int = None, force: bool
 
     except Exception as exc:
         logger.error(f"Watchlist re-categorisation failed: {exc}")
+
+
+@app.task(name="app.tasks.screening.refresh_asx_sector_data", bind=True)
+def refresh_asx_sector_data(self, organization_id: int = None):
+    """
+    Backfill Stock.sector / Stock.industry for every ASX-listed Stock row using
+    the ASX's own official GICS industry-group export (get_asx_gics_map()).
+
+    This is the data-layer half of the sector classification fix: it doesn't
+    touch any WatchlistLabel directly — it just makes sure Stock.industry
+    carries a precise GICS Level-2 string (e.g. "Banks", "Insurance",
+    "Real Estate Investment Trusts (REITs)") for the ASX universe, so that
+    the keyword matcher in infer_sector_label() — which previously had only
+    a blank or coarse Level-1 string ("Financials") to work with for most
+    ASX stocks — has something precise to match against.
+
+    Deliberately a separate, explicitly-invoked task (chained before
+    recategorise_watchlist_labels at the dashboard route level) rather than
+    embedded inside _auto_assign_sector_label or recategorise_watchlist_labels
+    themselves, so that those hot-path / unit-tested functions stay free of
+    live network calls.
+
+    Only fills in *blank* sector/industry — never overwrites a value already
+    populated by a more specific source (e.g. live yfinance fundamentals).
+    """
+    from app.models.market import Stock
+    from app.data.fetcher import get_asx_gics_map
+
+    updated = 0
+    total = 0
+    try:
+        gics_map = get_asx_gics_map()
+        if not gics_map:
+            logger.warning("refresh_asx_sector_data: GICS map empty — ASX fetch failed or unavailable")
+            return
+
+        with get_db() as db:
+            stocks = db.query(Stock).filter(Stock.exchange_key == "ASX").all()
+            total = len(stocks)
+            for stock in stocks:
+                gics_value = gics_map.get(stock.ticker)
+                if not gics_value:
+                    continue
+                changed = False
+                if not (stock.sector or "").strip():
+                    stock.sector = gics_value
+                    changed = True
+                if not (stock.industry or "").strip():
+                    stock.industry = gics_value
+                    changed = True
+                if changed:
+                    updated += 1
+
+            db.add(AuditLog(
+                action=AuditAction.TASK_RUN,
+                organization_id=organization_id,
+                message=f"ASX sector data refreshed from GICS export: {updated}/{total} stocks updated",
+            ))
+
+        logger.info(f"refresh_asx_sector_data: updated {updated}/{total} ASX stocks")
+
+    except Exception as exc:
+        logger.error(f"refresh_asx_sector_data failed: {exc}")

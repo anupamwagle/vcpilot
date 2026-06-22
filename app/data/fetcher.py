@@ -613,8 +613,8 @@ _SECTOR_LABEL_RULES: list[tuple[list[str], str | None, str]] = [
     (["energy"],                        None,           "Energy"),
     # ── Healthcare ──────────────────────────────────────────────────────────
     (["biotechnology", "biotech"],      None,           "Biotech"),
-    (["pharmaceutical", "pharma"],      None,           "Healthcare / Pharma"),
-    (["medical", "hospital", "health"], None,           "Healthcare / Pharma"),
+    (["pharmaceutical", "pharma", "drug manufactur"], None, "Healthcare / Pharma"),
+    (["medical", "hospital", "health", "diagnostic"], None, "Healthcare / Pharma"),
     # ── Technology ──────────────────────────────────────────────────────────
     (["fintech", "payment", "neobank", "financial technology", "financial tech"], None, "FinTech"),
     (["software", "saas", "cloud"],     None,           "Technology"),
@@ -623,22 +623,57 @@ _SECTOR_LABEL_RULES: list[tuple[list[str], str | None, str]] = [
     # ── Financials ──────────────────────────────────────────────────────────
     (["bank", "banking"],               None,           "Banks"),
     (["insurance"],                     None,           "Insurance"),
-    (["asset management", "fund management"], None,     "Financials"),
+    (["asset management", "fund management", "capital markets"], None, "Financials"),
     (["financial"],                     None,           "Financials"),
     # ── Real Estate ─────────────────────────────────────────────────────────
     (["reit", "real estate"],           None,           "Real Estate (REIT)"),
     # ── Consumer ────────────────────────────────────────────────────────────
-    (["retail", "consumer", "food", "beverage"], None,  "Consumer"),
+    (["retail", "consumer", "food", "beverage", "grocery", "auto manufactur", "auto parts"], None, "Consumer"),
     # ── Industrials ─────────────────────────────────────────────────────────
-    (["industrial", "transport", "logistics"], None,    "Industrials"),
-    (["construction", "engineering"],   None,           "Industrials"),
+    (["industrial", "transport", "logistics", "railroad", "trucking"], None, "Industrials"),
+    (["construction", "engineering", "aerospace", "defense", "defence"], None, "Industrials"),
     # ── Telecoms / Media ────────────────────────────────────────────────────
-    (["telecom", "telco", "communication", "media"], None, "Telco / Media"),
+    (["telecom", "telco", "communication", "media", "entertainment"], None, "Telco / Media"),
     # ── Utilities ───────────────────────────────────────────────────────────
     (["utility", "utilities", "water", "electricity"], None, "Utilities"),
+    # ── Materials catch-all for chemicals/agriculture (no dedicated label) ──
+    (["chemical", "agricultural input"], None,          "Mining (General)"),
     # ── Crypto ──────────────────────────────────────────────────────────────
     (["crypto", "digital asset", "defi"], None,         "Crypto Core"),
 ]
+
+# ---------------------------------------------------------------------------
+# Last-resort fallback: broad top-level sector name → label.
+#
+# Used only by infer_sector_label_for_ticker() (never by the pure
+# infer_sector_label() above, which must keep returning None for unrecognised
+# input — several unit tests assert that directly). This guarantees every
+# equity that has AT LEAST a recognised broad sector string (Yahoo's 11
+# standard sectors, or GICS Level-1) gets a sensible label even when the
+# industry sub-classification is missing, blank, or doesn't match any
+# specific keyword above — which is the common case for small/mid-cap ASX
+# stocks and for any ticker where only `sector` was ever populated.
+# ---------------------------------------------------------------------------
+_SECTOR_FALLBACK_BY_BROAD_SECTOR: dict[str, str] = {
+    "financial services":   "Financials",
+    "financials":           "Financials",
+    "technology":           "Technology",
+    "information technology": "Technology",
+    "healthcare":           "Healthcare / Pharma",
+    "health care":          "Healthcare / Pharma",
+    "consumer cyclical":    "Consumer",
+    "consumer discretionary": "Consumer",
+    "consumer defensive":   "Consumer",
+    "consumer staples":     "Consumer",
+    "industrials":          "Industrials",
+    "energy":               "Energy",
+    "utilities":            "Utilities",
+    "real estate":          "Real Estate (REIT)",
+    "basic materials":      "Mining (General)",
+    "materials":            "Mining (General)",
+    "communication services": "Telco / Media",
+    "telecommunications":   "Telco / Media",
+}
 
 # ---------------------------------------------------------------------------
 # Deterministic ASX ticker → sector-label overrides.
@@ -729,20 +764,162 @@ ASX_TICKER_SECTOR_OVERRIDES: dict[str, str] = {
 }
 
 
-def infer_sector_label_for_ticker(ticker: str, sector: str, industry: str) -> str | None:
+def get_asx_gics_map() -> dict[str, str]:
     """
-    Map a ticker (+ optional sector/industry) to a watchlist label name.
+    Ticker -> GICS industry-group string for every ASX-listed company, sourced
+    from the ASX's own CSV export (get_asx_all_listed()).
 
-    Checks the deterministic ASX_TICKER_SECTOR_OVERRIDES map first (works even
-    when sector/industry are completely blank), then falls back to the
-    keyword-based infer_sector_label() using whatever sector/industry data is
-    available.
+    Why this exists: the Wikipedia ASX200/ASX300 tables used by the default
+    universe refresh only carry the broad GICS Level-1 *sector* (e.g.
+    "Financials" for every bank, insurer, and fund manager alike) and never
+    populate an `industry` sub-group — so keyword inference can't tell a bank
+    from an insurer for the vast majority of ASX stocks. The ASX's own CSV
+    gives the GICS *industry group* (Level 2 — e.g. "Banks", "Insurance",
+    "Real Estate Investment Trusts (REITs)", "Gold") for the FULL listed
+    universe (~2,200 companies) in a single free request, with no need to
+    hand-maintain a ticker override list. Cached 24h since ASX publishes it
+    once daily.
     """
+    cache_key = "asx_gics_industry_map"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
+    try:
+        listed = get_asx_all_listed()
+        gics_map = {row["ticker"]: row["sector"] for row in listed if row.get("sector")}
+        if gics_map:
+            cache.set(cache_key, gics_map, expire_seconds=86400)
+        return gics_map
+    except Exception as e:
+        logger.warning(f"get_asx_gics_map failed: {e}")
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Crypto category classification.
+#
+# yfinance carries no usable sector/industry field for crypto tickers, so the
+# equity-oriented inference above (keyword matching, GICS lookup) never has
+# anything to work with for coins — in practice this meant crypto watchlist
+# items NEVER got auto-labelled. This static map classifies the most
+# commonly-held coins (superset overlaps TOP_CRYPTO_SYMBOLS) into recognisable
+# categories. Anything not in the map falls back to "Altcoins", so every
+# crypto watchlist item always gets a usable label — never blank.
+# ---------------------------------------------------------------------------
+CRYPTO_CATEGORY_MAP: dict[str, str] = {
+    # ── Majors ────────────────────────────────────────────────────────────
+    "BTC": "Crypto Core", "ETH": "Crypto Core",
+    # ── Stablecoins ───────────────────────────────────────────────────────
+    "USDT": "Stablecoin", "USDC": "Stablecoin", "DAI": "Stablecoin", "BUSD": "Stablecoin",
+    "TUSD": "Stablecoin", "FRAX": "Stablecoin", "GUSD": "Stablecoin", "PYUSD": "Stablecoin",
+    "USDP": "Stablecoin", "LUSD": "Stablecoin", "RLUSD": "Stablecoin", "PAXG": "Stablecoin",
+    "USUAL": "Stablecoin",
+    # ── Layer 1 ───────────────────────────────────────────────────────────
+    "SOL": "Layer 1", "ADA": "Layer 1", "AVAX": "Layer 1", "DOT": "Layer 1", "ATOM": "Layer 1",
+    "NEAR": "Layer 1", "ALGO": "Layer 1", "FTM": "Layer 1", "EGLD": "Layer 1", "APT": "Layer 1",
+    "SUI": "Layer 1", "SEI": "Layer 1", "TON": "Layer 1", "ICP": "Layer 1", "HBAR": "Layer 1",
+    "KAS": "Layer 1", "TRX": "Layer 1", "XLM": "Layer 1", "XTZ": "Layer 1", "FLOW": "Layer 1",
+    "ETC": "Layer 1", "QTUM": "Layer 1", "WAVES": "Layer 1", "MINA": "Layer 1", "CELO": "Layer 1",
+    "ROSE": "Layer 1", "KAVA": "Layer 1", "ONE": "Layer 1", "IOTA": "Layer 1", "VET": "Layer 1",
+    "THETA": "Layer 1", "CFX": "Layer 1", "KDA": "Layer 1", "ASTR": "Layer 1", "CORE": "Layer 1",
+    "INJ": "Layer 1", "TIA": "Layer 1", "ZIL": "Layer 1", "XNO": "Layer 1", "RON": "Layer 1",
+    "KAIA": "Layer 1",
+    # ── Layer 2 / scaling ─────────────────────────────────────────────────
+    "MATIC": "Layer 2", "POL": "Layer 2", "ARB": "Layer 2", "OP": "Layer 2", "IMX": "Layer 2",
+    "STRK": "Layer 2", "MNT": "Layer 2", "METIS": "Layer 2", "ZK": "Layer 2", "SKL": "Layer 2",
+    "GLMR": "Layer 2", "MOVR": "Layer 2", "BEAM": "Layer 2", "MANTA": "Layer 2", "SAGA": "Layer 2",
+    "DYM": "Layer 2",
+    # ── DeFi ──────────────────────────────────────────────────────────────
+    "UNI": "DeFi", "AAVE": "DeFi", "MKR": "DeFi", "CRV": "DeFi", "SUSHI": "DeFi", "COMP": "DeFi",
+    "SNX": "DeFi", "LDO": "DeFi", "CAKE": "DeFi", "1INCH": "DeFi", "BAL": "DeFi", "YFI": "DeFi",
+    "DYDX": "DeFi", "GMX": "DeFi", "RUNE": "DeFi", "OSMO": "DeFi", "JST": "DeFi", "FXS": "DeFi",
+    "PERP": "DeFi", "BNT": "DeFi", "NEXO": "DeFi", "STG": "DeFi", "ZRX": "DeFi", "REN": "DeFi",
+    "BLUR": "DeFi", "JUP": "DeFi", "ENA": "DeFi", "PENDLE": "DeFi", "ETHFI": "DeFi",
+    "BADGER": "DeFi", "AUCTION": "DeFi", "GNO": "DeFi", "WOO": "DeFi", "ALPHA": "DeFi",
+    # ── Oracle / data infrastructure ──────────────────────────────────────
+    "LINK": "Oracle & Infra", "BAND": "Oracle & Infra", "API3": "Oracle & Infra",
+    "PYTH": "Oracle & Infra", "TRB": "Oracle & Infra", "GRT": "Oracle & Infra",
+    # ── Exchange tokens ───────────────────────────────────────────────────
+    "BNB": "Exchange Token", "OKB": "Exchange Token", "CRO": "Exchange Token",
+    "GT": "Exchange Token", "KCS": "Exchange Token", "LEO": "Exchange Token",
+    # ── Meme coins ────────────────────────────────────────────────────────
+    "DOGE": "Meme Coin", "SHIB": "Meme Coin", "PEPE": "Meme Coin", "FLOKI": "Meme Coin",
+    "BONK": "Meme Coin", "WIF": "Meme Coin", "PNUT": "Meme Coin", "POPCAT": "Meme Coin",
+    "MOODENG": "Meme Coin", "NEIRO": "Meme Coin", "BOME": "Meme Coin", "MEW": "Meme Coin",
+    "MOTHER": "Meme Coin", "WEN": "Meme Coin", "DEGEN": "Meme Coin", "PONKE": "Meme Coin",
+    "BRETT": "Meme Coin", "TURBO": "Meme Coin", "MOG": "Meme Coin", "GIGA": "Meme Coin",
+    "SLERF": "Meme Coin", "FARTCOIN": "Meme Coin", "MELANIA": "Meme Coin", "TRUMP": "Meme Coin",
+    "PENGU": "Meme Coin", "DOGS": "Meme Coin", "HMSTR": "Meme Coin", "CATI": "Meme Coin",
+    # ── Gaming & Metaverse ────────────────────────────────────────────────
+    "SAND": "Gaming & Metaverse", "MANA": "Gaming & Metaverse", "AXS": "Gaming & Metaverse",
+    "GALA": "Gaming & Metaverse", "ENJ": "Gaming & Metaverse", "ILV": "Gaming & Metaverse",
+    "APE": "Gaming & Metaverse", "CHZ": "Gaming & Metaverse", "ALICE": "Gaming & Metaverse",
+    "HIGH": "Gaming & Metaverse", "VOXEL": "Gaming & Metaverse", "GHST": "Gaming & Metaverse",
+    "TLM": "Gaming & Metaverse", "GMT": "Gaming & Metaverse", "MAGIC": "Gaming & Metaverse",
+    "PIXEL": "Gaming & Metaverse", "PORTAL": "Gaming & Metaverse", "SLP": "Gaming & Metaverse",
+    # ── AI & Data ─────────────────────────────────────────────────────────
+    "FET": "AI & Data", "AGIX": "AI & Data", "RENDER": "AI & Data", "OCEAN": "AI & Data",
+    "TAO": "AI & Data", "WLD": "AI & Data", "AR": "AI & Data", "NMR": "AI & Data",
+    "RLC": "AI & Data", "ARKM": "AI & Data",
+    # ── Privacy ───────────────────────────────────────────────────────────
+    "XMR": "Privacy Coin", "ZEC": "Privacy Coin", "SCRT": "Privacy Coin",
+    # ── Payments ──────────────────────────────────────────────────────────
+    "XRP": "Payments", "LTC": "Payments", "BCH": "Payments", "XEC": "Payments",
+    "DGB": "Payments",
+}
+
+
+def infer_crypto_category(ticker: str) -> str:
+    """
+    Map a crypto ticker to a category label. Always returns a usable label —
+    falls back to 'Altcoins' for anything not in CRYPTO_CATEGORY_MAP, since
+    crypto tickers carry no sector/industry data to fall back on otherwise.
+    """
+    base = (ticker or "").upper()
+    for suffix in ("-AUD", "-USDT", "-USD", "-BTC", "-ETH"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return CRYPTO_CATEGORY_MAP.get(base, "Altcoins")
+
+
+_CRYPTO_TICKER_SUFFIXES = ("-AUD", "-USD", "-USDT", "-BTC", "-ETH")
+
+
+def infer_sector_label_for_ticker(ticker: str, sector: str, industry: str, asset_type: str | None = None) -> str | None:
+    """
+    Map a ticker (+ optional sector/industry/asset_type) to a watchlist label name.
+
+    Resolution order:
+      1. Crypto — detected via explicit asset_type="CRYPTO" or a recognised
+         crypto ticker suffix (-USD/-AUD/-USDT/-BTC/-ETH). Routed to
+         infer_crypto_category(), which always returns a label (never None).
+      2. ASX_TICKER_SECTOR_OVERRIDES — deterministic ticker map, works even
+         when sector/industry are completely blank. Covers well-known
+         ASX blue/mid-caps where commodity-level granularity (Gold vs
+         Lithium vs Iron Ore) matters and GICS Level-2 data alone can't
+         distinguish them.
+      3. Keyword-based infer_sector_label() using whatever sector/industry
+         text is available (reliable for US/NYSE/NASDAQ tickers, where
+         yfinance populates both fields; also covers ASX tickers once
+         refresh_asx_sector_data has backfilled Stock.industry from the
+         ASX's GICS export).
+      4. Broad-sector fallback — guarantees a label whenever at least a
+         top-level sector string is recognised, even with no industry match.
+    """
+    if asset_type == "CRYPTO" or (ticker or "").upper().endswith(_CRYPTO_TICKER_SUFFIXES):
+        return infer_crypto_category(ticker)
+
     base_code = (ticker or "").split(".")[0].split("-")[0].upper()
     override = ASX_TICKER_SECTOR_OVERRIDES.get(base_code)
     if override:
         return override
-    return infer_sector_label(sector, industry)
+
+    label = infer_sector_label(sector, industry)
+    if label:
+        return label
+
+    return _SECTOR_FALLBACK_BY_BROAD_SECTOR.get((sector or "").strip().lower())
 
 
 def infer_sector_label(sector: str, industry: str) -> str | None:

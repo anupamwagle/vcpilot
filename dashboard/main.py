@@ -3227,13 +3227,26 @@ async def action_refresh_universe(request: Request, scope: str = Form(None)):
 
 @app.post("/action/recategorise-labels")
 async def action_recategorise_labels(request: Request, force: str = Form("0")):
-    """Bulk-assign sector labels to all unlabelled watchlist items."""
+    """
+    Bulk-assign sector labels to watchlist items (all exchanges).
+
+    Chains refresh_asx_sector_data first so ASX stocks get a precise GICS
+    industry-group string backfilled from the ASX's own export before the
+    keyword/override/crypto classifier in recategorise_watchlist_labels runs
+    — without this, most ASX stocks only ever carry the coarse Level-1
+    sector ("Financials") and can't be distinguished (Banks vs Insurance vs
+    Fund Managers etc.).
+    """
     if not _auth(request):
         return RedirectResponse("/login", 302)
     organization_id = request.session.get("organization_id")
-    from app.tasks.screening import recategorise_watchlist_labels
+    from celery import chain as _chain
+    from app.tasks.screening import recategorise_watchlist_labels, refresh_asx_sector_data
     try:
-        recategorise_watchlist_labels.delay(organization_id=organization_id, force=(force == "1"))
+        _chain(
+            refresh_asx_sector_data.si(organization_id=organization_id),
+            recategorise_watchlist_labels.si(organization_id=organization_id, force=(force == "1")),
+        ).delay()
     except Exception:
         pass
     return RedirectResponse("/admin/health?msg=recategorise", 302)

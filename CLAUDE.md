@@ -232,19 +232,27 @@ It does NOT start with `docker compose up`. This is intentional — prevents acc
 
 Config seeded in `seed_config.py` and `migrate_saas.py`. Admin Config shows a smart select dropdown. Health page has "🌏 Refresh ASX Universe" button with scope selector.
 
-### 33. Watchlist Sector Label Auto-Categorisation
-`infer_sector_label(sector, industry) -> str | None` in `app/data/fetcher.py` maps GICS sector/industry strings to 24 label categories using priority-ordered keyword matching.
+### 33. Watchlist Sector Label Auto-Categorisation (multi-exchange — ASX, US, crypto)
+Classification is layered so every exchange resolves to a usable label, not just the ~80 hand-picked ASX tickers the old override-only approach covered:
+
+1. **Crypto** — `infer_crypto_category(ticker)` in `app/data/fetcher.py` maps the ticker base symbol via the static `CRYPTO_CATEGORY_MAP` (~150 coins across Crypto Core, Layer 1, Layer 2, DeFi, Stablecoin, Exchange Token, Meme Coin, Gaming & Metaverse, AI & Data, Oracle & Infra, Privacy Coin, Payments) and **always** returns a label — unmapped coins fall back to `"Altcoins"`. Crypto never has yfinance sector/industry data, so this path bypasses keyword matching entirely. Routed via `asset_type == "CRYPTO"` or a recognised ticker suffix (`-USD`/`-AUD`/`-USDT`/`-BTC`/`-ETH`).
+2. **ASX ticker overrides** — `ASX_TICKER_SECTOR_OVERRIDES` dict, ~80 well-known tickers (e.g. `CBA`/`WBC`/`ANZ`/`NAB` → `Banks`) for cases needing commodity-level granularity (Gold vs Lithium vs Iron Ore) that GICS alone can't always capture. Checked before keyword matching, works even with blank sector/industry.
+3. **Keyword matching** — `infer_sector_label(sector, industry)` matches `Stock.sector`/`Stock.industry` text against `_SECTOR_LABEL_RULES` (priority-ordered keyword list). Reliable for US/NYSE/NASDAQ (yfinance populates both fields directly).
+4. **ASX GICS backfill** — `get_asx_gics_map()` fetches the ASX's own official GICS *industry-group* CSV (`get_asx_all_listed()`) — far more precise than Wikipedia's ASX200/300 table, which only carries the broad Level-1 *sector* (e.g. every bank, insurer, and fund manager all just say `"Financials"`). The `refresh_asx_sector_data` Celery task backfills blank `Stock.sector`/`Stock.industry` from this map for the full ASX universe so step 3 has something precise to match. Deliberately **not** called inline from `infer_sector_label_for_ticker()` or `_auto_assign_sector_label()` — keeps those hot-path/unit-tested functions network-free. Instead it's chained ahead of the bulk recategorise task (see below).
+5. **Broad-sector fallback** — `_SECTOR_FALLBACK_BY_BROAD_SECTOR` maps the 11 GICS Level-1 sector names (e.g. `"Financials"`, `"Technology"`) straight to a label as a last resort, so even a stock with no industry match still gets a sensible label as long as the top-level sector is known. Applied only inside `infer_sector_label_for_ticker()`, after keyword matching fails — `infer_sector_label()` itself still returns `None` for unrecognised input (preserved for test compatibility).
+
+`infer_sector_label_for_ticker(ticker, sector, industry, asset_type=None)` in `app/data/fetcher.py` is the single entry point that runs all of the above in order (crypto → override → keyword → GICS-informed keyword → broad fallback).
 
 **Auto-assignment flow:**
-- `_upsert_watchlist()` — calls `_auto_assign_sector_label()` on every screener add/update (only fills unlabelled items)
+- `_upsert_watchlist()` — calls `_auto_assign_sector_label()` on every screener add/update (only fills unlabelled items), passing `stock.asset_type` through
 - `screen_single_ticker()` — calls `_auto_assign_sector_label()` when no explicit `label_id` provided by user
 - `recategorise_watchlist_labels(organization_id, force)` Celery task — bulk-assigns labels to existing watchlist (force=True overwrites all)
 
-**Label priority:** Only fills blank `label_id`. User-set labels (Favourites, High Priority, VCP Forming, Under Review) are preserved unless `force=True`.
+**Label priority:** Only fills blank `label_id`. User-set labels (Favourites, High Priority, VCP Forming, Under Review) and the crypto category labels reused as defaults (Crypto Core, DeFi, Altcoins, Crypto Watch) are preserved unless `force=True`.
 
-`_get_or_create_sector_label(name, org_id, db)` — looks up label by name, creates with preset colour if missing (sort_order=100).
+`_get_or_create_sector_label(name, org_id, db)` — looks up label by name, creates with preset colour if missing (sort_order=100). Colour map now covers crypto categories too (Layer 1, Layer 2, Stablecoin, Exchange Token, Meme Coin, Gaming & Metaverse, AI & Data, Oracle & Infra, Privacy Coin, Payments).
 
-19 ASX sector labels seeded per org in `migrate_saas.py` at sort_order 20–38. Health page has "🏷 Re-categorise Labels" button.
+19 ASX sector labels seeded per org in `migrate_saas.py` at sort_order 20–38. Health page "🏷 Re-categorise Labels" button now chains `refresh_asx_sector_data` → `recategorise_watchlist_labels` via `celery.chain` (see `/action/recategorise-labels` in `dashboard/main.py`), so every run backfills ASX GICS data before re-labelling.
 
 ### 29. Crypto Universe Bootstrap
 There is no scheduled `refresh_universe` equivalent for crypto — unlike ASX which scrapes Wikipedia weekly. Instead:
