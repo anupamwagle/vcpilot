@@ -178,7 +178,7 @@
               {% endfor %}
             </td>
             <td class="p-3 text-xs font-mono" style="color:var(--text-subtle)">
-              {{ u.created_at.strftime('%Y-%m-%d') if u.created_at else 'N/A' }}
+              {{ u.created_at|friendly_date if u.created_at else 'N/A' }}
             </td>
             <td class="p-3 space-y-2">
               <!-- Edit/Manage role drop form -->

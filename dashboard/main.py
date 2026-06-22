@@ -246,10 +246,37 @@ def _worker_status(heartbeat_str: str) -> str:
         return "starting"
 
 
+def _ordinal(n: int) -> str:
+    """1 -> '1st', 2 -> '2nd', 3 -> '3rd', 4 -> '4th', 11/12/13 -> 'th', 21 -> '21st', etc."""
+    n = int(n)
+    if 11 <= (n % 100) <= 13:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def _friendly_time_str(dt) -> str:
+    """'2:40pm' — 12-hour, no leading zero, lowercase am/pm, no space."""
+    hour12 = dt.strftime("%I").lstrip("0") or "12"
+    return f"{hour12}:{dt.strftime('%M')}{dt.strftime('%p').lower()}"
+
+
+def _friendly_date_str(d) -> str:
+    """'22nd June 2026' — ordinal day, full month name, full year."""
+    return f"{_ordinal(d.day)} {d.strftime('%B')} {d.year}"
+
+
+def _friendly_dt_str(dt) -> str:
+    """'2:40pm 22nd June 2026'."""
+    return f"{_friendly_time_str(dt)} {_friendly_date_str(dt)}"
+
+
 def _fmt_dt(utc_iso: str, tz_name: str = "UTC") -> str:
     """
-    Convert a stored UTC ISO timestamp string to a human-readable string
-    in the given IANA timezone (e.g. 'Australia/Sydney').
+    Convert a stored UTC ISO timestamp string to a friendly, human-readable
+    string in the given IANA timezone (e.g. 'Australia/Sydney'), e.g.
+    '2:40pm 22nd June 2026'.
     Returns empty string if input is blank or unparseable.
     """
     if not utc_iso or not utc_iso.strip():
@@ -260,10 +287,59 @@ def _fmt_dt(utc_iso: str, tz_name: str = "UTC") -> str:
         naive = datetime.fromisoformat(utc_iso.strip()[:19])
         utc_dt = pytz.utc.localize(naive)
         local_dt = utc_dt.astimezone(tz)
-        abbr = local_dt.strftime("%Z")   # e.g. AEST, UTC
-        return local_dt.strftime(f"%Y-%m-%d %H:%M {abbr}")
+        return _friendly_dt_str(local_dt)
     except Exception:
         return utc_iso[:16]              # fall back to raw truncated string
+
+
+def _fmt_date(date_val) -> str:
+    """
+    Friendly date-only formatter, e.g. '22nd June 2026'.
+    Accepts a date/datetime object, an ISO date string ('2026-06-22'), or
+    None/blank (returns '').
+    """
+    if date_val is None or date_val == "":
+        return ""
+    try:
+        if isinstance(date_val, str):
+            d = datetime.fromisoformat(date_val.strip()[:10]).date()
+        elif isinstance(date_val, datetime):
+            d = date_val.date()
+        else:
+            d = date_val  # already a date object
+        return _friendly_date_str(d)
+    except Exception:
+        return str(date_val)
+
+
+def _jinja_friendly_date(raw) -> str:
+    """Jinja filter for templates that hold raw date/datetime objects directly (no tz conversion)."""
+    return _fmt_date(raw)
+
+
+def _jinja_friendly_time(raw) -> str:
+    """Jinja filter: time-only friendly format from a raw datetime object (no tz conversion)."""
+    if not raw:
+        return ""
+    try:
+        return _friendly_time_str(raw)
+    except Exception:
+        return str(raw)
+
+
+def _jinja_friendly_dt(raw) -> str:
+    """Jinja filter: full friendly datetime from a raw datetime object (no tz conversion)."""
+    if not raw:
+        return ""
+    try:
+        return _friendly_dt_str(raw)
+    except Exception:
+        return str(raw)
+
+
+templates.env.filters["friendly_date"] = _jinja_friendly_date
+templates.env.filters["friendly_time"] = _jinja_friendly_time
+templates.env.filters["friendly_dt"] = _jinja_friendly_dt
 
 
 # ---------------------------------------------------------------------------
@@ -953,7 +1029,7 @@ async def home(
             "rs_rating": float(bar.rs_rating) if bar and bar.rs_rating else None,
             "pct_from_52w_high": float(bar.pct_from_52w_high) if bar and bar.pct_from_52w_high else None,
             "atr_14": float(bar.atr_14) if bar and bar.atr_14 else None,
-            "bar_date": str(bar.date) if bar else "",
+            "bar_date": _fmt_date(bar.date) if bar else "",
             "setup_tier": _h_tier,
         })
 
@@ -1179,7 +1255,7 @@ async def positions(request: Request, db: Session = Depends(get_db),
             "pnl_pct": round((curr - entry) / entry * 100, 2) if entry else 0,
             "pnl_aud": round((curr - entry) * qty, 2),
             "days": (get_current_date() - p.entry_date).days if p.entry_date else 0,
-            "entry_date": str(p.entry_date),
+            "entry_date": _fmt_date(p.entry_date),
             "is_paper": p.is_paper,
             "exit_checks": exit_checks,
             "setup_tier": _p_tier,
@@ -1204,7 +1280,7 @@ async def positions(request: Request, db: Session = Depends(get_db),
         "currency":      getattr(t, "currency", "AUD") or "AUD",
         "flag_emoji":    flag_map.get(getattr(t, "exchange_key", "ASX") or "ASX", ""),
         "company_name": stock_names.get(t.ticker, ""),
-        "entry_date": str(t.entry_date or ""), "exit_date": str(t.exit_date or ""),
+        "entry_date": _fmt_date(t.entry_date) if t.entry_date else "", "exit_date": _fmt_date(t.exit_date) if t.exit_date else "",
         "days": t.hold_days or 0,
         "entry": float(t.entry_price or 0), "exit": float(t.exit_price or 0),
         "pnl_pct": round(float(t.pnl_pct or 0) * 100, 2),
@@ -1570,22 +1646,27 @@ async def signals(request: Request, db: Session = Depends(get_db),
     for _log in _recent_runs_q:
         _msg = _log.message or ""
         _m_sig  = re.search(r"(\d+)\s+signals?", _msg)
-        _m_wl   = re.search(r"(\d+)\s+watchlist", _msg)
+        # Matches both the new wording ("N added/confirmed to watchlist this
+        # run") and the old wording ("N watchlist") for any historical rows
+        # already in the audit log from before this text was clarified.
+        _m_wl   = re.search(r"(\d+)\s+(?:added/confirmed to watchlist this run|watchlist)", _msg)
         _m_skip = re.search(r"(\d+)\s+skipped", _msg)
         _m_exch = re.match(r"\[([^\]]+)\]", _msg)
         recent_screen_runs.append({
-            "time":      _fmt_dt(str(_log.created_at), _display_tz),
-            "exchange":  _m_exch.group(1) if _m_exch else "",
-            "signals":   int(_m_sig.group(1)) if _m_sig else 0,
-            "watchlist": int(_m_wl.group(1)) if _m_wl else 0,
-            "skipped":   int(_m_skip.group(1)) if _m_skip else None,
-            "message":   _msg,
+            "time":           _fmt_dt(str(_log.created_at), _display_tz),
+            "exchange":       _m_exch.group(1) if _m_exch else "",
+            "signals":        int(_m_sig.group(1)) if _m_sig else 0,
+            # Per-run delta: tickers that qualified for the watchlist during
+            # THIS run — not the total currently sitting on the watchlist.
+            "watchlist_added": int(_m_wl.group(1)) if _m_wl else 0,
+            "skipped":        int(_m_skip.group(1)) if _m_skip else None,
+            "message":        _msg,
         })
 
     ctx.update({
         "signals":             [],   # skeleton — cards loaded via /signals/items
         "has_signals":         has_signals,
-        "signal_date":         str(get_current_date()),
+        "signal_date":         _fmt_date(get_current_date()),
         "recent_screen_runs":  recent_screen_runs,
         "pending_count":       pending_count,
         "triggered_count":     triggered_count,
@@ -1925,7 +2006,7 @@ async def signals_items(request: Request, db: Session = Depends(get_db),
             "size": s.suggested_size_shares or 0,
             "risk_aud": float(s.risk_per_trade_aud or 0),
             "status": s.status.value,
-            "sig_date": str(s.signal_date) if s.signal_date else "",
+            "sig_date": _fmt_date(s.signal_date) if s.signal_date else "",
             "rules_passed": passed,
             "rules_total": len(rr),
             "rule_results": _enrich_rule_results(s.ticker, rr, db, target_date=s.signal_date, overrides=overrides, _bar_data=_sig_bar_lookup.get(s.ticker)),
@@ -1955,7 +2036,7 @@ async def signals_items(request: Request, db: Session = Depends(get_db),
     _html_out = templates.get_template("components/signals_cards.html").render({
         "request": request,
         "signals": sig_data,
-        "signal_date": str(get_current_date()),
+        "signal_date": _fmt_date(get_current_date()),
         "favourited_tickers": favourited_tickers,
         "path": "/signals",
     })
@@ -2532,7 +2613,7 @@ async def watchlist_rows(
                 "ma_150": float(_b.ma_150 or 0), "ma_200": float(_b.ma_200 or 0),
                 "high_52w": float(_b.high_52w or 0), "low_52w": float(_b.low_52w or 0),
                 "rs_rating": float(_b.rs_rating or 0),
-                "bar_date": str(_b.date) if _b.date else None, "live_price": False,
+                "bar_date": _fmt_date(_b.date) if _b.date else None, "live_price": False,
             } if _b else {}
         bar_data = dict(_eod) if _eod else {}
         # Overlay live price for crypto (preserves MA/RS/52W from EOD)
@@ -2569,7 +2650,7 @@ async def watchlist_rows(
             "exchange_key": getattr(w, "exchange_key", "ASX") or "ASX",
             "asset_type":   ("CRYPTO" if w.ticker.endswith(("-AUD","-USD","-USDT")) else getattr(w, "asset_type", "EQUITY") or "EQUITY"),
             "company_name": company_name,
-            "added": str(w.added_date),
+            "added": _fmt_date(w.added_date),
             "by": w.added_by,
             "notes": w.notes or "",
             "stats": stats_data,
@@ -3360,7 +3441,7 @@ async def _trader_data_inner(request: Request, db):
             if found:
                 display_tz_obj = pytz.timezone(tz_name)
                 candidate_display = candidate.astimezone(display_tz_obj)
-                return candidate_display.strftime("%Y-%m-%d %H:%M %Z")
+                return _friendly_dt_str(candidate_display)
         except Exception:
             pass
         return "TBD"
@@ -3496,9 +3577,9 @@ async def _trader_data_inner(request: Request, db):
                 for h in target_hours:
                     candidate = now_local.replace(hour=h, minute=55, second=0, microsecond=0)
                     if candidate > now_local:
-                        return candidate.strftime("%Y-%m-%d %H:%M %Z")
+                        return _friendly_dt_str(candidate)
                 tomorrow = now_local + timedelta(days=1)
-                return tomorrow.replace(hour=0, minute=55, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M %Z")
+                return _friendly_dt_str(tomorrow.replace(hour=0, minute=55, second=0, microsecond=0))
                 
             elif exk == "NYSE":
                 # US: 7:30am Tue-Sat
@@ -3507,7 +3588,7 @@ async def _trader_data_inner(request: Request, db):
                     if candidate_day.weekday() in (1, 2, 3, 4, 5):
                         candidate = candidate_day.replace(hour=7, minute=30, second=0, microsecond=0)
                         if candidate > now_local:
-                            return candidate.strftime("%Y-%m-%d %H:%M %Z")
+                            return _friendly_dt_str(candidate)
                             
             else: # ASX
                 # ASX: 5:30pm Mon-Fri
@@ -3516,7 +3597,7 @@ async def _trader_data_inner(request: Request, db):
                     if candidate_day.weekday() in (0, 1, 2, 3, 4):
                         candidate = candidate_day.replace(hour=17, minute=30, second=0, microsecond=0)
                         if candidate > now_local:
-                            return candidate.strftime("%Y-%m-%d %H:%M %Z")
+                            return _friendly_dt_str(candidate)
         except Exception:
             pass
         return "TBD"
@@ -4163,9 +4244,9 @@ def _trader_watchlist_data_inner(request: Request, db):
                 for h in target_hours:
                     candidate = now_local.replace(hour=h, minute=55, second=0, microsecond=0)
                     if candidate > now_local:
-                        return candidate.strftime("%Y-%m-%d %H:%M %Z")
+                        return _friendly_dt_str(candidate)
                 tomorrow = now_local + timedelta(days=1)
-                return tomorrow.replace(hour=0, minute=55, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M %Z")
+                return _friendly_dt_str(tomorrow.replace(hour=0, minute=55, second=0, microsecond=0))
                 
             elif exk == "NYSE":
                 # US: 7:30am Tue-Sat
@@ -4174,7 +4255,7 @@ def _trader_watchlist_data_inner(request: Request, db):
                     if candidate_day.weekday() in (1, 2, 3, 4, 5):
                         candidate = candidate_day.replace(hour=7, minute=30, second=0, microsecond=0)
                         if candidate > now_local:
-                            return candidate.strftime("%Y-%m-%d %H:%M %Z")
+                            return _friendly_dt_str(candidate)
                             
             else: # ASX
                 # ASX: 5:30pm Mon-Fri
@@ -4183,7 +4264,7 @@ def _trader_watchlist_data_inner(request: Request, db):
                     if candidate_day.weekday() in (0, 1, 2, 3, 4):
                         candidate = candidate_day.replace(hour=17, minute=30, second=0, microsecond=0)
                         if candidate > now_local:
-                            return candidate.strftime("%Y-%m-%d %H:%M %Z")
+                            return _friendly_dt_str(candidate)
         except Exception:
             pass
         return "TBD"
@@ -6660,7 +6741,7 @@ async def superadmin_data(
                 "market_cap":    int(s.market_cap) if s.market_cap else None,
                 "last_price":    float(s.last_price) if s.last_price else None,
                 "last_updated":  str(s.last_updated)[:10] if s.last_updated else "",
-                "bar_date":      str(bar.date) if bar else "",
+                "bar_date":      _fmt_date(bar.date) if bar else "",
                 "close":         float(bar.close)          if bar and bar.close          else None,
                 "volume":        int(bar.volume)            if bar and bar.volume         else None,
                 "ma_50":         float(bar.ma_50)           if bar and bar.ma_50          else None,
@@ -6882,13 +6963,13 @@ async def superadmin_data(
                 "exchange_key": r.w_exchange_key or r.s_exchange_key or "ASX",
                 "asset_type":   r.asset_type or "EQUITY",
                 "close":        float(r.close) if r.close else None,
-                "bar_date":     str(r.bar_date) if r.bar_date else "",
+                "bar_date":     _fmt_date(r.bar_date) if r.bar_date else "",
                 "rs_rating":    float(r.rs_rating) if r.rs_rating else None,
                 "vol_ratio":    float(r.vol_ratio) if r.vol_ratio else None,
                 "ma_50":        float(r.ma_50) if r.ma_50 else None,
                 "ma_200":       float(r.ma_200) if r.ma_200 else None,
                 "pct_from_52w_high": float(r.pct_from_52w_high) if r.pct_from_52w_high else None,
-                "added_at":     str(r.added_at)[:10] if r.added_at else "",
+                "added_at":     _fmt_date(r.added_at) if r.added_at else "",
             }
             for r in custom_rows_raw
         ]
@@ -6922,7 +7003,7 @@ async def superadmin_data(
     ctx.update({
         "total_stocks_db":  total_stocks_db,
         "total_bars_db":    total_bars_db,
-        "latest_bar_date":  str(latest_bar_date_r) if latest_bar_date_r else "—",
+        "latest_bar_date":  _fmt_date(latest_bar_date_r) if latest_bar_date_r else "—",
         "asx_count":        asx_count,
         "us_count":         us_count,
         "crypto_count":     crypto_count,
@@ -7941,7 +8022,7 @@ async def superadmin_data(
                 "market_cap":    int(s.market_cap) if s.market_cap else None,
                 "last_price":    float(s.last_price) if s.last_price else None,
                 "last_updated":  str(s.last_updated)[:10] if s.last_updated else "",
-                "bar_date":      str(bar.date) if bar else "",
+                "bar_date":      _fmt_date(bar.date) if bar else "",
                 "close":         float(bar.close)          if bar and bar.close          else None,
                 "volume":        int(bar.volume)            if bar and bar.volume         else None,
                 "ma_50":         float(bar.ma_50)           if bar and bar.ma_50          else None,
@@ -8163,13 +8244,13 @@ async def superadmin_data(
                 "exchange_key": r.w_exchange_key or r.s_exchange_key or "ASX",
                 "asset_type":   r.asset_type or "EQUITY",
                 "close":        float(r.close) if r.close else None,
-                "bar_date":     str(r.bar_date) if r.bar_date else "",
+                "bar_date":     _fmt_date(r.bar_date) if r.bar_date else "",
                 "rs_rating":    float(r.rs_rating) if r.rs_rating else None,
                 "vol_ratio":    float(r.vol_ratio) if r.vol_ratio else None,
                 "ma_50":        float(r.ma_50) if r.ma_50 else None,
                 "ma_200":       float(r.ma_200) if r.ma_200 else None,
                 "pct_from_52w_high": float(r.pct_from_52w_high) if r.pct_from_52w_high else None,
-                "added_at":     str(r.added_at)[:10] if r.added_at else "",
+                "added_at":     _fmt_date(r.added_at) if r.added_at else "",
             }
             for r in custom_rows_raw
         ]
@@ -8203,7 +8284,7 @@ async def superadmin_data(
     ctx.update({
         "total_stocks_db":  total_stocks_db,
         "total_bars_db":    total_bars_db,
-        "latest_bar_date":  str(latest_bar_date_r) if latest_bar_date_r else "—",
+        "latest_bar_date":  _fmt_date(latest_bar_date_r) if latest_bar_date_r else "—",
         "asx_count":        asx_count,
         "us_count":         us_count,
         "crypto_count":     crypto_count,

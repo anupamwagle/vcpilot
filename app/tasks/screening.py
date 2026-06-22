@@ -934,12 +934,12 @@ def run_daily_screen(self, exchange_key: str = "ASX"):
                 db.add(AuditLog(
                     action=AuditAction.SCREENER_RUN,
                     organization_id=org.id,
-                    message=f"[{exchange_key or 'ASX'}] Screen complete: {signals_generated} signals, {watchlist_added} watchlist",
+                    message=f"[{exchange_key or 'ASX'}] Screen complete: {signals_generated} signals, {watchlist_added} added/confirmed to watchlist this run",
                     detail={"date": str(today), "universe_size": len(tickers)},
                 ))
 
-            logger.info(f"Screen complete for {org.name}: {signals_generated} signals | {watchlist_added} watchlist")
-            notifier.send(f"🔍 Screen done for *{org.name}*: *{signals_generated} signals*, {watchlist_added} on watchlist")
+            logger.info(f"Screen complete for {org.name}: {signals_generated} signals | {watchlist_added} added/confirmed to watchlist this run")
+            notifier.send(f"🔍 Screen done for *{org.name}*: *{signals_generated} signals*, {watchlist_added} added/confirmed to watchlist this run")
 
     except Exception as exc:
         logger.error(f"Daily screen failed: {exc}")
@@ -1381,13 +1381,13 @@ def _run_screen_force(self, organization_id: int = None, exchange_key: str = "AS
                 db.add(AuditLog(
                     action=AuditAction.SCREENER_RUN,
                     organization_id=org.id,
-                    message=f"[{exchange_key or 'ASX'}] Force screen done: {signals_generated} signals, {watchlist_added} watchlist, {skipped_no_data} skipped (no data)",
+                    message=f"[{exchange_key or 'ASX'}] Force screen done: {signals_generated} signals, {watchlist_added} added/confirmed to watchlist this run, {skipped_no_data} skipped (no data)",
                     detail={"mode": "force_complete", "tickers_checked": len(tickers),
                             "signals": signals_generated, "watchlist": watchlist_added},
                 ))
 
-            notifier.send(f"🔍 Force screen done for *{org.name}*: *{signals_generated} signals*, {watchlist_added} watchlist, {skipped_no_data} skipped")
-            logger.info(f"Force screen complete for {org.name}: {signals_generated} signals | {watchlist_added} watchlist")
+            notifier.send(f"🔍 Force screen done for *{org.name}*: *{signals_generated} signals*, {watchlist_added} added/confirmed to watchlist this run, {skipped_no_data} skipped")
+            logger.info(f"Force screen complete for {org.name}: {signals_generated} signals | {watchlist_added} added/confirmed to watchlist this run")
 
     except Exception as exc:
         logger.error(f"Force screen failed: {exc}")

@@ -150,7 +150,7 @@
   <div>
     {% for log in logs %}
     <div class="flex items-start gap-3 px-4 py-2.5 tbl-row">
-      <span class="text-xs font-mono flex-shrink-0 w-16 mt-0.5" style="color:var(--text-subtle)">{{ log.created_at.strftime('%H:%M:%S') if log.created_at else 'N/A' }}</span>
+      <span class="text-xs font-mono flex-shrink-0 w-16 mt-0.5" style="color:var(--text-subtle)">{{ log.created_at|friendly_time if log.created_at else 'N/A' }}</span>
       <div class="flex-1 min-w-0">
         <span class="text-xs font-semibold" style="color:var(--a-accent)">{{ log.action }}</span>
         {% if log.ticker %}<span class="text-xs font-mono ml-1.5" style="color:var(--text-muted)">{{ log.ticker }}</span>{% endif %}
@@ -323,7 +323,7 @@
         </td>
         <td class="p-3 text-xs" style="color:var(--text-muted)">
           {% if cred.expires_at %}
-            {{ cred.expires_at.strftime('%Y-%m-%d') }}
+            {{ cred.expires_at|friendly_date }}
             {% if cred.is_active and not cred.is_expired %}
               <br><span style="color:{% if cred.days_remaining <= 14 %}var(--warn){% else %}var(--pos){% endif %}">
                 {{ cred.days_remaining }}d left
@@ -343,7 +343,7 @@
           {% endif %}
         </td>
         <td class="p-3 text-xs" style="color:var(--text-subtle)">
-          {{ cred.last_used_at.strftime('%Y-%m-%d %H:%M') if cred.last_used_at else '—' }}
+          {{ cred.last_used_at|friendly_dt if cred.last_used_at else '—' }}
         </td>
         <td class="p-3 text-xs">
           <div class="flex gap-1 flex-wrap">

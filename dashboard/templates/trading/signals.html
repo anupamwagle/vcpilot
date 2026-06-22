@@ -34,8 +34,13 @@
 {# ── Recent screener runs — context for what's on this page, and why it might
    be empty (regime filtering, no eligible setups, no data, etc). ─────────── #}
 <div class="card p-4 mb-4">
-  <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-subtle);margin-bottom:.55rem">
-    Last 3 Screener Runs
+  <div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:.35rem;margin-bottom:.55rem">
+    <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-subtle)">
+      Last 3 Screener Runs
+    </div>
+    <div style="font-size:.65rem;color:var(--text-subtle)">
+      Counts below are per-run results, not your total watchlist size
+    </div>
   </div>
   {% if recent_screen_runs %}
   <div style="display:flex;flex-direction:column;gap:0">
@@ -48,7 +53,7 @@
       {% else %}
       <span class="tag" style="font-size:.7rem;color:var(--text-subtle)">0 signals</span>
       {% endif %}
-      <span style="color:var(--text-subtle)">· {{ run.watchlist }} watchlist</span>
+      <span style="color:var(--text-subtle)" title="Stocks/coins that qualified for the watchlist during this specific run — not the total number currently on your watchlist">· {{ run.watchlist_added }} added/confirmed to watchlist this run</span>
       {% if run.skipped %}<span style="color:var(--text-subtle)">· {{ run.skipped }} skipped (no data)</span>{% endif %}
     </div>
     {% endfor %}
