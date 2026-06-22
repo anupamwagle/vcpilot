@@ -2387,7 +2387,12 @@ async def watchlist(
     ctx["labels"] = [l for l in filtered_labels if l["id"] in _active_label_ids]
     ctx["active_label"] = label
 
-    # Total count — used in the "All" label chip
+    # Total count — used in the "All" label chip. Must always reflect every
+    # WATCHING item in the active exchange tab, regardless of which label
+    # filter is currently selected — it previously also filtered by `label`,
+    # which made the "All" chip show the same count as whichever label was
+    # selected (e.g. "All 5" / "Banks 5" both showing 5, even though Biotech
+    # alone had 22) instead of the true unfiltered total.
     _total_q = db.query(_sqf.count(Watchlist.id)).filter(
         Watchlist.organization_id == org_id,
         Watchlist.status == WatchlistStatus.WATCHING,
@@ -2403,8 +2408,6 @@ async def watchlist(
             Watchlist.ticker.like("%-USD"),
             Watchlist.ticker.like("%-USDT"),
         ))
-    if label is not None:
-        _total_q = _total_q.filter(Watchlist.label_id == label)
     total = _total_q.scalar() or 0
 
     # Crypto tickers — lightweight ticker-only query for the CoinGecko panel
