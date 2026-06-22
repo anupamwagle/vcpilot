@@ -420,7 +420,7 @@ function _swFinish(finalMsg) {
                 {% if s.ticker in favourited_tickers %}★{% else %}☆{% endif %}
               </button>
             </form>
-            {{ s.ticker }}
+            {{ s.ticker.replace('.AX','').replace('-USD','').replace('-USDT','').replace('-AUD','') }}
           </span>
           {% if s.company_name %}<span style="font-size:.68rem;color:var(--text-subtle)">{{ s.company_name }}</span>{% endif %}
           <span style="font-size:.65rem;color:var(--text-muted)">{{ s.vcp }}</span>
@@ -477,7 +477,7 @@ function _swFinish(finalMsg) {
                 {% if p.ticker in favourited_tickers %}★{% else %}☆{% endif %}
               </button>
             </form>
-            {{ p.ticker }}
+            {{ p.ticker.replace('.AX','').replace('-USD','').replace('-USDT','').replace('-AUD','') }}
           </span>
           {% if p.company_name %}<span style="font-size:.68rem;color:var(--text-subtle)">{{ p.company_name }}</span>{% endif %}
           {% if p.is_paper %}<span class="chip chip-dim chip-sm">PAPER</span>{% endif %}
@@ -578,6 +578,12 @@ function _swFinish(finalMsg) {
       </svg>
       Watchlist Market Data
     </h2>
+    {% if wl_total_watching > wl_preview_limit %}
+    <span style="font-size:.7rem;color:var(--text-subtle)">
+      Showing {{ wl_preview_limit }} of {{ wl_total_watching }} ·
+      <a href="/watchlist" style="color:var(--t-accent);text-decoration:none">View full watchlist →</a>
+    </span>
+    {% endif %}
   </div>
 
   <!-- Filter row 1: Exchange filter (only if multi-market) -->
@@ -709,7 +715,7 @@ function _swFinish(finalMsg) {
                 {% if row.label %}
                 <span title="{{ row.label.name }}" style="width:.4rem;height:.4rem;border-radius:50%;background:{{ row.label.color }};flex-shrink:0;display:inline-block"></span>
                 {% endif %}
-                <span class="mono font-bold" style="font-size:.8rem">{{ row.ticker }}</span>
+                <span class="mono font-bold" style="font-size:.8rem">{{ row.ticker.replace('.AX','').replace('-USD','').replace('-USDT','').replace('-AUD','') }}</span>
                 {% if row.is_custom %}<span style="font-size:.6rem;padding:.05rem .3rem;border-radius:.2rem;background:var(--a-accent-bg);color:var(--a-accent);font-weight:700">CUSTOM</span>{% endif %}
                 {% if row.setup_tier == 'A' %}<span style="font-size:.58rem;font-weight:700;padding:.05rem .28rem;border-radius:.2rem;background:rgba(16,185,129,.15);color:#10b981;border:1px solid rgba(16,185,129,.35)">★ A</span>
                 {% elif row.setup_tier == 'B' %}<span style="font-size:.58rem;font-weight:700;padding:.05rem .28rem;border-radius:.2rem;background:rgba(59,130,246,.12);color:#3b82f6;border:1px solid rgba(59,130,246,.3)">B</span>{% endif %}

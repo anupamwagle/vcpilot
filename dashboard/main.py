@@ -696,9 +696,6 @@ async def home(
     account = db.query(Account).filter(Account.is_active == True, Account.organization_id == org_id).first()
     capital = float(account.capital_aud) if account else 1000.0
 
-    # Single query for all company names — used across positions + signals
-    stock_names = {s.ticker: (s.name or "") for s in db.query(Stock).all()}
-
     # NOTE: the home dashboard's "Today's Signals" / "Open Positions" / P&L
     # cards always show ALL exchanges, unfiltered. There is no on-page control
     # for the `exchange` param at this scope — it used to be silently shared
@@ -711,6 +708,28 @@ async def home(
     # Open positions
     pos_q = db.query(Position).filter(Position.status == TradeStatus.OPEN, Position.organization_id == org_id)
     positions = pos_q.all()
+
+    # Signals (Show today's signals OR active pending signals)
+    from sqlalchemy import or_
+    sig_q = db.query(Signal).filter(
+        or_(
+            Signal.signal_date == get_current_date(),
+            Signal.status == SignalStatus.PENDING
+        ),
+        Signal.organization_id == org_id
+    )
+    signals = sig_q.all()
+
+    # Company names scoped to only the tickers we're about to render (positions
+    # + signals) instead of pulling the entire Stock universe — on ALL_LISTED
+    # orgs that table can hold 2,000+ rows and was loaded on every home load.
+    _home_tickers = {p.ticker for p in positions} | {s.ticker for s in signals}
+    stock_names = {}
+    if _home_tickers:
+        stock_names = {
+            s.ticker: (s.name or "")
+            for s in db.query(Stock).filter(Stock.ticker.in_(_home_tickers)).all()
+        }
 
     pos_data, total_risk = [], 0.0
     for p in positions:
@@ -732,17 +751,6 @@ async def home(
             "days": (get_current_date() - p.entry_date).days if p.entry_date else 0,
             "is_paper": p.is_paper,
         })
-
-    # Signals (Show today's signals OR active pending signals)
-    from sqlalchemy import or_
-    sig_q = db.query(Signal).filter(
-        or_(
-            Signal.signal_date == get_current_date(),
-            Signal.status == SignalStatus.PENDING
-        ),
-        Signal.organization_id == org_id
-    )
-    signals = sig_q.all()
 
     sig_data = [{
         "id": s.id, "ticker": s.ticker,
@@ -882,7 +890,11 @@ async def home(
     if active_label_id is not None:
         wq = wq.filter(Watchlist.label_id == active_label_id)
 
-    wl_items = wq.order_by(desc(Watchlist.created_at)).all()
+    # Dashboard preview only — cap rows so the home page doesn't render the
+    # entire watchlist (can be hundreds of rows on ALL_LISTED orgs) on every
+    # load. The full, paginated list lives on /watchlist.
+    WL_HOME_PREVIEW_LIMIT = 25
+    wl_items = wq.order_by(desc(Watchlist.created_at)).limit(WL_HOME_PREVIEW_LIMIT).all()
     wl_tickers = [w.ticker for w in wl_items]
     wl_stock_map = {}
     wl_bar_map = {}
@@ -1013,6 +1025,7 @@ async def home(
         "trade_count": len(all_trades),
         "checks": checks,
         "watchlist_rows": watchlist_rows,
+        "wl_preview_limit": WL_HOME_PREVIEW_LIMIT,
         "wl_labels": wl_labels_data,
         "wl_label_counts": wl_label_counts,
         "wl_total_watching": wl_total_watching,
@@ -1473,7 +1486,10 @@ async def signals(request: Request, db: Session = Depends(get_db),
     ctx = _global(request, db)
 
     from app.models.signal import Signal, SignalStatus
+    from app.models.audit import AuditLog, AuditAction
+    from app.models.config import SystemConfig
     from sqlalchemy import or_
+    import re
 
     af = (exchange or "ALL").upper()
 
@@ -1522,10 +1538,41 @@ async def signals(request: Request, db: Session = Depends(get_db),
     skipped_count   = sum(1 for s in _all_sigs if s.status == SignalStatus.SKIPPED)
     has_signals     = bool(_all_sigs)
 
+    # ── Last 3 screener runs — gives the user context for what they're looking
+    # at, and why the page may be empty (regime filtering, no data, etc). Only
+    # completion rows are shown (start rows are filtered out by message text).
+    _tz_row = db.query(SystemConfig).filter(
+        SystemConfig.key == "org_timezone", SystemConfig.organization_id == org_id,
+    ).first()
+    _display_tz = _tz_row.value if _tz_row else "Australia/Sydney"
+
+    _recent_runs_q = db.query(AuditLog).filter(
+        AuditLog.action == AuditAction.SCREENER_RUN,
+        AuditLog.organization_id == org_id,
+        ~AuditLog.message.like("%started%"),
+    ).order_by(AuditLog.created_at.desc()).limit(3).all()
+
+    recent_screen_runs = []
+    for _log in _recent_runs_q:
+        _msg = _log.message or ""
+        _m_sig  = re.search(r"(\d+)\s+signals?", _msg)
+        _m_wl   = re.search(r"(\d+)\s+watchlist", _msg)
+        _m_skip = re.search(r"(\d+)\s+skipped", _msg)
+        _m_exch = re.match(r"\[([^\]]+)\]", _msg)
+        recent_screen_runs.append({
+            "time":      _fmt_dt(str(_log.created_at), _display_tz),
+            "exchange":  _m_exch.group(1) if _m_exch else "",
+            "signals":   int(_m_sig.group(1)) if _m_sig else 0,
+            "watchlist": int(_m_wl.group(1)) if _m_wl else 0,
+            "skipped":   int(_m_skip.group(1)) if _m_skip else None,
+            "message":   _msg,
+        })
+
     ctx.update({
         "signals":             [],   # skeleton — cards loaded via /signals/items
         "has_signals":         has_signals,
         "signal_date":         str(get_current_date()),
+        "recent_screen_runs":  recent_screen_runs,
         "pending_count":       pending_count,
         "triggered_count":     triggered_count,
         "skipped_count":       skipped_count,

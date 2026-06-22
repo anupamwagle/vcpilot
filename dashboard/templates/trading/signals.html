@@ -31,11 +31,43 @@
 {% set extra_params = "" %}
 {% include "components/exchange_tabs.html" %}
 
+{# ── Recent screener runs — context for what's on this page, and why it might
+   be empty (regime filtering, no eligible setups, no data, etc). ─────────── #}
+<div class="card p-4 mb-4">
+  <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-subtle);margin-bottom:.55rem">
+    Last 3 Screener Runs
+  </div>
+  {% if recent_screen_runs %}
+  <div style="display:flex;flex-direction:column;gap:0">
+    {% for run in recent_screen_runs %}
+    <div style="display:flex;align-items:center;gap:.55rem;flex-wrap:wrap;font-size:.78rem;padding:.4rem 0;{% if not loop.last %}border-bottom:1px solid var(--border){% endif %}">
+      <span style="color:var(--text-subtle);min-width:11rem">{{ run.time }}</span>
+      {% if run.exchange %}<span class="tag" style="font-size:.65rem">{{ run.exchange }}</span>{% endif %}
+      {% if run.signals > 0 %}
+      <span class="tag-pos" style="font-size:.7rem;font-weight:700">{{ run.signals }} signal{{ 's' if run.signals != 1 else '' }}</span>
+      {% else %}
+      <span class="tag" style="font-size:.7rem;color:var(--text-subtle)">0 signals</span>
+      {% endif %}
+      <span style="color:var(--text-subtle)">· {{ run.watchlist }} watchlist</span>
+      {% if run.skipped %}<span style="color:var(--text-subtle)">· {{ run.skipped }} skipped (no data)</span>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p style="font-size:.8rem;color:var(--text-subtle);margin:0">No screener runs recorded yet for this organization. Click "Run Screener Now" below, or trigger it from System Health.</p>
+  {% endif %}
+</div>
+
 {% if not has_signals %}
 <div class="card p-12 text-center">
   <div style="font-size:2.5rem;margin-bottom:.75rem">🔍</div>
   <p class="empty-title">No signals for {{ signal_date }}</p>
+  {% if recent_screen_runs %}
+  <p class="empty-sub mb-1">Last run ({{ recent_screen_runs[0].time }}): {{ recent_screen_runs[0].message }}</p>
+  <p class="empty-sub mb-5" style="font-size:.7rem">A signal only appears once a stock completes its VCP base AND breaks out above the pivot. 0 signals usually means no stock has finished that setup yet — check Watchlist for stocks still forming.</p>
+  {% else %}
   <p class="empty-sub mb-5">Screener runs at 5:30pm AEST · Run manually from System Health</p>
+  {% endif %}
   <form method="post" action="/action/run-screener">
     <button type="submit" class="btn-primary mx-auto">Run Screener Now</button>
   </form>
