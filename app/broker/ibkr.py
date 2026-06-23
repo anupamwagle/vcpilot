@@ -207,6 +207,8 @@ class IBKRBroker:
             for order in bracket:
                 order.orderRef = order_ref
                 order.transmit = True
+                if self.account:
+                    order.account = self.account  # Routes to correct sub-account under FA
 
             trades = [self._ib.placeOrder(contract, o) for o in bracket]
             self._ib.sleep(1)  # Allow fill confirmation

@@ -5105,7 +5105,7 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
         "ibkr_password":         {"control": "password",
                                   "hint_extra": "IBKR Gateway login password — stored encrypted"},
         "ibkr_paper_mode":       {},   # boolean — auto-rendered by value_type
-        "ibkr_account_usd":      {"placeholder": "U9876543",       "hint_extra": "USD sub-account (leave blank to use same account)"},
+"ibkr_account_usd":      {"placeholder": "U9876543",       "hint_extra": "USD sub-account (leave blank to use same account)"},
         "fx_audusd_override":    {"control": "number", "placeholder": "0.65", "step": "0.0001",
                                   "hint_extra": "Manual AUD/USD rate override. Leave blank to fetch live."},
         # Alerts & Chat
@@ -5198,29 +5198,12 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
             "hint":        FIELD_HINTS.get(c.key, {}),
         })
 
-    # ── IBKR gateway connectivity check ──────────────────────────────────────
-    import socket as _socket
-    import os as _os
-    _ibkr_host = _os.getenv("IBKR_HOST", "ibkr")
-    _ibkr_port = int(_os.getenv("IBKR_PORT", "4002"))
-    _ibkr_connected = False
-    try:
-        with _socket.create_connection((_ibkr_host, _ibkr_port), timeout=1.5):
-            _ibkr_connected = True
-    except Exception:
-        pass
-    _ibkr_mode = _os.getenv("IBKR_PAPER_MODE", "paper")
-    _novnc_url = _os.getenv("NOVNC_URL", "").rstrip("/")
-
     ctx.update({
         "configs_by_group":  by_group,
         "group_meta":        GROUP_META,
         "enabled_exchanges": enabled_exchanges,
         "saved":             request.query_params.get("saved", ""),
         "error":             request.query_params.get("error", ""),
-        "ibkr_connected":    _ibkr_connected,
-        "ibkr_mode":         _ibkr_mode,
-        "novnc_url":         _novnc_url,
     })
     return templates.TemplateResponse("admin/config.html", ctx)
 
@@ -6206,6 +6189,22 @@ async def superadmin_org_detail(org_id: int, request: Request, db: Session = Dep
     ).first()
     mcp_base_url = (mcp_base_url_cfg.value if mcp_base_url_cfg else "https://vcpilot.astradigital.com.au").rstrip("/")
 
+    # IBKR gateway connectivity + per-org noVNC config
+    import socket as _socket, os as _os
+    _ibkr_connected = False
+    try:
+        with _socket.create_connection((_os.getenv("IBKR_HOST", "ibkr"), int(_os.getenv("IBKR_PORT", "4002"))), timeout=1.5):
+            _ibkr_connected = True
+    except Exception:
+        pass
+
+    def _org_cfg(key):
+        row = db.query(SystemConfig).filter(
+            SystemConfig.key == key,
+            SystemConfig.organization_id == org_id,
+        ).first()
+        return (row.value or "").strip() if row else ""
+
     ctx.update({
         "organization": org,
         "users": users,
@@ -6216,6 +6215,11 @@ async def superadmin_org_detail(org_id: int, request: Request, db: Session = Dep
         "mcp_base_url": mcp_base_url,
         "mcp_all_scopes": MCP_ALL_SCOPES,
         "mcp_scope_descriptions": SCOPE_DESCRIPTIONS,
+        "ibkr_connected": _ibkr_connected,
+        "ibkr_mode": _os.getenv("IBKR_PAPER_MODE", "paper"),
+        "novnc_url": _org_cfg("novnc_url") or _os.getenv("NOVNC_URL", "").rstrip("/"),
+        "vnc_password": _org_cfg("vnc_password") or "changeme",
+        "org_ibkr_account": _org_cfg("ibkr_account"),
     })
     return templates.TemplateResponse("superadmin/org_detail.html", ctx)
 

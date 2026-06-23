@@ -393,6 +393,8 @@ def migrate():
             ("ibkr_username", "", "STRING", "IBKR Username", "Interactive Brokers login username", "broker", False),
             ("ibkr_password", "", "STRING", "IBKR Password", "Interactive Brokers login password", "broker", True),
             ("ibkr_paper_mode", "true", "BOOLEAN", "IBKR Paper Mode", "Use paper trading environment", "broker", False),
+            ("novnc_url", "", "STRING", "Gateway Login URL (noVNC)", "noVNC URL for this org's IBKR Gateway. Managed via Super Admin → Org Detail.", "system", False),
+            ("vnc_password", "", "STRING", "Gateway VNC Password", "VNC password for this org's IBKR Gateway. Managed via Super Admin → Org Detail.", "system", True),
             ("fmp_api_key", "", "STRING", "FMP API Key", "Financial Modeling Prep API key", "general", True),
             ("working_capital_aud", "5000.0", "FLOAT", "Working Capital (AUD)", "Working capital used for sizing and risk calculations", "general", False),
             ("working_capital_currency", "AUD", "STRING", "Working Capital Currency", "Currency of the working capital (e.g. AUD, USD, USDT, BNB)", "general", False),

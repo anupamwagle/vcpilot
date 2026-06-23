@@ -139,6 +139,87 @@
 
 </div>
 
+<!-- ── IBKR Gateway Status ──────────────────────────────────────────────── -->
+<div class="card overflow-hidden mb-6">
+  <div class="section-head px-4 py-3" style="display:flex;align-items:center;gap:.75rem">
+    <span style="font-size:1.1rem">🏦</span>
+    <span style="font-weight:700;font-size:.9rem;color:var(--text)">Interactive Brokers Gateway</span>
+    <span class="tag ml-auto" style="padding:.2rem .6rem;font-size:.7rem;
+      background:{% if ibkr_connected %}var(--pos-bg){% else %}var(--neg-bg){% endif %};
+      color:{% if ibkr_connected %}var(--pos){% else %}var(--neg){% endif %}">
+      {% if ibkr_connected %}● Connected — {{ ibkr_mode|upper }} Mode{% else %}○ Gateway Offline{% endif %}
+    </span>
+  </div>
+  <div style="padding:1.25rem;display:flex;flex-direction:column;gap:1rem">
+
+    <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+      <div style="flex:1;min-width:220px">
+        {% if ibkr_connected %}
+        <p style="font-size:.85rem;color:var(--pos);font-weight:600">✅ Gateway is running and accepting API connections.</p>
+        <p style="font-size:.75rem;color:var(--text-muted);margin-top:.25rem">
+          Orders for this org's account <strong>{{ org_ibkr_account or "(not set)" }}</strong> will route through the gateway.
+        </p>
+        {% else %}
+        <p style="font-size:.85rem;color:var(--neg);font-weight:600">⚠️ Gateway not reachable on port 4002.</p>
+        <p style="font-size:.75rem;color:var(--text-muted);margin-top:.25rem">
+          Start it with: <code style="background:var(--surface-alt);padding:.1rem .35rem;border-radius:.2rem;font-size:.7rem">docker compose --profile trading up ibkr novnc -d</code>
+        </p>
+        {% endif %}
+      </div>
+      <div style="display:flex;gap:.5rem;flex-shrink:0;flex-wrap:wrap">
+        {% if novnc_url %}
+        <a href="{{ novnc_url }}/vnc_lite.html{% if vnc_password %}?password={{ vnc_password }}&autoconnect=true{% endif %}"
+           target="_blank" rel="noopener" class="btn-admin text-xs"
+           style="display:inline-flex;align-items:center;gap:.35rem;text-decoration:none">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+          </svg>
+          Open Gateway Login Screen
+        </a>
+        {% endif %}
+        <button onclick="location.reload()" class="btn-admin text-xs" style="background:var(--surface-alt)">↻ Refresh</button>
+      </div>
+    </div>
+
+    <details style="border:1px solid var(--border);border-radius:.5rem">
+      <summary style="padding:.65rem 1rem;font-size:.78rem;font-weight:600;color:var(--text);cursor:pointer;list-style:none">
+        Setup Instructions — how to connect this org's IBKR account
+      </summary>
+      <div style="padding:.75rem 1rem 1rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.75rem">
+        <div style="background:var(--surface-alt);border-radius:.5rem;padding:.875rem;border-left:3px solid var(--a-accent)">
+          <p style="font-size:.78rem;font-weight:700;color:var(--text);margin-bottom:.3rem">Step 1 — Org opens IBKR account</p>
+          <p style="font-size:.72rem;color:var(--text-muted);line-height:1.6">
+            Customer signs up at interactivebrokers.com. For a Financial Advisor setup, they link their account to the AstraTrade FA master account via the IBKR portal.
+          </p>
+        </div>
+        <div style="background:var(--surface-alt);border-radius:.5rem;padding:.875rem;border-left:3px solid var(--a-accent)">
+          <p style="font-size:.78rem;font-weight:700;color:var(--text);margin-bottom:.3rem">Step 2 — Set account ID in Org Config</p>
+          <p style="font-size:.72rem;color:var(--text-muted);line-height:1.6">
+            Go to the org's <a href="/superadmin/organizations/{{ organization.id }}" style="color:var(--a-accent)">System Config</a> and set <code style="background:var(--surface);padding:.1rem .3rem;border-radius:.2rem;font-size:.68rem">ibkr_account</code> to their IBKR sub-account ID (e.g. <code style="background:var(--surface);padding:.1rem .3rem;border-radius:.2rem;font-size:.68rem">DU1234567</code>).
+          </p>
+        </div>
+        <div style="background:var(--surface-alt);border-radius:.5rem;padding:.875rem;border-left:3px solid var(--a-accent)">
+          <p style="font-size:.78rem;font-weight:700;color:var(--text);margin-bottom:.3rem">Step 3 — Start gateway &amp; login</p>
+          <p style="font-size:.72rem;color:var(--text-muted);line-height:1.6">
+            Start the gateway once (FA account). Click <strong>Open Gateway Login Screen</strong> above. All linked org accounts are accessible through this single connection.
+          </p>
+        </div>
+        <div style="background:var(--surface-alt);border-radius:.5rem;padding:.875rem;border-left:3px solid var(--a-accent)">
+          <p style="font-size:.78rem;font-weight:700;color:var(--text);margin-bottom:.3rem">Step 4 — Verify &amp; enable trading</p>
+          <p style="font-size:.72rem;color:var(--text-muted);line-height:1.6">
+            Status above shows <span style="color:var(--pos);font-weight:600">● Connected</span>. Set <code style="background:var(--surface);padding:.1rem .3rem;border-radius:.2rem;font-size:.68rem">ibkr_paper_mode=false</code> in System Config when ready for live trading.
+          </p>
+        </div>
+      </div>
+      <div style="padding:.5rem 1rem .75rem;font-size:.71rem;color:var(--text-muted);line-height:1.5">
+        <strong style="color:var(--warn)">⚠️</strong> IBKR disconnects at 11:45pm ET nightly. IBC auto-reconnects after the reset window (~midnight ET).
+      </div>
+    </details>
+
+  </div>
+</div>
+
 <!-- Scoped Audit Logs -->
 <div class="card overflow-hidden">
   <div class="section-head px-4 py-3">
