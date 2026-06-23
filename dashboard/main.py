@@ -5100,11 +5100,7 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
         "working_capital_currency": {"control": "readonly",
                                      "hint_extra": "Set by Super Admin. Base currency used for position sizing."},
         # Broker
-        "ibkr_account":          {"placeholder": "U1234567",       "hint_extra": "Your IBKR account number"},
-        "ibkr_username":         {"placeholder": "ibkr_username"},
-        "ibkr_password":         {"control": "password",
-                                  "hint_extra": "IBKR Gateway login password — stored encrypted"},
-        "ibkr_paper_mode":       {},   # boolean — auto-rendered by value_type
+        "ibkr_account":          {"placeholder": "DU1234567",       "hint_extra": "Your IBKR sub-account number (assigned by the platform operator)"},
 "ibkr_account_usd":      {"placeholder": "U9876543",       "hint_extra": "USD sub-account (leave blank to use same account)"},
         "fx_audusd_override":    {"control": "number", "placeholder": "0.65", "step": "0.0001",
                                   "hint_extra": "Manual AUD/USD rate override. Leave blank to fetch live."},
@@ -6216,7 +6212,7 @@ async def superadmin_org_detail(org_id: int, request: Request, db: Session = Dep
         "mcp_all_scopes": MCP_ALL_SCOPES,
         "mcp_scope_descriptions": SCOPE_DESCRIPTIONS,
         "ibkr_connected": _ibkr_connected,
-        "ibkr_mode": _os.getenv("IBKR_PAPER_MODE", "paper"),
+        "ibkr_mode": _org_cfg("ibkr_paper_mode") or _os.getenv("IBKR_PAPER_MODE", "paper"),
         "novnc_url": _org_cfg("novnc_url") or _os.getenv("NOVNC_URL", "").rstrip("/"),
         "vnc_password": _org_cfg("vnc_password") or "changeme",
         "org_ibkr_account": _org_cfg("ibkr_account"),
