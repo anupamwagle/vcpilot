@@ -248,7 +248,9 @@ services:
     image: theasp/novnc:latest
     container_name: vcpilot-novnc
     restart: unless-stopped
-    command: websockify --web /usr/share/novnc 8080 ibkr:5900
+    command: websockify --web /novnc 8080 ibkr:5900
+    volumes:
+      - /share/Container/vcpilot/novnc:/novnc:ro
     ports:
       - "6085:8080"
     networks:
