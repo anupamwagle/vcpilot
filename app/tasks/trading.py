@@ -816,7 +816,15 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
                                 qty=qty_to_sell,
                                 gross_pnl_aud=round(pnl_aud, 2),
                                 net_pnl_aud=round(pnl_aud - (0.0 if is_crypto else 6.0), 2),
-                                pnl_pct=round(pnl_pct, 4),
+                                # Trade.pnl_pct is stored as a FRACTION (e.g. -0.0443 for -4.43%),
+                                # matching the convention used by the manual-close route
+                                # (dashboard/main.py) and the closed-trades display, which
+                                # multiplies by 100 when rendering. pnl_pct above is already a
+                                # raw percentage (computed with `* 100`), so divide back down —
+                                # previously this stored the raw percentage directly, which the
+                                # display then multiplied by 100 again (e.g. -4.43% rendered as
+                                # -443%).
+                                pnl_pct=round(pnl_pct / 100, 4),
                                 initial_stop=pos.initial_stop, exit_reason=exit_sig.reason,
                                 is_paper=pos.is_paper,
                                 cgt_eligible_discount=(today - pos.entry_date).days > 365,
@@ -935,7 +943,12 @@ def sync_stop_orders(self):
                                 exit_price=current_price,
                                 gross_pnl_aud=round(realised_pnl, 2),
                                 net_pnl_aud=round(realised_pnl, 2),  # crypto — no commission
-                                pnl_pct=round((current_price - entry_price) / entry_price * 100, 4) if entry_price else 0,
+                                # Stored as a FRACTION (e.g. -0.0443 for -4.43%), not a raw
+                                # percentage — see the matching note in check_exit_rules_task
+                                # above. (current-entry)/entry IS the fraction already; no extra
+                                # *100 here. This matches the manual-close convention and the
+                                # closed-trades display (which multiplies by 100 to render %).
+                                pnl_pct=round((current_price - entry_price) / entry_price, 6) if entry_price else 0,
                                 initial_stop=p.initial_stop,
                                 exit_reason=ExitReason.STOP_LOSS,
                                 is_paper=p.is_paper,
