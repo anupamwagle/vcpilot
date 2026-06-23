@@ -242,16 +242,13 @@ services:
 
   # ---------------------------------------------------------------------------
   # noVNC — Browser-based VNC viewer for IBKR Gateway login
-  # Access at http://<host>:6080/vnc.html  password: changeme
+  # Access at http://<host>:6085/vnc.html  password: changeme
   # ---------------------------------------------------------------------------
   novnc:
-    image: theasp/novnc:latest
+    image: geek1011/easy-novnc:latest
     container_name: vcpilot-novnc
     restart: unless-stopped
-    environment:
-      REMOTE_HOST: ibkr
-      REMOTE_PORT: "5900"
-      VNC_PASSWORD: changeme
+    command: --addr :8080 --host ibkr --port 5900 --no-url-password
     ports:
       - "6085:8080"
     networks:
