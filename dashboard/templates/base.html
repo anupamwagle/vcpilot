@@ -689,18 +689,20 @@
 
   <!-- Sidebar footer — worker status, heartbeat, FAQ & Help -->
   <div id="sidebar-footer" class="flex-shrink-0" style="border-top:1px solid var(--border)">
-    <div class="px-4 py-3 flex items-center gap-1.5 text-xs" style="color:var(--text-subtle)">
-      {% if worker_status == 'online' %}
-        <span class="w-1.5 h-1.5 rounded-full animate-pulse flex-shrink-0" style="background:var(--pos)"></span>Worker OK
-      {% elif worker_status == 'starting' %}
-        <span class="w-1.5 h-1.5 rounded-full animate-pulse flex-shrink-0" style="background:var(--warn)"></span>Starting…
-      {% else %}
-        <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" style="background:var(--neg)"></span>Worker offline
-      {% endif %}
-    </div>
-    <div class="px-4 pb-3 flex items-center justify-between text-xs" style="color:var(--text-subtle)">
-      <span>Heartbeat: {{ heartbeat }}</span>
+    <div class="px-4 py-2 flex items-center justify-between text-xs" style="color:var(--text-subtle)">
+      <div class="flex items-center gap-1.5">
+        {% if worker_status == 'online' %}
+          <span class="w-1.5 h-1.5 rounded-full animate-pulse flex-shrink-0" style="background:var(--pos)"></span>Worker OK
+        {% elif worker_status == 'starting' %}
+          <span class="w-1.5 h-1.5 rounded-full animate-pulse flex-shrink-0" style="background:var(--warn)"></span>Starting…
+        {% else %}
+          <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" style="background:var(--neg)"></span>Worker offline
+        {% endif %}
+      </div>
       <a href="/faq" style="color:var(--t-accent);text-decoration:none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">FAQ &amp; Help</a>
+    </div>
+    <div class="px-4 pb-2 text-xs" style="color:var(--text-subtle)">
+      Heartbeat: {{ heartbeat }}
     </div>
   </div>
 </aside>

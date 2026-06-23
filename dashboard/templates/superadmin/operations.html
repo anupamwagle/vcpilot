@@ -30,6 +30,7 @@
   {% elif msg == 'setup' %}Full setup chain queued — universe → data → regime → screen for all exchanges.
   {% elif msg == 'ping' %}Worker ping sent — heartbeat will update within ~10 seconds.
   {% elif msg == 'universe_us' %}US universe refresh queued — S&P 500 / NASDAQ-100 stocks will be seeded from Wikipedia.
+  {% elif msg == 'screener' %}Screener queued — Minervini rules will run for all active orgs. Check Task Log for progress.
   {% endif %}
 </div>
 {% endif %}
@@ -187,6 +188,56 @@
   </div>
 </div>
 {% endif %}
+
+<!-- ── Screener ────────────────────────────────────────────────────────────── -->
+<div class="ops-card">
+  <p class="ops-title">🔍 Run Screener</p>
+  <p class="text-xs mb-3" style="color:var(--text-muted)">
+    Runs Minervini rules (Trend Template + VCP + Fundamentals) against stored price data for all active organisations.
+    Bypasses the trading-day gate — safe to run any time after a price data refresh.
+    Scheduled automatically after each price refresh via Celery Beat.
+  </p>
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
+    {% if has_asx %}
+    <form method="post" action="/superadmin/action/run-screener" style="display:inline-flex;align-items:center;gap:.35rem">
+      <input type="hidden" name="exchange" value="ASX">
+      <button type="submit" class="btn-primary text-xs py-1.5">🇦🇺 Screen ASX</button>
+    </form>
+    {% if task_runs.screen_asx %}
+    <span class="last-run" style="align-self:center">Last: {{ task_runs.screen_asx.time }}</span>
+    {% endif %}
+    {% endif %}
+
+    {% if has_us %}
+    <form method="post" action="/superadmin/action/run-screener" style="display:inline-flex;align-items:center;gap:.35rem">
+      <input type="hidden" name="exchange" value="NYSE">
+      <button type="submit" class="btn-ghost text-xs py-1.5">🇺🇸 Screen US</button>
+    </form>
+    {% if task_runs.screen_us %}
+    <span class="last-run" style="align-self:center">Last: {{ task_runs.screen_us.time }}</span>
+    {% endif %}
+    {% endif %}
+
+    {% if has_crypto %}
+    <form method="post" action="/superadmin/action/run-screener" style="display:inline-flex;align-items:center;gap:.35rem">
+      <select name="exchange" class="input py-1 text-xs" style="width:auto">
+        {% for ck in crypto_keys %}
+        <option value="{{ ck }}">{{ ck | replace('CRYPTO_','') }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn-ghost text-xs py-1.5">₿ Screen Crypto</button>
+    </form>
+    {% if task_runs.screen_crypto %}
+    <span class="last-run" style="align-self:center">Last: {{ task_runs.screen_crypto.time }}</span>
+    {% endif %}
+    {% endif %}
+
+    <form method="post" action="/superadmin/action/run-screener" style="display:inline-flex;align-items:center;gap:.35rem">
+      <input type="hidden" name="exchange" value="">
+      <button type="submit" class="btn-ghost text-xs py-1.5" style="border-color:var(--a-accent);color:var(--a-accent)">⚡ Screen All Markets</button>
+    </form>
+  </div>
+</div>
 
 <!-- ── Regime Evaluation ──────────────────────────────────────────────────── -->
 <div class="ops-card">

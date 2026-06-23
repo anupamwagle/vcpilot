@@ -7318,12 +7318,16 @@ async def superadmin_operations(request: Request, db: Session = Depends(get_db))
 
     task_runs = {
         "universe":      _glr(["Universe refresh", "universe refresh"], actions=[AuditAction.TASK_RUN, AuditAction.SYSTEM_STARTED]),
+        "universe_us":   _glr(["US universe", "us universe", "SP500", "NASDAQ-100", "S&P 500"], actions=[AuditAction.TASK_RUN]) if has_us else None,
         "price_asx":     _glr(["Price data", "price data"], "ASX"),
         "price_us":      _glr(["Price data", "price data"], "NYSE") if has_us else None,
         "price_crypto":  _glr(["Price data", "price data"], "CRYPTO") if has_crypto else None,
         "regime_asx":    _glr(["Market regime"], "ASX",   actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_asx else None,
         "regime_us":     _glr(["Market regime"], "NYSE",  actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_us else None,
         "regime_crypto": _glr(["Market regime"], "CRYPTO",actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_crypto else None,
+        "screen_asx":    _glr(["screen", "Screen"], "ASX",   actions=[AuditAction.TASK_RUN]) if has_asx else None,
+        "screen_us":     _glr(["screen", "Screen"], "NYSE",  actions=[AuditAction.TASK_RUN]) if has_us else None,
+        "screen_crypto": _glr(["screen", "Screen"], "CRYPTO",actions=[AuditAction.TASK_RUN]) if has_crypto else None,
         "heartbeat":     _glr(["Heartbeat"], actions=[AuditAction.HEALTH_CHECK]),
     }
 
@@ -7413,6 +7417,19 @@ async def sa_action_seed_us_universe(request: Request, scope: str = Form(None)):
     except Exception:
         pass
     return RedirectResponse("/superadmin/operations?msg=universe_us", 302)
+
+
+@app.post("/superadmin/action/run-screener")
+async def sa_action_run_screener(request: Request, exchange: str = Form(None)):
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.screening import _run_screen_force
+    try:
+        _run_screen_force.delay(exchange_key=exchange or None, organization_id=None)
+    except Exception:
+        pass
+    return RedirectResponse("/superadmin/operations?msg=screener", 302)
+
 
 @app.post("/superadmin/action/full-setup")
 async def sa_action_full_setup(request: Request):
@@ -8552,12 +8569,16 @@ async def superadmin_operations(request: Request, db: Session = Depends(get_db))
 
     task_runs = {
         "universe":      _glr(["Universe refresh", "universe refresh"], actions=[AuditAction.TASK_RUN, AuditAction.SYSTEM_STARTED]),
+        "universe_us":   _glr(["US universe", "us universe", "SP500", "NASDAQ-100", "S&P 500"], actions=[AuditAction.TASK_RUN]) if has_us else None,
         "price_asx":     _glr(["Price data", "price data"], "ASX"),
         "price_us":      _glr(["Price data", "price data"], "NYSE") if has_us else None,
         "price_crypto":  _glr(["Price data", "price data"], "CRYPTO") if has_crypto else None,
         "regime_asx":    _glr(["Market regime"], "ASX",   actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_asx else None,
         "regime_us":     _glr(["Market regime"], "NYSE",  actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_us else None,
         "regime_crypto": _glr(["Market regime"], "CRYPTO",actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_crypto else None,
+        "screen_asx":    _glr(["screen", "Screen"], "ASX",   actions=[AuditAction.TASK_RUN]) if has_asx else None,
+        "screen_us":     _glr(["screen", "Screen"], "NYSE",  actions=[AuditAction.TASK_RUN]) if has_us else None,
+        "screen_crypto": _glr(["screen", "Screen"], "CRYPTO",actions=[AuditAction.TASK_RUN]) if has_crypto else None,
         "heartbeat":     _glr(["Heartbeat"], actions=[AuditAction.HEALTH_CHECK]),
     }
 
