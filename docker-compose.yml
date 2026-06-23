@@ -239,3 +239,24 @@ services:
       - vcpilot-net
     profiles:
       - trading
+
+  # ---------------------------------------------------------------------------
+  # noVNC — Browser-based VNC viewer for IBKR Gateway login
+  # Access at http://<host>:6080/vnc.html  password: changeme
+  # ---------------------------------------------------------------------------
+  novnc:
+    image: theasp/novnc:latest
+    container_name: vcpilot-novnc
+    restart: unless-stopped
+    environment:
+      REMOTE_HOST: ibkr
+      REMOTE_PORT: "5900"
+      VNC_PASSWORD: changeme
+    ports:
+      - "6080:8080"
+    networks:
+      - vcpilot-net
+    depends_on:
+      - ibkr
+    profiles:
+      - trading

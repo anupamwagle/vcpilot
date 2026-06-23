@@ -5198,12 +5198,29 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
             "hint":        FIELD_HINTS.get(c.key, {}),
         })
 
+    # ── IBKR gateway connectivity check ──────────────────────────────────────
+    import socket as _socket
+    import os as _os
+    _ibkr_host = _os.getenv("IBKR_HOST", "ibkr")
+    _ibkr_port = int(_os.getenv("IBKR_PORT", "4002"))
+    _ibkr_connected = False
+    try:
+        with _socket.create_connection((_ibkr_host, _ibkr_port), timeout=1.5):
+            _ibkr_connected = True
+    except Exception:
+        pass
+    _ibkr_mode = _os.getenv("IBKR_PAPER_MODE", "paper")
+    _novnc_port = _os.getenv("NOVNC_PORT", "6080")
+
     ctx.update({
         "configs_by_group":  by_group,
         "group_meta":        GROUP_META,
         "enabled_exchanges": enabled_exchanges,
         "saved":             request.query_params.get("saved", ""),
         "error":             request.query_params.get("error", ""),
+        "ibkr_connected":    _ibkr_connected,
+        "ibkr_mode":         _ibkr_mode,
+        "novnc_port":        _novnc_port,
     })
     return templates.TemplateResponse("admin/config.html", ctx)
 
