@@ -45,10 +45,30 @@ def generate_daily_report(organization_id: int = None) -> dict:
             all_trades = db.query(Trade).all()
             pnl_total = sum(float(t.net_pnl_aud or 0) for t in all_trades)
 
-        regime_cfg = db.query(SystemConfig).filter(
-            SystemConfig.key == "last_market_regime"
-        ).first()
-        regime = regime_cfg.value if regime_cfg else "UNKNOWN"
+        regime_parts = []
+        for ek, label in [("ASX", "ASX"), ("NYSE", "US"), ("NASDAQ", "NASDAQ")]:
+            cfg = db.query(SystemConfig).filter(
+                SystemConfig.key == f"last_market_regime_{ek}",
+                SystemConfig.organization_id == organization_id,
+            ).first()
+            if cfg and cfg.value and cfg.value not in ("UNKNOWN", ""):
+                regime_parts.append(f"{label}:{cfg.value}")
+        # Bug #7 fix: include active crypto exchange regimes
+        if organization_id:
+            ae_cfg = db.query(SystemConfig).filter(
+                SystemConfig.key == "active_exchanges",
+                SystemConfig.organization_id == organization_id,
+            ).first()
+            ae_str = (ae_cfg.value if ae_cfg else "") or ""
+            for exc in [e.strip() for e in ae_str.split(",") if e.strip().startswith("CRYPTO_")]:
+                short = exc.replace("CRYPTO_", "")
+                c = db.query(SystemConfig).filter(
+                    SystemConfig.key == f"last_market_regime_{exc}",
+                    SystemConfig.organization_id == organization_id,
+                ).first()
+                if c and c.value and c.value not in ("UNKNOWN", ""):
+                    regime_parts.append(f"{short}:{c.value}")
+        regime = " | ".join(regime_parts) if regime_parts else "UNKNOWN"
 
     return {
         "date": str(today),

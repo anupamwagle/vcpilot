@@ -101,20 +101,32 @@ class AgentCommandHandler:
     def cmd_status(self, args) -> str:
         with get_db() as db:
             trading_paused = self._get_config(db, "trading_paused", "false").lower() == "true"
-            open_positions = db.query(Position).filter(
+            all_positions = db.query(Position).filter(
                 Position.status == TradeStatus.OPEN,
                 Position.organization_id == self.organization_id
-            ).count()
+            ).all()
             today_signals  = db.query(Signal).filter(
                 Signal.signal_date == get_current_date(),
                 Signal.organization_id == self.organization_id
             ).count()
 
+        # Per-exchange breakdown
+        asx_count = sum(1 for p in all_positions if p.exchange_key == "ASX")
+        us_count  = sum(1 for p in all_positions if p.exchange_key in ("NYSE", "NASDAQ"))
+        cr_count  = sum(1 for p in all_positions if (p.asset_type == "CRYPTO" or (p.exchange_key or "").startswith("CRYPTO")))
+        breakdown_parts = []
+        if asx_count: breakdown_parts.append(f"ASX:{asx_count}")
+        if us_count:  breakdown_parts.append(f"US:{us_count}")
+        if cr_count:  breakdown_parts.append(f"Crypto:{cr_count}")
+        pos_line = str(len(all_positions))
+        if breakdown_parts:
+            pos_line += f" ({', '.join(breakdown_parts)})"
+
         status = "⏸ PAUSED" if trading_paused else "▶️ ACTIVE"
         return (
             f"🤖 *AstraTrade Status*\n"
             f"Trading: {status}\n"
-            f"Open positions: {open_positions}\n"
+            f"Open positions: {pos_line}\n"
             f"Today's signals: {today_signals}\n"
             f"Mode: {'📄 PAPER' if self._is_paper() else '💰 LIVE'}"
         )
@@ -148,8 +160,17 @@ class AgentCommandHandler:
             curr_fmt = f"{(p.current_price or 0.0):.4f}" if is_crypto or (p.current_price or 0.0) < 1.0 else f"{(p.current_price or 0.0):.2f}"
             stop_fmt = f"{(p.current_stop or 0.0):.4f}" if is_crypto or (p.current_stop or 0.0) < 1.0 else f"{(p.current_stop or 0.0):.2f}"
 
+            exch = p.exchange_key or ""
+            if exch in ("NYSE", "NASDAQ"):
+                exch_label = f" ({exch})"
+            elif exch == "ASX":
+                exch_label = " (ASX)"
+            elif exch.startswith("CRYPTO"):
+                exch_label = ""
+            else:
+                exch_label = f" ({exch})" if exch else ""
             lines.append(
-                f"• *{p.ticker}*: {p.qty:.6g} {unit_label} @ {symbol}{price_fmt} "
+                f"• *{p.ticker}*{exch_label}: {p.qty:.6g} {unit_label} @ {symbol}{price_fmt} "
                 f"| Now {symbol}{curr_fmt} "
                 f"({pnl_pct:+.1f}%) | Stop {symbol}{stop_fmt}"
             )
@@ -165,9 +186,19 @@ class AgentCommandHandler:
             return "No signals generated today."
         lines = [f"📈 *Today's Signals ({get_current_date()})*"]
         for s in signals:
+            # Bug #10/#19 fix: show exchange label and correct currency symbol
+            ek = s.exchange_key or "ASX"
+            if ek in ("NYSE", "NASDAQ"):
+                curr_sym, exch_label = "US$", f" ({ek})"
+            elif ek.startswith("CRYPTO"):
+                s_curr = getattr(s, "currency", "AUD") or "AUD"
+                curr_sym = "USDT " if s_curr == "USDT" else ("US$" if s_curr == "USD" else "A$")
+                exch_label = ""
+            else:
+                curr_sym, exch_label = "A$", ""
             lines.append(
-                f"• *{s.ticker}* — pivot ${s.pivot_price:.3f} | "
-                f"stop ${s.stop_price:.3f} | RS {s.rs_rating:.0f} | {s.status}"
+                f"• *{s.ticker}*{exch_label} — pivot {curr_sym}{s.pivot_price:.3f} | "
+                f"stop {curr_sym}{s.stop_price:.3f} | RS {s.rs_rating:.0f} | {s.status}"
             )
         return "\n".join(lines)
 
@@ -184,11 +215,36 @@ class AgentCommandHandler:
         return f"👀 *Watchlist ({len(tickers)})*\n" + ", ".join(tickers)
 
     def cmd_market(self, args) -> str:
+        # Bug #9 fix: also show active crypto exchange regimes
+        emoji_map = {"BULL": "🟢", "CAUTION": "🟡", "BEAR": "🔴"}
+        lines = ["📊 *Market Regimes*"]
         with get_db() as db:
-            regime_val = self._get_config(db, "last_market_regime", "UNKNOWN")
+            for ek, label in [("ASX", "🇦🇺 ASX"), ("NYSE", "🇺🇸 US (NYSE)"), ("NASDAQ", "🇺🇸 US (NASDAQ)")]:
+                cfg = db.query(SystemConfig).filter(
+                    SystemConfig.key == f"last_market_regime_{ek}",
+                    SystemConfig.organization_id == self.organization_id,
+                ).first()
+                if cfg and cfg.value:
+                    em = emoji_map.get(cfg.value, "⚪")
+                    lines.append(f"{em} {label}: {cfg.value}")
+            # Crypto exchanges active for this org
+            ae_cfg = db.query(SystemConfig).filter(
+                SystemConfig.key == "active_exchanges",
+                SystemConfig.organization_id == self.organization_id,
+            ).first()
+            ae_str = (ae_cfg.value if ae_cfg else "") or ""
+            for exc in [e.strip() for e in ae_str.split(",") if e.strip().startswith("CRYPTO_")]:
+                short = exc.replace("CRYPTO_", "").title()
+                cfg = db.query(SystemConfig).filter(
+                    SystemConfig.key == f"last_market_regime_{exc}",
+                    SystemConfig.organization_id == self.organization_id,
+                ).first()
+                if cfg and cfg.value:
+                    em = emoji_map.get(cfg.value, "⚪")
+                    lines.append(f"{em} 🪙 {short}: {cfg.value}")
             checked_at = self._get_config(db, "last_regime_check", "?")
-        emoji = {"BULL": "🟢", "CAUTION": "🟡", "BEAR": "🔴"}.get(regime_val, "⚪")
-        return f"{emoji} *Market Regime*: {regime_val}\nChecked: {checked_at}"
+        lines.append(f"Checked: {checked_at}")
+        return "\n".join(lines)
 
     def cmd_pause(self, args) -> str:
         self._set_config("trading_paused", "true", "agent")
@@ -587,8 +643,11 @@ class AgentCommandHandler:
                 db.add(cfg)
 
     def _is_paper(self) -> bool:
+        # Bug #17 fix: check both IBKR paper mode and crypto testnet mode
         with get_db() as db:
-            return self._get_config(db, "ibkr_paper_mode", "true").lower() == "true"
+            ibkr_paper    = self._get_config(db, "ibkr_paper_mode", "true").lower() == "true"
+            crypto_testnet = self._get_config(db, "crypto_testnet", "true").lower() == "true"
+        return ibkr_paper or crypto_testnet
 
     def _audit(self, action: AuditAction, ticker: str = None, **kwargs):
         try:

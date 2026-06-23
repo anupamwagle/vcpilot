@@ -58,9 +58,9 @@
 
 {# ── Data counters ─────────────────────────────────────────────────── #}
 <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
-  <div class="stat-card"><p class="field-label">ASX Universe</p>
+  <div class="stat-card"><p class="field-label">Universe</p>
     <p id="cnt-stocks" class="text-xl font-bold" style="color:var(--text)">{{ stock_count }}</p>
-    <p class="text-xs" style="color:var(--text-subtle)">stocks loaded</p></div>
+    <p class="text-xs" style="color:var(--text-subtle)">stocks loaded{% if has_us %} (ASX + US){% elif has_crypto %} (ASX + Crypto){% endif %}</p></div>
   <div class="stat-card"><p class="field-label">Price Bars</p>
     <p id="cnt-bars" class="text-xl font-bold" style="color:var(--text)">{{ "{:,}".format(price_bar_count) }}</p>
     <p class="text-xs" style="color:var(--text-subtle)">total OHLCV rows</p></div>

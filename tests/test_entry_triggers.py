@@ -47,9 +47,8 @@ def _make_signal(db, org_id, account_id, ticker="WOW.AX", pivot=37.0,
 
 
 def _seed_regime(db, org_id, regime="BULL", exchange_key="ASX"):
-    key = "last_market_regime" if exchange_key == "ASX" else f"last_market_regime_{exchange_key}"
-    org_id_for_key = None if exchange_key == "ASX" else org_id
-    cfg = SystemConfig(key=key, value=regime, organization_id=org_id_for_key,
+    key = f"last_market_regime_{exchange_key}"
+    cfg = SystemConfig(key=key, value=regime, organization_id=org_id,
                        value_type="STRING", label="Market Regime")
     db.add(cfg)
     db.commit()

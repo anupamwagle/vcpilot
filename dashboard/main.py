@@ -7387,6 +7387,19 @@ async def sa_action_seed_crypto(request: Request, exchange: str = Form("CRYPTO_I
     return RedirectResponse("/superadmin/operations?msg=crypto_seed", 302)
 
 
+
+
+@app.post("/superadmin/action/seed-us-universe")
+async def sa_action_seed_us_universe(request: Request, scope: str = Form(None)):
+    if not _auth(request) or not _is_superadmin(request):
+        return RedirectResponse("/login", 302)
+    from app.tasks.screening import refresh_us_universe
+    try:
+        refresh_us_universe.delay(scope=scope or None)
+    except Exception:
+        pass
+    return RedirectResponse("/superadmin/operations?msg=universe_us", 302)
+
 @app.post("/superadmin/action/full-setup")
 async def sa_action_full_setup(request: Request):
     if not _auth(request) or not _is_superadmin(request):

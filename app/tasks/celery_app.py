@@ -96,11 +96,19 @@ app.conf.update(
 
         # =================================================================
         # Intraday entry trigger check (every 5 min during ASX hours)
-        # ASX: 10:00am–4:12pm AEST
+        # ASX: 10:00am–4:12pm AEST. Use hour="10-15" to avoid firing 4:13–4:59
+        # (market_is_open_now() gates the last window anyway, but this keeps
+        # Task Log clean). A separate entry covers the 4pm window.
         # =================================================================
         "check-entry-triggers": {
             "task": "app.tasks.trading.check_entry_triggers",
-            "schedule": crontab(hour="10-16", minute="*/5", day_of_week="mon-fri"),
+            "schedule": crontab(hour="10-15", minute="*/5", day_of_week="mon-fri"),
+            "options": {"queue": "trading_equities"},
+        },
+        # Cover 4:00–4:12pm (ASX close window); fires at 4:00 and 4:05 and 4:10
+        "check-entry-triggers-asx-close": {
+            "task": "app.tasks.trading.check_entry_triggers",
+            "schedule": crontab(hour=16, minute="0,5,10", day_of_week="mon-fri"),
             "options": {"queue": "trading_equities"},
         },
 
@@ -109,7 +117,12 @@ app.conf.update(
         # =================================================================
         "check-exit-rules": {
             "task": "app.tasks.trading.check_exit_rules_task",
-            "schedule": crontab(hour="10-16", minute="*/5", day_of_week="mon-fri"),
+            "schedule": crontab(hour="10-15", minute="*/5", day_of_week="mon-fri"),
+            "options": {"queue": "trading_equities"},
+        },
+        "check-exit-rules-asx-close": {
+            "task": "app.tasks.trading.check_exit_rules_task",
+            "schedule": crontab(hour=16, minute="0,5,10", day_of_week="mon-fri"),
             "options": {"queue": "trading_equities"},
         },
 
@@ -118,16 +131,33 @@ app.conf.update(
         # =================================================================
         "sync-positions": {
             "task": "app.tasks.trading.sync_ibkr_positions_task",
-            "schedule": crontab(hour="10-16", minute="*/5", day_of_week="mon-fri"),
+            "schedule": crontab(hour="10-15", minute="*/5", day_of_week="mon-fri"),
             "options": {"queue": "trading_equities"},
         },
 
         # =================================================================
-        # Stop loss sync with IBKR (every 15 min during hours)
+        # Stop loss sync — ASX hours (every 15 min) + NYSE hours (every 15 min)
+        # Bug #2 fix: added NYSE session entries so equity stops are checked
+        # during US market hours (11pm–6am AEST).
         # =================================================================
         "sync-stops": {
             "task": "app.tasks.trading.sync_stop_orders",
-            "schedule": crontab(hour="10-16", minute="*/15", day_of_week="mon-fri"),
+            "schedule": crontab(hour="10-15", minute="*/15", day_of_week="mon-fri"),
+            "options": {"queue": "trading_equities"},
+        },
+        "sync-stops-asx-close": {
+            "task": "app.tasks.trading.sync_stop_orders",
+            "schedule": crontab(hour=16, minute="0,15", day_of_week="mon-fri"),
+            "options": {"queue": "trading_equities"},
+        },
+        "sync-stops-us-evening": {
+            "task": "app.tasks.trading.sync_stop_orders",
+            "schedule": crontab(hour="23", minute="*/15", day_of_week="mon-fri"),
+            "options": {"queue": "trading_equities"},
+        },
+        "sync-stops-us-morning": {
+            "task": "app.tasks.trading.sync_stop_orders",
+            "schedule": crontab(hour="0,1,2,3,4,5,6", minute="*/15", day_of_week="tue,wed,thu,fri,sat"),
             "options": {"queue": "trading_equities"},
         },
 

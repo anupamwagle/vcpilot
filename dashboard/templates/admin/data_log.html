@@ -42,8 +42,9 @@
 <div class="card mb-4 p-3 flex flex-col gap-1" style="border-left:3px solid var(--border)">
   <p class="text-xs font-semibold" style="color:var(--text-muted)">No entry check logs yet</p>
   <p class="text-xs" style="color:var(--text-subtle)">
-    Logs appear here once the entry check task runs. For equities, checks run every 5 min during ASX market hours (10am–4:12pm AEST).
-    For crypto, checks run 24/7. Trigger one manually from <a href="/admin/tasks" style="color:var(--t-accent)">Task Log</a> → <strong>Run Entry Check</strong>.
+    Logs appear here once the entry check task runs. ASX equities: every 5 min during market hours (10:00–16:12 AEST Mon–Fri).
+    US equities (NYSE/NASDAQ): every 5 min during NYSE hours (23:30–06:05 AEST Tue–Sat).
+    Crypto: every 5 min 24/7. Trigger one manually from <a href="/admin/tasks" style="color:var(--t-accent)">Task Log</a> → <strong>Run Entry Check</strong>.
   </p>
 </div>
 {% endif %}
@@ -113,7 +114,7 @@
     {% if window == 'latest' %}· most recent per signal{% elif window == 'today' %}· today{% else %}· last {{ window }} min{% endif %}
   </p>
   {% if total == 0 %}
-  <span class="badge text-xs" style="background:var(--warn-bg);color:var(--warn)">No data yet — runs during market hours (10:00–16:12 AEST)</span>
+  <span class="badge text-xs" style="background:var(--warn-bg);color:var(--warn)">No data yet — runs during market hours (ASX: 10:00–16:12 AEST · US: 23:30–06:05 AEST · Crypto: 24/7)</span>
   {% endif %}
 </div>
 
@@ -281,7 +282,7 @@
   <p class="text-4xl mb-3">📭</p>
   <p class="font-semibold mb-1" style="color:var(--text)">No entry check data yet</p>
   <p class="text-sm" style="color:var(--text-muted)">
-    Data populates during ASX market hours (10:00–16:12 AEST) when there are pending signals.
+    Data populates during active market hours (ASX: 10:00–16:12 AEST · US: 23:30–06:05 AEST · Crypto: 24/7) when there are pending signals.
     Make sure the Celery worker is running and signals exist on the
     <a href="/signals" style="color:var(--t-accent)">Signals</a> page.
   </p>

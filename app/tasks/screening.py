@@ -595,7 +595,8 @@ def refresh_price_data(self, exchange_key: str = None):
                 if exchange_key == "CRYPTO":
                     # All crypto exchanges
                     query = query.filter(Stock.asset_type == "CRYPTO")
-                elif exchange_key == "US":
+                elif exchange_key in ("US", "NYSE", "NASDAQ"):
+                    # NYSE beat task covers both NYSE and NASDAQ-100 stocks
                     query = query.filter(Stock.exchange_key.in_(["NYSE", "NASDAQ"]))
                 else:
                     query = query.filter(Stock.exchange_key == exchange_key)
@@ -650,7 +651,12 @@ def refresh_price_data(self, exchange_key: str = None):
                 bar_date_str = str(latest["date"])
                 # For crypto (24/7), accept yesterday's bar too (yfinance lag).
                 # For equities, require today's date to avoid storing stale data.
-                if not _is_crypto and bar_date_str != str(today):
+                # Bug #13 fix: when exchange_key=None (global refresh), also skip the
+                # date gate for individual stocks whose asset_type is CRYPTO.
+                _stock_is_crypto = _is_crypto or (
+                    ticker.endswith(("-AUD", "-USD", "-USDT", "-BTC", "-ETH"))
+                )
+                if not _stock_is_crypto and bar_date_str != str(today):
                     continue
 
                 bar_date = latest["date"] if hasattr(latest["date"], "year") else today
@@ -823,6 +829,10 @@ def evaluate_market_regime_task(self, exchange_key: str = "ASX"):
                         specific_key = f"last_market_regime_{aek}"
                         if specific_key not in cfg_keys_to_write:
                             cfg_keys_to_write.append(specific_key)
+            elif exchange_key == "NYSE":
+                # Bug #14 fix: NYSE and NASDAQ share the same benchmark — write both keys
+                if "last_market_regime_NASDAQ" not in cfg_keys_to_write:
+                    cfg_keys_to_write.append("last_market_regime_NASDAQ")
 
             with get_db() as db:
                 for cfg_key in cfg_keys_to_write:
@@ -876,6 +886,9 @@ def run_daily_screen(self, exchange_key: str = "ASX"):
             if exchange_key:
                 if exchange_key == "CRYPTO" or exchange_key.startswith("CRYPTO_"):
                     stock_query = stock_query.filter(Stock.asset_type == "CRYPTO")
+                elif exchange_key in ("NYSE", "NASDAQ", "US"):
+                    # NYSE beat task covers both NYSE and NASDAQ-100 stocks
+                    stock_query = stock_query.filter(Stock.exchange_key.in_(["NYSE", "NASDAQ"]))
                 else:
                     stock_query = stock_query.filter(Stock.exchange_key == exchange_key)
             tickers = [s.ticker for s in stock_query.all()]
@@ -897,6 +910,16 @@ def run_daily_screen(self, exchange_key: str = "ASX"):
                     message=f"Universe auto-bootstrapped: {len(tickers)} ASX200 tickers",
                 ))
             logger.info(f"Universe bootstrapped with {len(tickers)} tickers")
+        elif not tickers and exchange_key in ("NYSE", "NASDAQ", "US"):
+            # Bug #15 fix: auto-bootstrap US universe on first run
+            logger.warning(f"[{exchange_key}] US stock universe empty — auto-fetching S&P 500 + NASDAQ-100...")
+            refresh_us_universe.run()
+            with get_db() as db:
+                sq = db.query(Stock).filter(Stock.is_active == True, Stock.blacklisted == False,
+                                            Stock.exchange_key.in_(["NYSE", "NASDAQ"]))
+                tickers = [s.ticker for s in sq.all()]
+                stocks_map = {s.ticker: s for s in db.query(Stock).filter(Stock.is_active == True).all()}
+            logger.info(f"US universe bootstrapped: {len(tickers)} tickers")
 
         if not tickers:
             logger.error("Could not load any tickers — screener aborted")
@@ -1014,7 +1037,7 @@ def run_daily_screen(self, exchange_key: str = "ASX"):
 
                     # Retrieve working capital currency from SystemConfig
                     from app.models.config import SystemConfig
-                    currency = stock_obj.currency if (stock_obj and stock_obj.currency) else ("USD" if asset_type == "CRYPTO" or exchange_key in ("NYSE", "NASDAQ") else "AUD")
+                    currency = stock_obj.currency if (stock_obj and stock_obj.currency) else ("USD" if asset_type == "CRYPTO" or exchange_key in ("NYSE", "NASDAQ", "US") else "AUD")
                     with get_db() as db_cfg:
                         currency_cfg = db_cfg.query(SystemConfig).filter(
                             SystemConfig.key == "working_capital_currency",
@@ -1034,9 +1057,12 @@ def run_daily_screen(self, exchange_key: str = "ASX"):
 
                     all_rule_results = {**trend_results, **fund_results, **vcp_rules}
 
+                    # Use stock's actual exchange_key so NASDAQ stocks don't get tagged NYSE
+                    signal_exchange_key = (stock_obj.exchange_key if stock_obj and stock_obj.exchange_key else exchange_key) or exchange_key
+
                     signal = Signal(
                         ticker=ticker,
-                        exchange_key=exchange_key,
+                        exchange_key=signal_exchange_key,
                         asset_type=asset_type,
                         currency=currency,
                         signal_date=today,
@@ -1124,6 +1150,7 @@ def run_full_setup(self):
 
     # Collect active exchanges across all orgs
     has_asx = False
+    has_us  = False
     crypto_keys: set[str] = set()
     for org in orgs:
         with get_db() as db:
@@ -1136,14 +1163,16 @@ def run_full_setup(self):
                     exc = exc.strip()
                     if exc == "ASX":
                         has_asx = True
+                    elif exc in ("NYSE", "NASDAQ"):
+                        has_us = True
                     elif exc.startswith("CRYPTO_"):
                         crypto_keys.add(exc)
 
     # Default to ASX if nothing configured
-    if not has_asx and not crypto_keys:
+    if not has_asx and not has_us and not crypto_keys:
         has_asx = True
 
-    exchanges_desc = (["ASX"] if has_asx else []) + sorted(crypto_keys)
+    exchanges_desc = (["ASX"] if has_asx else []) + (["NYSE/NASDAQ"] if has_us else []) + sorted(crypto_keys)
     for org in orgs:
         try:
             notifier = get_notifier(organization_id=org.id)
@@ -1166,6 +1195,16 @@ def run_full_setup(self):
             _run_screen_force.si(exchange_key="ASX"),
         ).delay()
         logger.info("ASX setup chain queued")
+
+    # US chain — refreshes price data for NYSE+NASDAQ, evaluates NYSE regime, screens all US
+    if has_us:
+        celery_chain(
+            refresh_us_universe.si(),
+            refresh_price_data.si("NYSE"),
+            evaluate_market_regime_task.si("NYSE"),
+            _run_screen_force.si(exchange_key="US"),
+        ).delay()
+        logger.info("US (NYSE/NASDAQ) setup chain queued")
 
     # Crypto chains — one independent chain per exchange key
     for crypto_key in sorted(crypto_keys):
@@ -1205,7 +1244,8 @@ def _run_screen_force(self, organization_id: int = None, exchange_key: str = "AS
             if exchange_key:
                 if is_crypto_key:
                     stock_query = stock_query.filter(Stock.asset_type == "CRYPTO")
-                elif exchange_key == "US":
+                elif exchange_key in ("US", "NYSE", "NASDAQ"):
+                    # Bug #8 fix: NYSE beat task covers both NYSE and NASDAQ-100
                     stock_query = stock_query.filter(Stock.exchange_key.in_(["NYSE", "NASDAQ"]))
                 else:
                     stock_query = stock_query.filter(Stock.exchange_key == exchange_key)
@@ -1391,7 +1431,7 @@ def _run_screen_force(self, organization_id: int = None, exchange_key: str = "AS
 
                                 # Retrieve working capital currency from SystemConfig
                                 from app.models.config import SystemConfig
-                                currency = stock_obj.currency if (stock_obj and stock_obj.currency) else ("USD" if asset_type == "CRYPTO" or exchange_key in ("NYSE", "NASDAQ") else "AUD")
+                                currency = stock_obj.currency if (stock_obj and stock_obj.currency) else ("USD" if asset_type == "CRYPTO" or exchange_key in ("NYSE", "NASDAQ", "US") else "AUD")
                                 with get_db() as db_cfg:
                                     currency_cfg = db_cfg.query(SystemConfig).filter(
                                         SystemConfig.key == "working_capital_currency",
@@ -1967,6 +2007,8 @@ def screen_single_ticker(
                 entry_price=vcp_result.pivot_price,
                 stop_price=vcp_result.stop_price,
                 engine=engine,
+                currency=currency,
+                base_currency="AUD",
             )
 
             signal = Signal(

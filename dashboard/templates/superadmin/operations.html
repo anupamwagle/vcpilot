@@ -29,6 +29,7 @@
   {% elif msg == 'crypto_seed' %}Crypto universe seeding queued.
   {% elif msg == 'setup' %}Full setup chain queued — universe → data → regime → screen for all exchanges.
   {% elif msg == 'ping' %}Worker ping sent — heartbeat will update within ~10 seconds.
+  {% elif msg == 'universe_us' %}US universe refresh queued — S&P 500 / NASDAQ-100 stocks will be seeded from Wikipedia.
   {% endif %}
 </div>
 {% endif %}
@@ -157,6 +158,31 @@
     </form>
     {% if task_runs.universe %}
     <span class="last-run" style="align-self:center">Last: {{ task_runs.universe.time }}</span>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<!-- ── US Universe Refresh ────────────────────────────────────────────────── -->
+{% if has_us %}
+<div class="ops-card">
+  <p class="ops-title">🇺🇸 US Universe Refresh (S&P 500 / NASDAQ-100)</p>
+  <p class="text-xs mb-3" style="color:var(--text-muted)">
+    Seeds S&P 500 and/or NASDAQ-100 constituent stocks from Wikipedia.
+    Runs automatically every Sunday at 10pm AEST via Celery Beat.
+    NASDAQ-100 stocks get <code>exchange_key="NASDAQ"</code>; S&P-only stocks get <code>exchange_key="NYSE"</code>.
+  </p>
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
+    <form method="post" action="/superadmin/action/seed-us-universe" style="display:inline-flex;align-items:center;gap:.35rem">
+      <select name="scope" class="input py-1 text-xs" style="width:auto">
+        <option value="SP500+NASDAQ100">S&P 500 + NASDAQ-100 (~600 stocks, recommended)</option>
+        <option value="SP500">S&P 500 only (~500 stocks)</option>
+        <option value="NASDAQ100">NASDAQ-100 only (100 stocks)</option>
+      </select>
+      <button type="submit" class="btn-primary text-xs py-1.5">🇺🇸 Refresh US Universe</button>
+    </form>
+    {% if task_runs.universe_us %}
+    <span class="last-run" style="align-self:center">Last: {{ task_runs.universe_us.time }}</span>
     {% endif %}
   </div>
 </div>

@@ -87,7 +87,13 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                         pending_signals = _db.query(Signal).filter(
                             Signal.organization_id == org.id,
                             Signal.status == SignalStatus.PENDING,
-                            Signal.exchange_key.in_(["CRYPTO"] + [f"CRYPTO_{x}" for x in ["BINANCE","COINBASE","KRAKEN","INDEPENDENTRESERVE"]])
+                            Signal.asset_type == "CRYPTO"
+                        ).all()
+                    elif exchange_key in ("NYSE", "NASDAQ", "US"):
+                        pending_signals = _db.query(Signal).filter(
+                            Signal.organization_id == org.id,
+                            Signal.status == SignalStatus.PENDING,
+                            Signal.exchange_key.in_(["NYSE", "NASDAQ"])
                         ).all()
                     else:
                         pending_signals = _db.query(Signal).filter(
@@ -116,7 +122,14 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                 pending_signals = db.query(Signal).filter(
                     Signal.organization_id == org.id,
                     Signal.status == SignalStatus.PENDING,
-                    Signal.exchange_key.in_(["CRYPTO"] + [f"CRYPTO_{x}" for x in ["BINANCE","COINBASE","KRAKEN","INDEPENDENTRESERVE"]])
+                    Signal.asset_type == "CRYPTO"
+                ).all()
+            elif exchange_key in ("NYSE", "NASDAQ", "US"):
+                # NYSE beat task covers both NYSE and NASDAQ-100 stocks
+                pending_signals = db.query(Signal).filter(
+                    Signal.organization_id == org.id,
+                    Signal.status == SignalStatus.PENDING,
+                    Signal.exchange_key.in_(["NYSE", "NASDAQ"])
                 ).all()
             else:
                 pending_signals = db.query(Signal).filter(
@@ -148,8 +161,17 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
 
             is_crypto_exchange = exchange_key and (exchange_key == "CRYPTO" or exchange_key.startswith("CRYPTO_"))
             if is_crypto_exchange:
-                # Use per-org crypto regime key — never use ASX global regime to block crypto
-                effective_exc = exchange_key if exchange_key != "CRYPTO" else "CRYPTO_INDEPENDENTRESERVE"
+                # Bug #6 fix: resolve active crypto exchange key from org config instead of hardcoding IR
+                if exchange_key != "CRYPTO":
+                    effective_exc = exchange_key
+                else:
+                    _ae_cfg = db.query(SystemConfig).filter(
+                        SystemConfig.key == "active_exchanges",
+                        SystemConfig.organization_id == org.id,
+                    ).first()
+                    _ae_str = (_ae_cfg.value if _ae_cfg else "") or ""
+                    _crypto_keys = [e.strip() for e in _ae_str.split(",") if e.strip().startswith("CRYPTO_")]
+                    effective_exc = _crypto_keys[0] if _crypto_keys else "CRYPTO_INDEPENDENTRESERVE"
                 regime_key_crypto = f"last_market_regime_{effective_exc}"
                 regime_cfg = db.query(SystemConfig).filter(
                     SystemConfig.key == regime_key_crypto,
@@ -163,10 +185,20 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                         SystemConfig.organization_id == None
                     ).first()
                 else:
+                    # Read per-org, per-exchange regime key (written by evaluate_market_regime_task)
+                    # NYSE beat tasks cover both NYSE and NASDAQ — try NYSE key first
+                    regime_exc = exchange_key if exchange_key != "NASDAQ" else "NYSE"
                     regime_cfg = db.query(SystemConfig).filter(
-                        SystemConfig.key == "last_market_regime",
-                        SystemConfig.organization_id == None
+                        SystemConfig.key == f"last_market_regime_{regime_exc}",
+                        SystemConfig.organization_id == org.id,
                     ).first()
+                    if not regime_cfg:
+                        # Fallback: try the other US key
+                        fallback_exc = "NASDAQ" if regime_exc == "NYSE" else "NYSE"
+                        regime_cfg = db.query(SystemConfig).filter(
+                            SystemConfig.key == f"last_market_regime_{fallback_exc}",
+                            SystemConfig.organization_id == org.id,
+                        ).first()
                 regime = regime_cfg.value if regime_cfg else "UNKNOWN"
 
             bear_block_rule = "regime_bear_block_crypto" if is_crypto_exchange else "regime_bear_block_equities"
@@ -233,7 +265,18 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                 _entry = float(_p.entry_price or 0)
                 _stop  = float(_p.current_stop or 0)
                 _qty   = float(_p.qty or 0)
-                _fx    = float(_p.current_fx_rate or _p.entry_fx_rate or 1.0) or 1.0
+                _fx    = float(_p.current_fx_rate or _p.entry_fx_rate or 0) or 0.0
+                if _fx == 0.0:
+                    # Bug #18 fix: fall back to live FX rate for USD positions
+                    _p_curr = getattr(_p, "currency", "AUD") or "AUD"
+                    if _p_curr == "USD":
+                        try:
+                            from app.data.fetcher import get_fx_rate as _hfx
+                            _fx = float(_hfx("USD", "AUD") or 1.0)
+                        except Exception:
+                            _fx = 1.0
+                    else:
+                        _fx = 1.0
                 if _entry > 0 and _stop > 0:
                     total_open_risk_aud += ((_entry - _stop) * _qty) / _fx
             current_heat = (total_open_risk_aud / capital * 100) if capital else 0.0
@@ -660,7 +703,13 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
                 positions = db.query(Position).filter(
                     Position.organization_id == org.id,
                     Position.status == TradeStatus.OPEN,
-                    Position.exchange_key.in_(["CRYPTO"] + [f"CRYPTO_{x}" for x in ["BINANCE","COINBASE","KRAKEN","INDEPENDENTRESERVE"]])
+                    Position.asset_type == "CRYPTO"
+                ).all()
+            elif exchange_key in ("NYSE", "NASDAQ", "US"):
+                positions = db.query(Position).filter(
+                    Position.organization_id == org.id,
+                    Position.status == TradeStatus.OPEN,
+                    Position.exchange_key.in_(["NYSE", "NASDAQ"])
                 ).all()
             else:
                 positions = db.query(Position).filter(
@@ -704,8 +753,15 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
                     continue
 
                 latest  = df.iloc[-1]
-                current = float(latest["close"])
                 avg_vol = float(df["avg_vol_50"].iloc[-1] or 0)
+
+                # Bug #3 fix: use intraday price for stop/exit decisions; fall back to EOD close.
+                _asset_type = getattr(pos, "asset_type", "EQUITY") or "EQUITY"
+                _intraday = get_intraday_price(pos.ticker, org.id, asset_type=_asset_type)
+                if _intraday.get("ok") and _intraday.get("price"):
+                    current = float(_intraday["price"])
+                else:
+                    current = float(latest["close"])
 
                 with get_db() as _db:
                     db_pos = _db.query(Position).get(pos.id)
@@ -799,8 +855,25 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
                                 order_ref=f"exit-{pos.id}-{exit_sig.reason}",
                             )
 
-                    pnl_aud = (current - float(pos.entry_price)) * qty_to_sell
-                    pnl_pct = (current - float(pos.entry_price)) / float(pos.entry_price) * 100
+                    # Bug #4 fix: apply FX conversion for USD positions
+                    _pos_currency = getattr(pos, "currency", None) or "AUD"
+                    _fx_rate = 1.0
+                    if _pos_currency == "USD" and not is_crypto:
+                        try:
+                            from app.data.fetcher import get_fx_rate as _gfxr
+                            _fx_rate = float(_gfxr("USD", "AUD") or 1.0)
+                        except Exception:
+                            _fx_rate = 1.0
+                    pnl_native = (current - float(pos.entry_price)) * qty_to_sell
+                    pnl_aud    = pnl_native / _fx_rate
+                    pnl_pct    = (current - float(pos.entry_price)) / float(pos.entry_price) * 100
+                    # Bug #5 fix: commission in AUD regardless of position currency
+                    if is_crypto:
+                        commission_aud = 0.0
+                    elif _pos_currency == "USD":
+                        commission_aud = round(6.0 / max(_fx_rate, 0.01), 2)
+                    else:
+                        commission_aud = 6.0
 
                     with get_db() as db:
                         if exit_sig.exit_type == "FULL":
@@ -810,12 +883,15 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
                             trade = Trade(
                                 ticker=pos.ticker, account_id=pos.account_id,
                                 organization_id=org.id, signal_id=pos.signal_id,
+                                exchange_key=pos.exchange_key,
+                                asset_type=getattr(pos, "asset_type", "EQUITY"),
+                                currency=_pos_currency,
                                 entry_date=pos.entry_date, exit_date=today,
                                 hold_days=(today - pos.entry_date).days,
                                 entry_price=pos.entry_price, exit_price=current,
                                 qty=qty_to_sell,
                                 gross_pnl_aud=round(pnl_aud, 2),
-                                net_pnl_aud=round(pnl_aud - (0.0 if is_crypto else 6.0), 2),
+                                net_pnl_aud=round(pnl_aud - commission_aud, 2),
                                 # Trade.pnl_pct is stored as a FRACTION (e.g. -0.0443 for -4.43%),
                                 # matching the convention used by the manual-close route
                                 # (dashboard/main.py) and the closed-trades display, which
@@ -893,10 +969,82 @@ def sync_stop_orders(self):
                 is_crypto = getattr(pos, "asset_type", "EQUITY") == "CRYPTO" or (
                     pos.exchange_key and pos.exchange_key.startswith("CRYPTO")
                 )
-                if not is_crypto:
-                    continue  # IBKR trailing stop modification not yet implemented
+                pos_currency = getattr(pos, "currency", None) or "AUD"
 
-                # ── Fetch live price ──────────────────────────────────────
+                if not is_crypto:
+                    # Equity stop-loss detection — fetch intraday price and close if breached.
+                    from app.data.fetcher import get_intraday_price as _gip, get_fx_rate as _gfx
+                    price_result = _gip(pos.ticker, org.id, asset_type="EQUITY")
+                    if not price_result.get("ok") or not price_result.get("price"):
+                        logger.debug(f"sync_stop_orders: no live price for equity {pos.ticker} — skip")
+                        continue
+                    _eq_price = float(price_result["price"])
+                    _eq_stop  = float(pos.current_stop) if pos.current_stop else None
+                    _eq_entry = float(pos.entry_price) if pos.entry_price else None
+                    if not _eq_stop or not _eq_entry:
+                        continue
+                    if _eq_price <= _eq_stop:
+                        logger.warning(f"sync_stop_orders: equity {pos.ticker} stopped out — price {_eq_price:.3f} ≤ stop {_eq_stop:.3f}")
+                        _fx = 1.0
+                        if pos_currency == "USD":
+                            try:
+                                _fx = float(_gfx("USD", "AUD") or 1.0)
+                            except Exception:
+                                _fx = 1.0
+                        _pnl_aud = (_eq_price - _eq_entry) * float(pos.qty) / _fx
+                        _comm    = 6.0 if pos_currency == "AUD" else round(6.0 / max(_fx, 0.01), 2)
+                        _sym     = "US$" if pos_currency == "USD" else "A$"
+                        _today   = get_current_date()
+                        try:
+                            with IBKRBroker(organization_id=org.id) as broker:
+                                broker.submit_bracket_order(
+                                    ticker=pos.ticker.replace(".AX", ""),
+                                    action="SELL", qty=float(pos.qty),
+                                    entry_price=_eq_price, stop_price=0, target_price=0,
+                                    exchange_key=pos.exchange_key or "ASX",
+                                    order_ref=f"stop-{pos.id}",
+                                )
+                        except Exception as _be:
+                            logger.warning(f"sync_stop_orders: IBKR sell failed for {pos.ticker}: {_be}")
+                        with get_db() as db2:
+                            _p = db2.query(Position).get(pos.id)
+                            if _p and _p.status == TradeStatus.OPEN:
+                                _p.status = TradeStatus.CLOSED
+                                db2.add(Trade(
+                                    organization_id=org.id, account_id=_p.account_id,
+                                    ticker=_p.ticker, exchange_key=_p.exchange_key,
+                                    asset_type=getattr(_p, "asset_type", "EQUITY"),
+                                    currency=pos_currency, signal_id=_p.signal_id,
+                                    entry_date=_p.entry_date, exit_date=_today,
+                                    hold_days=(_today - _p.entry_date).days,
+                                    qty=_p.qty, entry_price=_p.entry_price, exit_price=_eq_price,
+                                    gross_pnl_aud=round(_pnl_aud, 2),
+                                    net_pnl_aud=round(_pnl_aud - _comm, 2),
+                                    pnl_pct=round((_eq_price - _eq_entry) / _eq_entry, 6),
+                                    initial_stop=_p.initial_stop, exit_reason=ExitReason.STOP_LOSS,
+                                    is_paper=_p.is_paper,
+                                    cgt_eligible_discount=(_today - _p.entry_date).days > 365,
+                                ))
+                                db2.add(AuditLog(
+                                    action=AuditAction.POSITION_CLOSED,
+                                    organization_id=org.id, ticker=pos.ticker,
+                                    message=f"🛑 STOP triggered — {pos.ticker} @ {_sym}{_eq_price:.3f} "
+                                            f"stop was {_sym}{_eq_stop:.3f} P&L {_sym}{_pnl_aud:+.2f}",
+                                ))
+                                db2.commit()
+                        try:
+                            notifier = get_notifier(organization_id=org.id)
+                            notifier.send(
+                                f"🛑 *Stop Loss Triggered*\n"
+                                f"{pos.ticker} closed @ {_sym}{_eq_price:.3f}\n"
+                                f"Stop was {_sym}{_eq_stop:.3f}\n"
+                                f"P&L: {_sym}{_pnl_aud:+.2f}"
+                            )
+                        except Exception as _ne:
+                            logger.error(f"sync_stop_orders: WhatsApp alert failed for {pos.ticker}: {_ne}")
+                    continue  # equity handled — skip crypto trailing-stop block
+
+                # ── Fetch live price (crypto) ─────────────────────────────
                 from app.data.fetcher import get_intraday_price
                 price_result = get_intraday_price(pos.ticker, org.id, asset_type=getattr(pos, "asset_type", "EQUITY"))
                 if not price_result.get("ok") or not price_result.get("price"):
@@ -954,22 +1102,24 @@ def sync_stop_orders(self):
                                 is_paper=p.is_paper,
                                 cgt_eligible_discount=(today_d - p.entry_date).days > 365,
                             ))
+                            _csym = "USDT " if pos_currency == "USDT" else ("US$" if pos_currency == "USD" else "A$")
                             db2.add(AuditLog(
                                 action=AuditAction.POSITION_CLOSED,
                                 organization_id=org.id,
                                 ticker=pos.ticker,
-                                message=f"🛑 STOP triggered — {pos.ticker} @ A${current_price:.4f} "
-                                        f"stop was A${stop_price:.4f} P&L A${realised_pnl:+.2f}",
+                                message=f"🛑 STOP triggered — {pos.ticker} @ {_csym}{current_price:.4f} "
+                                        f"stop was {_csym}{stop_price:.4f} P&L {_csym}{realised_pnl:+.2f}",
                             ))
                             db2.commit()
                     # WhatsApp alert
                     try:
                         notifier = get_notifier(organization_id=org.id)
+                        _csym = "USDT " if pos_currency == "USDT" else ("US$" if pos_currency == "USD" else "A$")
                         notifier.send(
                             f"🛑 *Stop Loss Triggered*\n"
-                            f"{pos.ticker} closed @ A${current_price:.4f}\n"
-                            f"Stop was A${stop_price:.4f}\n"
-                            f"P&L: A${realised_pnl:+.2f}"
+                            f"{pos.ticker} closed @ {_csym}{current_price:.4f}\n"
+                            f"Stop was {_csym}{stop_price:.4f}\n"
+                            f"P&L: {_csym}{realised_pnl:+.2f}"
                         )
                     except Exception as notify_err:
                         logger.error(f"sync_stop_orders: WhatsApp alert failed for {pos.ticker}: {notify_err}")
