@@ -27,6 +27,8 @@
 {% elif msg == 'screen' %}<div class="alert-info mb-4">Screener queued — results appear in Signals within minutes.</div>
 {% elif msg == 'report' %}<div class="alert-info mb-4">Daily report queued — {% if notification_channel == 'telegram' %}Telegram{% else %}WhatsApp{% endif %} message incoming.</div>
 {% elif msg == 'recategorise' %}<div class="alert-success mb-4">Watchlist label re-categorisation queued — sector labels will be assigned to unlabelled items. Check Task Log.</div>
+{% elif msg == 'universe' %}<div class="alert-success mb-4">ASX universe refresh queued — constituent list will be updated. Check Task Log.</div>
+{% elif msg == 'universe_us' %}<div class="alert-success mb-4">US universe refresh queued — S&P 500 / NASDAQ-100 stocks will be seeded. Check Task Log for progress.</div>
 {% endif %}
 
 {% if is_first_run %}
@@ -235,6 +237,18 @@
       <button type="submit" class="btn-primary text-xs py-1.5">&#x1F50D; Run Screen</button>
     </form>
 
+    {% if has_us %}
+    <form method="post" action="/action/seed-us-universe" style="display:inline-flex;align-items:center;gap:.35rem"
+          title="Seed or update the S&P 500 and NASDAQ-100 stock universe from Wikipedia. Run this once before the first US screener run, and weekly to pick up constituent changes.">
+      <select name="scope" class="input py-1 text-xs" style="width:auto">
+        <option value="SP500+NASDAQ100">S&amp;P 500 + NASDAQ-100</option>
+        <option value="SP500">S&amp;P 500 only</option>
+        <option value="NASDAQ100">NASDAQ-100 only</option>
+      </select>
+      <button type="submit" class="btn-primary text-xs py-1.5">&#x1F1FA;&#x1F1F8; Refresh US Universe</button>
+    </form>
+    {% endif %}
+
     <form method="post" action="/action/recategorise-labels" style="display:inline-flex;align-items:center;gap:.35rem"
           title="Backfills precise ASX GICS industry data, then re-assigns sector/category labels across ASX, US and crypto watchlist items (e.g. CBA → Banks, BTC → Crypto Core, UNI → DeFi).">
       <select name="force" class="input py-1 text-xs" style="width:auto">
@@ -345,6 +359,15 @@
 
       <!-- US tasks -->
       {% if has_us %}
+
+      {% set r = task_runs.get('universe_us') %}
+      <tr class="tbl-row border-b" style="border-color:var(--border)">
+        <td class="px-4 py-2.5 text-xs font-semibold" style="color:var(--text)">Refresh US Universe</td>
+        <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">S&amp;P 500 / NASDAQ-100</td>
+        <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Sun 10:00pm</td>
+        <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Seeds S&amp;P 500 + NASDAQ-100 constituent stocks from Wikipedia</td>
+      </tr>
 
       {% set r = task_runs.get('price_us') %}
       <tr class="tbl-row border-b" style="border-color:var(--border)">

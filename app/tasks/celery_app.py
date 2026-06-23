@@ -170,6 +170,17 @@ app.conf.update(
         },
 
         # =================================================================
+        # Weekly US universe refresh (Sunday 10pm AEST — after ASX refresh)
+        # Fetches S&P 500 and NASDAQ-100 constituents from Wikipedia.
+        # Runs once weekly; Wikipedia constituent lists update infrequently.
+        # =================================================================
+        "refresh-universe-us": {
+            "task": "app.tasks.screening.refresh_us_universe",
+            "schedule": crontab(hour=22, minute=0, day_of_week="sun"),
+            "options": {"queue": "screening_equities"},
+        },
+
+        # =================================================================
         # US MARKET — NYSE/NASDAQ
         # NYSE: 9:30am–4:00pm ET = ~11:30pm–6:00am AEST (next day)
         # All times below in AEST/AEDT (Sydney timezone).

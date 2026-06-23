@@ -17,6 +17,8 @@ from app.data.fetcher import (
     get_asx200_tickers, get_asx200_metadata,
     get_asx300_tickers, get_asx300_metadata,
     get_asx_all_listed,
+    get_sp500_tickers, get_sp500_metadata,
+    get_nasdaq100_tickers, get_nasdaq100_metadata,
     get_price_history, get_batch_prices,
     get_fundamentals, compute_rs_ratings, get_top_crypto_tickers, normalize_ticker,
 )
@@ -355,6 +357,165 @@ def refresh_universe(self, scope: str = None, organization_id: int = None):
 
     except Exception as exc:
         logger.error(f"Universe refresh failed: {exc}")
+        raise self.retry(exc=exc, countdown=300)
+
+
+@app.task(name="app.tasks.screening.refresh_us_universe", bind=True, max_retries=3)
+def refresh_us_universe(self, scope: str = None, organization_id: int = None):
+    """
+    Seed / update the US equity universe (S&P 500 and/or NASDAQ-100) in the DB.
+
+    Args:
+        scope: Universe scope — "SP500", "NASDAQ100", "SP500+NASDAQ100" (default).
+               If None, reads 'us_universe_scope' from the org's SystemConfig.
+        organization_id: Org to read config from (uses first active org if None).
+
+    Stock rows are tagged:
+        - exchange_key = "NYSE"   for S&P 500 stocks
+        - exchange_key = "NASDAQ" for NASDAQ-100 stocks
+        - in_index = True, index_name = "SP500" | "NASDAQ100"
+    Stocks in BOTH indices get the index they are *primarily* listed on
+    (NASDAQ for NASDAQ-listed, NYSE for NYSE-listed; resolved by checking
+    whether the ticker also appears in the NASDAQ-100 list).
+    """
+    from app.models.account import Organization
+
+    # ── Resolve scope from org config if not explicitly passed ──────────────
+    if scope is None:
+        try:
+            with get_db() as db:
+                cfg_q = db.query(SystemConfig).filter(SystemConfig.key == "us_universe_scope")
+                if organization_id:
+                    cfg_q = cfg_q.filter(SystemConfig.organization_id == organization_id)
+                cfg = cfg_q.first()
+                scope = (cfg.value or "SP500+NASDAQ100") if cfg else "SP500+NASDAQ100"
+        except Exception:
+            scope = "SP500+NASDAQ100"
+
+    scope = (scope or "SP500+NASDAQ100").strip().upper()
+    logger.info(f"Refreshing US equity universe (scope={scope})...")
+
+    try:
+        with get_db() as db:
+            db.add(AuditLog(
+                action=AuditAction.TASK_RUN,
+                message=f"[US] Universe refresh started — scope={scope}",
+                organization_id=organization_id,
+            ))
+
+        # ── Fetch ticker lists + metadata ────────────────────────────────────
+        sp500_tickers:    list[str]       = []
+        sp500_meta:       dict[str, dict] = {}
+        nasdaq100_tickers: list[str]      = []
+        nasdaq100_meta:   dict[str, dict] = {}
+
+        include_sp500    = scope in ("SP500",    "SP500+NASDAQ100", "ALL_US")
+        include_nasdaq100 = scope in ("NASDAQ100", "SP500+NASDAQ100", "ALL_US")
+
+        if include_sp500:
+            sp500_tickers = get_sp500_tickers()
+            sp500_meta    = get_sp500_metadata()
+            logger.info(f"S&P 500: {len(sp500_tickers)} tickers fetched")
+
+        if include_nasdaq100:
+            nasdaq100_tickers = get_nasdaq100_tickers()
+            nasdaq100_meta    = get_nasdaq100_metadata()
+            logger.info(f"NASDAQ-100: {len(nasdaq100_tickers)} tickers fetched")
+
+        # Build combined set with per-ticker metadata + index membership
+        nasdaq100_set = set(nasdaq100_tickers)
+        sp500_set     = set(sp500_tickers)
+
+        # All unique tickers across both lists
+        all_tickers: set[str] = set()
+        if include_sp500:
+            all_tickers |= sp500_set
+        if include_nasdaq100:
+            all_tickers |= nasdaq100_set
+
+        seeded  = 0
+        updated = 0
+
+        with get_db() as db:
+            for ticker in all_tickers:
+                # Determine exchange_key: NASDAQ-listed stocks go to NASDAQ,
+                # the rest go to NYSE. Use NASDAQ membership as the indicator.
+                in_sp500    = ticker in sp500_set
+                in_nasdaq100 = ticker in nasdaq100_set
+                exchange_key = "NASDAQ" if in_nasdaq100 else "NYSE"
+
+                # Metadata: prefer the index the stock belongs to
+                if in_nasdaq100:
+                    meta = nasdaq100_meta.get(ticker, sp500_meta.get(ticker, {}))
+                else:
+                    meta = sp500_meta.get(ticker, {})
+
+                name     = meta.get("name", "") or ticker
+                sector   = meta.get("sector", "") or ""
+                industry = meta.get("industry", "") or ""
+
+                # index_name: prefer the more prestigious / stricter index
+                if in_sp500 and in_nasdaq100:
+                    index_name = "NASDAQ100"
+                elif in_nasdaq100:
+                    index_name = "NASDAQ100"
+                else:
+                    index_name = "SP500"
+
+                stock = db.query(Stock).filter(Stock.ticker == ticker).first()
+                if not stock:
+                    stock = Stock(
+                        ticker=ticker,
+                        exchange_code=ticker,   # NOT NULL — use ticker as code for US stocks
+                        asx_code=None,
+                        exchange_key=exchange_key,
+                        asset_type="EQUITY",
+                        currency="USD",
+                        in_index=True,
+                        index_name=index_name,
+                        in_asx200=False,
+                        in_asx300=False,
+                        name=name,
+                        sector=sector,
+                        industry=industry,
+                        is_active=True,
+                    )
+                    db.add(stock)
+                    seeded += 1
+                else:
+                    # Update index membership flags
+                    stock.in_index  = True
+                    stock.index_name = index_name
+                    if not stock.exchange_key or stock.exchange_key == "ASX":
+                        stock.exchange_key = exchange_key
+                    stock.asset_type = "EQUITY"
+                    stock.currency   = "USD"
+                    stock.is_active  = True
+                    if name and name != ticker and (not stock.name or stock.name == ticker):
+                        stock.name = name
+                    if sector and not stock.sector:
+                        stock.sector = sector
+                    if industry and not stock.industry:
+                        stock.industry = industry
+                    updated += 1
+
+            summary = (
+                f"[US] Universe refreshed (scope={scope}): "
+                f"{seeded} new + {updated} updated = {len(all_tickers)} total "
+                f"| SP500={len(sp500_tickers)} NASDAQ100={len(nasdaq100_tickers)}"
+            )
+            orgs = db.query(Organization).filter(Organization.is_active == True).all()
+            for org in orgs:
+                db.add(AuditLog(
+                    action=AuditAction.TASK_RUN,
+                    organization_id=org.id,
+                    message=summary,
+                ))
+
+        logger.info(summary)
+
+    except Exception as exc:
+        logger.error(f"US universe refresh failed: {exc}")
         raise self.retry(exc=exc, countdown=300)
 
 

@@ -3228,6 +3228,20 @@ async def action_refresh_universe(request: Request, scope: str = Form(None)):
     return RedirectResponse("/admin/health?msg=universe", 302)
 
 
+@app.post("/action/seed-us-universe")
+async def action_seed_us_universe(request: Request, scope: str = Form(None)):
+    """Seed or refresh the US equity universe (S&P 500 / NASDAQ-100 / both)."""
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    organization_id = request.session.get("organization_id")
+    from app.tasks.screening import refresh_us_universe
+    try:
+        refresh_us_universe.delay(scope=scope or None, organization_id=organization_id)
+    except Exception:
+        pass
+    return RedirectResponse("/admin/health?msg=universe_us", 302)
+
+
 @app.post("/action/recategorise-labels")
 async def action_recategorise_labels(request: Request, force: str = Form("0")):
     """
@@ -4846,7 +4860,8 @@ async def admin_health(request: Request, db: Session = Depends(get_db)):
         # send_daily_report writes HEALTH_CHECK action
         "report":    _lr(["Daily report", "daily report"], actions=[AuditAction.HEALTH_CHECK]),
         # refresh_universe writes SYSTEM_STARTED — no exchange in message so no exch filter
-        "universe":  _lr(["Universe refreshed", "universe"], actions=[AuditAction.SYSTEM_STARTED, AuditAction.TASK_RUN]),
+        "universe":    _lr(["Universe refreshed", "universe"], actions=[AuditAction.SYSTEM_STARTED, AuditAction.TASK_RUN]),
+        "universe_us": _lr(["[US] Universe", "US] Universe"], actions=[AuditAction.TASK_RUN]) if has_us else None,
         # refresh_price_data writes TASK_RUN with "[ASX] Price data" prefix (fixed in screening.py)
         "price_asx":    _lr(["Price data", "price data"], "ASX"),
         "price_us":     _lr(["Price data", "price data"], "NYSE") if has_us else None,
@@ -5115,6 +5130,13 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
                                      ("ALL_LISTED", "All Listed — Full ASX universe ~2,200+ stocks (slow)"),
                                  ],
                                   "hint_extra": "Controls which ASX stocks the screener scans. Larger scope = longer screener runtime (~15–45 min for ALL_LISTED). Run 'Refresh ASX Universe' after changing."},
+        # US Universe
+        "us_universe_scope":     {"control": "select", "options": [
+                                     ("SP500+NASDAQ100", "S&P 500 + NASDAQ-100 — ~600 elite stocks (default, recommended)"),
+                                     ("SP500",           "S&P 500 only — ~500 large-cap US stocks"),
+                                     ("NASDAQ100",       "NASDAQ-100 only — 100 top NASDAQ tech stocks"),
+                                 ],
+                                  "hint_extra": "Controls which US stocks are seeded for screening. Refreshed weekly (Sunday 10pm AEST). Run 'Refresh US Universe' on Health page after changing."},
         # Data
         "fmp_api_key":           {"control": "password",
                                   "hint_extra": "Financial Modeling Prep API key (free tier: 250 calls/day)",

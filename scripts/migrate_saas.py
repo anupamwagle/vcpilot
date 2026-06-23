@@ -928,6 +928,8 @@ def migrate():
              "Crypto API Secret", "API secret for org's crypto exchange account.", "crypto", True),
             ("crypto_testnet", "false", "BOOLEAN",
              "Crypto Testnet Mode", "Use exchange testnet for crypto orders.", "crypto", False),
+            ("us_universe_scope",          "SP500+NASDAQ100", "STRING",
+             "US Universe Scope", "Controls which US stocks are seeded for screening. SP500+NASDAQ100 = ~600 stocks (default). Run 'Refresh US Universe' after changing.", "trading", False),
             ("last_market_regime_ASX",    "UNKNOWN", "STRING", "ASX Market Regime",    "", "system", False),
             ("last_market_regime_NYSE",   "UNKNOWN", "STRING", "NYSE Market Regime",   "", "system", False),
             ("last_market_regime_NASDAQ", "UNKNOWN", "STRING", "NASDAQ Market Regime", "", "system", False),

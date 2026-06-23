@@ -23,9 +23,11 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 # Universe helpers
 # ---------------------------------------------------------------------------
 
-ASX200_WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/S%26P/ASX_200"
-ASX300_WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/S%26P/ASX_300"
-ASX_ALL_LISTED_URL   = "https://www.asx.com.au/asx/research/ASXListedCompanies.csv"
+ASX200_WIKIPEDIA_URL    = "https://en.wikipedia.org/wiki/S%26P/ASX_200"
+ASX300_WIKIPEDIA_URL    = "https://en.wikipedia.org/wiki/S%26P/ASX_300"
+ASX_ALL_LISTED_URL      = "https://www.asx.com.au/asx/research/ASXListedCompanies.csv"
+SP500_WIKIPEDIA_URL     = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+NASDAQ100_WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/Nasdaq-100"
 
 # ---------------------------------------------------------------------------
 # Ticker normalisation — convert user input to yfinance canonical format
@@ -579,6 +581,163 @@ def get_asx_all_listed() -> list[dict]:
     except Exception as e:
         logger.warning(f"ASX all-listed fetch failed: {e}")
         return []
+
+
+# ---------------------------------------------------------------------------
+# US Equity universe fetchers — S&P 500 and NASDAQ-100 from Wikipedia
+# ---------------------------------------------------------------------------
+
+# Minimal fallback lists used when Wikipedia is unreachable.
+_SP500_FALLBACK = [
+    "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "GOOG", "BRK-B", "LLY", "AVGO",
+    "JPM", "TSLA", "UNH", "XOM", "V", "MA", "PG", "COST", "JNJ", "MRK",
+    "HD", "ABBV", "BAC", "CRM", "NFLX", "CVX", "AMD", "ORCL", "WMT", "KO",
+    "PEP", "WFC", "ADBE", "MCD", "ACN", "DIS", "LIN", "TMO", "CSCO", "IBM",
+    "GE", "GS", "AXP", "PM", "INTU", "RTX", "SPGI", "CAT", "TXN", "ISRG",
+]
+
+_NASDAQ100_FALLBACK = [
+    "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "GOOG", "AVGO", "TSLA", "COST",
+    "NFLX", "AMD", "ADBE", "ASML", "AZN", "PDD", "QCOM", "MELI", "INTU", "CSCO",
+    "TXN", "AMGN", "BKNG", "ISRG", "HON", "VRTX", "CMG", "MU", "SBUX", "PANW",
+    "LRCX", "REGN", "KLAC", "MRVL", "SNPS", "CDNS", "ABNB", "CRWD", "CEG", "FTNT",
+    "MAR", "WDAY", "CSX", "ROP", "PAYX", "ROST", "MCHP", "DXCM", "MNST", "ADP",
+]
+
+
+def get_sp500_tickers() -> list[str]:
+    """
+    Fetch current S&P 500 constituents from Wikipedia.
+    Returns bare ticker list (no suffix): ["AAPL", "MSFT", ...]
+    Falls back to a top-50 hardcoded list if Wikipedia is unavailable.
+    """
+    import io, requests as _req
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; AstraTrade/1.0; +https://github.com/anupamwagle/vcpilot)"}
+        resp = _req.get(SP500_WIKIPEDIA_URL, headers=headers, timeout=20)
+        resp.raise_for_status()
+        tables = pd.read_html(io.StringIO(resp.text))
+        for tbl in tables:
+            cols_lower = [str(c).lower() for c in tbl.columns]
+            # Wikipedia SP500 table has a "Symbol" column
+            if "symbol" in cols_lower:
+                col = next(c for c in tbl.columns if str(c).lower() == "symbol")
+                tickers = [str(t).strip().upper().replace(".", "-") for t in tbl[col].dropna()]
+                tickers = [t for t in tickers if 1 <= len(t) <= 6]
+                if len(tickers) > 400:
+                    logger.info(f"Fetched {len(tickers)} S&P 500 tickers from Wikipedia")
+                    return tickers
+    except Exception as e:
+        logger.warning(f"Wikipedia S&P 500 fetch failed: {e}. Using fallback list.")
+    logger.warning("Using S&P 500 fallback universe (top 50 by market cap)")
+    return list(_SP500_FALLBACK)
+
+
+def get_sp500_metadata() -> dict[str, dict]:
+    """
+    Fetch S&P 500 constituents with name, sector, and sub-industry from Wikipedia.
+    Returns dict of ticker -> {"name": str, "sector": str, "industry": str}
+    """
+    import io, requests as _req
+    results: dict[str, dict] = {}
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; AstraTrade/1.0; +https://github.com/anupamwagle/vcpilot)"}
+        resp = _req.get(SP500_WIKIPEDIA_URL, headers=headers, timeout=20)
+        resp.raise_for_status()
+        tables = pd.read_html(io.StringIO(resp.text))
+        for tbl in tables:
+            cols_lower = [str(c).lower() for c in tbl.columns]
+            if "symbol" in cols_lower:
+                sym_col  = next(c for c in tbl.columns if str(c).lower() == "symbol")
+                name_col = next((c for c in tbl.columns if str(c).lower() in ("security", "company", "name")), None)
+                sect_col = next((c for c in tbl.columns if "gics sector" in str(c).lower() or str(c).lower() == "sector"), None)
+                sub_col  = next((c for c in tbl.columns if "gics sub" in str(c).lower() or "sub-industry" in str(c).lower() or "industry" in str(c).lower()), None)
+
+                for _, row in tbl.iterrows():
+                    raw = row[sym_col]
+                    if not isinstance(raw, str):
+                        continue
+                    ticker = raw.strip().upper().replace(".", "-")
+                    if not (1 <= len(ticker) <= 6):
+                        continue
+                    name     = str(row[name_col]).strip() if name_col is not None and pd.notna(row[name_col]) else ""
+                    sector   = str(row[sect_col]).strip() if sect_col is not None and pd.notna(row[sect_col]) else ""
+                    industry = str(row[sub_col]).strip()  if sub_col  is not None and pd.notna(row[sub_col])  else ""
+                    results[ticker] = {"name": name, "sector": sector, "industry": industry}
+
+                if len(results) > 400:
+                    logger.info(f"Fetched metadata for {len(results)} S&P 500 tickers from Wikipedia")
+                    return results
+    except Exception as e:
+        logger.warning(f"Wikipedia S&P 500 metadata fetch failed: {e}")
+    # Return minimal metadata from fallback list
+    return {t: {"name": t, "sector": "", "industry": ""} for t in _SP500_FALLBACK}
+
+
+def get_nasdaq100_tickers() -> list[str]:
+    """
+    Fetch current NASDAQ-100 constituents from Wikipedia.
+    Returns bare ticker list (no suffix): ["AAPL", "MSFT", ...]
+    Falls back to a top-50 hardcoded list if Wikipedia is unavailable.
+    """
+    import io, requests as _req
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; AstraTrade/1.0; +https://github.com/anupamwagle/vcpilot)"}
+        resp = _req.get(NASDAQ100_WIKIPEDIA_URL, headers=headers, timeout=20)
+        resp.raise_for_status()
+        tables = pd.read_html(io.StringIO(resp.text))
+        for tbl in tables:
+            cols_lower = [str(c).lower() for c in tbl.columns]
+            # Wikipedia NASDAQ-100 table has a "Ticker" column
+            if "ticker" in cols_lower:
+                col = next(c for c in tbl.columns if str(c).lower() == "ticker")
+                tickers = [str(t).strip().upper().replace(".", "-") for t in tbl[col].dropna()]
+                tickers = [t for t in tickers if 1 <= len(t) <= 6]
+                if len(tickers) > 80:
+                    logger.info(f"Fetched {len(tickers)} NASDAQ-100 tickers from Wikipedia")
+                    return tickers
+    except Exception as e:
+        logger.warning(f"Wikipedia NASDAQ-100 fetch failed: {e}. Using fallback list.")
+    logger.warning("Using NASDAQ-100 fallback universe (top 50 by market cap)")
+    return list(_NASDAQ100_FALLBACK)
+
+
+def get_nasdaq100_metadata() -> dict[str, dict]:
+    """
+    Fetch NASDAQ-100 constituents with name, sector, and industry from Wikipedia.
+    Returns dict of ticker -> {"name": str, "sector": str, "industry": str}
+    """
+    import io, requests as _req
+    results: dict[str, dict] = {}
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; AstraTrade/1.0; +https://github.com/anupamwagle/vcpilot)"}
+        resp = _req.get(NASDAQ100_WIKIPEDIA_URL, headers=headers, timeout=20)
+        resp.raise_for_status()
+        tables = pd.read_html(io.StringIO(resp.text))
+        for tbl in tables:
+            cols_lower = [str(c).lower() for c in tbl.columns]
+            if "ticker" in cols_lower:
+                sym_col  = next(c for c in tbl.columns if str(c).lower() == "ticker")
+                name_col = next((c for c in tbl.columns if str(c).lower() in ("company", "security", "name")), None)
+                sect_col = next((c for c in tbl.columns if str(c).lower() in ("gics sector", "sector", "industry")), None)
+
+                for _, row in tbl.iterrows():
+                    raw = row[sym_col]
+                    if not isinstance(raw, str):
+                        continue
+                    ticker = raw.strip().upper().replace(".", "-")
+                    if not (1 <= len(ticker) <= 6):
+                        continue
+                    name   = str(row[name_col]).strip() if name_col is not None and pd.notna(row[name_col]) else ""
+                    sector = str(row[sect_col]).strip() if sect_col is not None and pd.notna(row[sect_col]) else ""
+                    results[ticker] = {"name": name, "sector": sector, "industry": ""}
+
+                if len(results) > 80:
+                    logger.info(f"Fetched metadata for {len(results)} NASDAQ-100 tickers from Wikipedia")
+                    return results
+    except Exception as e:
+        logger.warning(f"Wikipedia NASDAQ-100 metadata fetch failed: {e}")
+    return {t: {"name": t, "sector": "", "industry": ""} for t in _NASDAQ100_FALLBACK}
 
 
 # ---------------------------------------------------------------------------
