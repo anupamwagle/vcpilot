@@ -1011,12 +1011,32 @@ async def home(
     active_label_id = int(active_label) if (active_label and active_label.isdigit()) else None
     only_custom = request.query_params.get("custom") == "true"
 
+    # Resolve the exchange filter early so it can be pushed into the SQL query.
+    # Without this, the top-25 LIMIT was applied before the Python-level exchange
+    # filter, so clicking "ASX" could show 0 items if the 25 most-recently-added
+    # rows were all US or Crypto stocks.
+    wl_active_exchange_filter = (wl_exchange or "ALL").upper()
+
     wq = db.query(Watchlist).options(joinedload(Watchlist.label)).filter(
         Watchlist.status == WatchlistStatus.WATCHING,
         Watchlist.organization_id == org_id
     )
     if active_label_id is not None:
         wq = wq.filter(Watchlist.label_id == active_label_id)
+
+    # Push exchange filter into SQL so LIMIT operates on the right subset.
+    if wl_active_exchange_filter == "ASX":
+        # Include rows where exchange_key is NULL (pre-fix ASX rows stored without key)
+        wq = wq.filter(or_(Watchlist.exchange_key == "ASX", Watchlist.exchange_key == None))
+    elif wl_active_exchange_filter == "US":
+        wq = wq.filter(Watchlist.exchange_key.in_(["NYSE", "NASDAQ"]))
+    elif wl_active_exchange_filter == "CRYPTO":
+        wq = wq.filter(or_(
+            Watchlist.asset_type == "CRYPTO",
+            Watchlist.ticker.like("%-AUD"),
+            Watchlist.ticker.like("%-USD"),
+            Watchlist.ticker.like("%-USDT"),
+        ))
 
     # Dashboard preview only — cap rows so the home page doesn't render the
     # entire watchlist (can be hundreds of rows on ALL_LISTED orgs) on every
@@ -1084,19 +1104,6 @@ async def home(
             "bar_date": _fmt_date(bar.date) if bar else "",
             "setup_tier": _h_tier,
         })
-
-    # Filter by exchange — uses its own wl_exchange param, independent of the
-    # page-wide `exchange` param (which only scopes Positions/Signals/Trades
-    # above). Without this split, clicking a Watchlist-card exchange tab also
-    # silently filtered "Today's Signals" / "Open Positions", and that filter
-    # then persisted via the home_wl_filters localStorage key — hiding signals
-    # from other exchanges on every subsequent home page load.
-    wl_active_exchange_filter = (wl_exchange or "ALL").upper()
-    if wl_active_exchange_filter not in ("", "ALL"):
-        watchlist_rows = [row for row in watchlist_rows if
-            (wl_active_exchange_filter == "ASX" and row.get("exchange_key") == "ASX") or
-            (wl_active_exchange_filter == "US"  and row.get("exchange_key") in ("NYSE", "NASDAQ")) or
-            (wl_active_exchange_filter == "CRYPTO" and row.get("asset_type") == "CRYPTO")]
 
     # Working capital currency
     try:
@@ -2643,6 +2650,7 @@ async def watchlist_rows(
             "high_52w":  float(_bar.high_52w or 0),
             "low_52w":   float(_bar.low_52w or 0),
             "rs_rating": float(_bar.rs_rating or 0),
+            "vol_ratio": float(_bar.vol_ratio) if _bar.vol_ratio is not None else None,
         }
         _bar_lookup_dict[_tk] = _bd
         _ck = f"latest_price_bar:{_tk}"
@@ -2668,6 +2676,7 @@ async def watchlist_rows(
                 "ma_150": float(_b.ma_150 or 0), "ma_200": float(_b.ma_200 or 0),
                 "high_52w": float(_b.high_52w or 0), "low_52w": float(_b.low_52w or 0),
                 "rs_rating": float(_b.rs_rating or 0),
+                "vol_ratio": float(_b.vol_ratio) if _b.vol_ratio is not None else None,
                 "bar_date": _fmt_date(_b.date) if _b.date else None, "live_price": False,
             } if _b else {}
         bar_data = dict(_eod) if _eod else {}
@@ -2691,8 +2700,11 @@ async def watchlist_rows(
         _wl_trend_keys = [k for k in rr if k.startswith("trend_")]
         _wl_trend_passed = sum(1 for k in _wl_trend_keys if (rr[k].get("passed") if isinstance(rr[k], dict) else bool(rr[k])))
         _wl_trend_total = len(_wl_trend_keys)
-        _wl_rs = bar_data.get("rs_rating", 0) if bar_data else 0
-        if _wl_trend_total > 0 and _wl_trend_passed >= _wl_trend_total and _wl_rs >= 80:
+        _wl_rs  = bar_data.get("rs_rating", 0) if bar_data else 0
+        _wl_vol = bar_data.get("vol_ratio")     if bar_data else None
+        if (_wl_trend_total > 0 and _wl_trend_passed >= _wl_trend_total
+                and _wl_rs >= 80
+                and (_wl_vol is None or _wl_vol <= 0.6)):
             _wl_tier = "A"
         elif _wl_trend_total > 0 and _wl_trend_passed >= max(_wl_trend_total - 1, 1) and _wl_rs >= 70:
             _wl_tier = "B"
