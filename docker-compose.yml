@@ -253,7 +253,7 @@ services:
       REMOTE_PORT: "5900"
       VNC_PASSWORD: changeme
     ports:
-      - "6080:8080"
+      - "6085:8080"
     networks:
       - vcpilot-net
     depends_on:
