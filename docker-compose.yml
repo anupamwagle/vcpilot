@@ -245,11 +245,10 @@ services:
   # Access at http://<host>:6085/vnc.html  password: changeme
   # ---------------------------------------------------------------------------
   novnc:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.novnc
+    image: theasp/novnc:latest
     container_name: vcpilot-novnc
     restart: unless-stopped
+    command: websockify --web /usr/share/novnc 8080 ibkr:5900
     ports:
       - "6085:8080"
     networks:

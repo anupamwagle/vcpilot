@@ -1,16 +1,7 @@
-FROM python:3.11-slim
+FROM alpine:3.19
 
-RUN pip install --no-cache-dir websockify==0.11.0 && \
-    apt-get update -qq && \
-    apt-get install -y -qq wget ca-certificates && \
-    wget -q https://github.com/novnc/noVNC/archive/refs/tags/v1.4.0.tar.gz -O /tmp/novnc.tar.gz && \
-    tar -xzf /tmp/novnc.tar.gz -C /opt && \
-    mv /opt/noVNC-1.4.0 /opt/novnc && \
-    ln -s /opt/novnc/vnc.html /opt/novnc/index.html && \
-    rm /tmp/novnc.tar.gz && \
-    apt-get remove -y wget && apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache novnc py3-websockify
 
 EXPOSE 8080
 
-CMD ["websockify", "--web", "/opt/novnc", "0.0.0.0:8080", "ibkr:5900"]
+CMD ["websockify", "--web", "/usr/share/novnc", "0.0.0.0:8080", "ibkr:5900"]
