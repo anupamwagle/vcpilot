@@ -226,7 +226,7 @@ services:
       TWS_USERID: ${IBKR_USERNAME}
       TWS_PASSWORD: ${IBKR_PASSWORD}
       TRADING_MODE: ${IBKR_PAPER_MODE:-paper}
-      TWS_SETTINGS_PATH: /root/Jts
+      TWS_SETTINGS_PATH: /home/ibgateway/Jts
       READ_ONLY_API: "no"
       VNC_SERVER_PASSWORD: changeme
     ports:
@@ -234,7 +234,7 @@ services:
       - "4002:4002"
       - "5900:5900"
     volumes:
-      - ibkr-jts:/root/Jts
+      - ibkr-jts:/home/ibgateway/Jts
     networks:
       - vcpilot-net
     profiles:
