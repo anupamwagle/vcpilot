@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     ibkr_account_env: str = Field(default="", validation_alias="ibkr_account")
     ibkr_username_env: str = Field(default="", validation_alias="ibkr_username")
     ibkr_password_env: str = Field(default="", validation_alias="ibkr_password")
-    ibkr_paper_mode_env: bool = Field(default=True, validation_alias="ibkr_paper_mode")
+    ibkr_paper_mode_env: str = Field(default="paper", validation_alias="ibkr_paper_mode")
     ibkr_simulate: bool = Field(default=False, validation_alias="ibkr_simulate")
     mock_time_enabled_env: bool = Field(default=False, validation_alias="mock_time_enabled")
     mock_current_time_env: str = Field(default="", validation_alias="mock_current_time")
@@ -123,8 +123,8 @@ class Settings(BaseSettings):
     def ibkr_paper_mode(self) -> bool:
         val = self._get_db_config("ibkr_paper_mode")
         if val is not None:
-            return val.lower() in ("true", "1", "yes")
-        return self.ibkr_paper_mode_env
+            return val.lower() in ("true", "1", "yes", "paper")
+        return self.ibkr_paper_mode_env.lower() in ("true", "1", "yes", "paper")
 
     @property
     def fmp_api_key(self) -> str:
