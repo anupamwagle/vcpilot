@@ -6068,9 +6068,6 @@ async def superadmin_organizations_create(
         ("telegram_bot_token", "", ConfigValueType.STRING, "Telegram Bot Token", "The Telegram Bot Token from @BotFather", True),
         ("telegram_chat_id", "", ConfigValueType.STRING, "Telegram Chat ID", "The Telegram Chat ID to send alerts to"),
         ("ibkr_account", "", ConfigValueType.STRING, "IBKR Account ID", "Interactive Brokers account number"),
-        ("ibkr_username", "", ConfigValueType.STRING, "IBKR Username", "Interactive Brokers login username"),
-        ("ibkr_password", "", ConfigValueType.STRING, "IBKR Password", "Interactive Brokers login password", True),
-        ("ibkr_paper_mode", "true", ConfigValueType.BOOLEAN, "IBKR Paper Mode", "Use paper trading environment"),
         ("fmp_api_key", "", ConfigValueType.STRING, "FMP API Key", "Financial Modeling Prep API key", True),
         ("working_capital_aud", "5000.0", ConfigValueType.FLOAT, "Working Capital (AUD)", "Working capital used for sizing and risk calculations"),
     ]
@@ -6212,7 +6209,7 @@ async def superadmin_org_detail(org_id: int, request: Request, db: Session = Dep
         "mcp_all_scopes": MCP_ALL_SCOPES,
         "mcp_scope_descriptions": SCOPE_DESCRIPTIONS,
         "ibkr_connected": _ibkr_connected,
-        "ibkr_mode": _org_cfg("ibkr_paper_mode") or _os.getenv("IBKR_PAPER_MODE", "paper"),
+        "ibkr_mode": _os.getenv("IBKR_PAPER_MODE", "paper"),
         "novnc_url": _org_cfg("novnc_url") or _os.getenv("NOVNC_URL", "").rstrip("/"),
         "vnc_password": _org_cfg("vnc_password") or "changeme",
         "org_ibkr_account": _org_cfg("ibkr_account"),

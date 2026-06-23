@@ -656,7 +656,14 @@ def refresh_price_data(self, exchange_key: str = None):
                 _stock_is_crypto = _is_crypto or (
                     ticker.endswith(("-AUD", "-USD", "-USDT", "-BTC", "-ETH"))
                 )
-                if not _stock_is_crypto and bar_date_str != str(today):
+                # ASX closes before AEST EOD so bar_date == AEST today.
+                # NYSE/NASDAQ close at 4pm ET = 6am AEST next calendar day, so
+                # yfinance returns the US session date (always 1 AEST day behind).
+                # Accept today OR yesterday for anything that isn't ASX.
+                from datetime import timedelta as _td
+                _asx_only = exchange_key in ("ASX", None) and not _stock_is_crypto
+                _acceptable_dates = {str(today), str(today - _td(days=1))} if not _asx_only else {str(today)}
+                if bar_date_str not in _acceptable_dates:
                     continue
 
                 bar_date = latest["date"] if hasattr(latest["date"], "year") else today

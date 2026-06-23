@@ -390,9 +390,6 @@ def migrate():
             ("telegram_bot_token", "", "STRING", "Telegram Bot Token", "The Telegram Bot Token from @BotFather", "whatsapp", True),
             ("telegram_chat_id", "", "STRING", "Telegram Chat ID", "The Telegram Chat ID to send alerts to", "whatsapp", False),
             ("ibkr_account", "", "STRING", "IBKR Account ID", "Interactive Brokers account number", "broker", False),
-            ("ibkr_username", "", "STRING", "IBKR Username", "Gateway login username (FA master account). Set in .env — managed by operator.", "system", False),
-            ("ibkr_password", "", "STRING", "IBKR Password", "Gateway login password (FA master account). Set in .env — managed by operator.", "system", True),
-            ("ibkr_paper_mode", "true", "BOOLEAN", "IBKR Paper Mode", "Paper vs live mode — must match the gateway container's TRADING_MODE. Managed by operator.", "system", False),
             ("novnc_url", "", "STRING", "Gateway Login URL (noVNC)", "noVNC URL for this org's IBKR Gateway. Managed via Super Admin → Org Detail.", "system", False),
             ("vnc_password", "", "STRING", "Gateway VNC Password", "VNC password for this org's IBKR Gateway. Managed via Super Admin → Org Detail.", "system", True),
             ("fmp_api_key", "", "STRING", "FMP API Key", "Financial Modeling Prep API key", "general", True),
@@ -432,11 +429,18 @@ def migrate():
                 WHERE key = 'org_timezone' AND organization_id = :org_id;
             """), {"org_id": org_id})
 
-            # Move operator-only IBKR fields to 'system' group (hidden from org admins)
+            # Remove IBKR gateway credentials from SystemConfig — they belong in .env only
+            conn.execute(text("""
+                DELETE FROM system_configs
+                WHERE key IN ('ibkr_username', 'ibkr_password', 'ibkr_paper_mode')
+                  AND organization_id = :org_id;
+            """), {"org_id": org_id})
+
+            # Move noVNC fields to 'system' group (hidden from org admins)
             conn.execute(text("""
                 UPDATE system_configs
                 SET "group" = 'system'
-                WHERE key IN ('ibkr_username', 'ibkr_password', 'ibkr_paper_mode', 'novnc_url', 'vnc_password')
+                WHERE key IN ('novnc_url', 'vnc_password')
                   AND organization_id = :org_id AND "group" != 'system';
             """), {"org_id": org_id})
             
