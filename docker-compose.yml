@@ -245,13 +245,14 @@ services:
   # Access at http://<host>:6080/vnc.html  password: changeme
   # ---------------------------------------------------------------------------
   novnc:
-    image: theasp/novnc:latest
+    image: dougw/novnc:latest
     container_name: vcpilot-novnc
     restart: unless-stopped
     environment:
-      REMOTE_HOST: ibkr
-      REMOTE_PORT: "5900"
-      VNC_PASSWORD: changeme
+      VNC_HOST: ibkr
+      VNC_PORT: "5900"
+      VNC_PASS: changeme
+      LOCAL_PORT: "8080"
     ports:
       - "6080:8080"
     networks:

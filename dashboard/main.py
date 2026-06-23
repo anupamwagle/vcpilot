@@ -5210,7 +5210,7 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
     except Exception:
         pass
     _ibkr_mode = _os.getenv("IBKR_PAPER_MODE", "paper")
-    _novnc_port = _os.getenv("NOVNC_PORT", "6080")
+    _novnc_url = _os.getenv("NOVNC_URL", "").rstrip("/")
 
     ctx.update({
         "configs_by_group":  by_group,
@@ -5220,7 +5220,7 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
         "error":             request.query_params.get("error", ""),
         "ibkr_connected":    _ibkr_connected,
         "ibkr_mode":         _ibkr_mode,
-        "novnc_port":        _novnc_port,
+        "novnc_url":         _novnc_url,
     })
     return templates.TemplateResponse("admin/config.html", ctx)
 

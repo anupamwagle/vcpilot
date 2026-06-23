@@ -128,7 +128,8 @@
         {% endif %}
       </div>
       <div style="display:flex;gap:.5rem;flex-shrink:0;flex-wrap:wrap">
-        <a href="http://{{ request.headers.get('host','localhost').split(':')[0] }}:{{ novnc_port }}/vnc.html?password=changeme&autoconnect=true&resize=scale"
+        {% if novnc_url %}
+        <a href="{{ novnc_url }}/vnc.html?password=changeme&autoconnect=true&resize=scale"
            target="_blank" rel="noopener"
            class="btn-admin text-xs"
            style="display:inline-flex;align-items:center;gap:.35rem;text-decoration:none">
@@ -138,6 +139,13 @@
           </svg>
           Open Gateway Login Screen
         </a>
+        {% else %}
+        <span style="font-size:.72rem;color:var(--text-muted);line-height:1.5">
+          Set <code style="background:var(--surface-alt);padding:.1rem .3rem;border-radius:.2rem;font-size:.68rem">NOVNC_URL</code>
+          in <code style="background:var(--surface-alt);padding:.1rem .3rem;border-radius:.2rem;font-size:.68rem">.env</code>
+          to enable this button
+        </span>
+        {% endif %}
         <button onclick="location.reload()" class="btn-admin text-xs" style="background:var(--surface-alt)">
           ↻ Refresh Status
         </button>
