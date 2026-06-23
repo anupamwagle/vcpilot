@@ -245,10 +245,11 @@ services:
   # Access at http://<host>:6085/vnc.html  password: changeme
   # ---------------------------------------------------------------------------
   novnc:
-    image: geek1011/easy-novnc:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.novnc
     container_name: vcpilot-novnc
     restart: unless-stopped
-    command: --addr :8080 --host ibkr --port 5900 --no-url-password
     ports:
       - "6085:8080"
     networks:
