@@ -897,12 +897,9 @@ async def home(
     total_pnl = total_realised_pnl + total_unrealised_pnl
 
     # ── Automated System Checks ──
-    # Scoped to ASX (exch="ASX") to match the exchange-specific lookups on
-    # /admin/health's Scheduled Tasks table (_lr helper) — these labels/frequencies
-    # ("5pm", "5:15pm", "5:30pm", "10am-4:12pm") are the ASX schedule specifically,
-    # so without this filter this widget could pick up a more-recent NYSE/CRYPTO
-    # audit row instead and disagree with the admin/health page for the same task.
     from app.models.audit import AuditLog, AuditAction
+    from app.models.config import SystemConfig
+
     def get_latest_check(action, message_like=None, exch=None):
         q = db.query(AuditLog).filter(
             or_(AuditLog.organization_id == org_id, AuditLog.organization_id == None),
@@ -914,26 +911,74 @@ async def home(
             q = q.filter(AuditLog.message.ilike(f"%{exch}%"))
         return q.order_by(desc(AuditLog.created_at)).first()
 
-    latest_universe = get_latest_check(AuditAction.SYSTEM_STARTED, "Universe")
-    latest_price = get_latest_check(AuditAction.TASK_RUN, "Price data", exch="ASX")
-    latest_regime = get_latest_check(AuditAction.MARKET_REGIME_CHANGE, exch="ASX")
-    latest_screen = get_latest_check(AuditAction.SCREENER_RUN, exch="ASX")
-    latest_entry = get_latest_check(AuditAction.TASK_RUN, "Entry check", exch="ASX")
-    latest_exit = get_latest_check(AuditAction.TASK_RUN, "Exit check", exch="ASX")
+    def _regime_val_home(exch_key):
+        try:
+            rc = db.query(SystemConfig).filter(
+                SystemConfig.key == f"last_market_regime_{exch_key}",
+                SystemConfig.organization_id == org_id
+            ).first()
+            return (rc.value if rc and rc.value else "—") or "—"
+        except Exception:
+            return "—"
 
-    from app.models.config import SystemConfig
-    cfg_last = db.query(SystemConfig).filter(SystemConfig.key == "last_market_regime", SystemConfig.organization_id == None).first()
-    last_eval = cfg_last.value if cfg_last else ""
+    # Detect active markets for this org
+    try:
+        _ae_cfg_h = db.query(SystemConfig).filter(
+            SystemConfig.key == "active_exchanges", SystemConfig.organization_id == org_id
+        ).first()
+        _active_excs_h = [e.strip() for e in ((_ae_cfg_h.value or "ASX") if _ae_cfg_h else "ASX").split(",") if e.strip()]
+    except Exception:
+        _active_excs_h = ["ASX"]
+    _has_asx_h   = "ASX" in _active_excs_h
+    _has_us_h    = any(e in ("NYSE", "NASDAQ") for e in _active_excs_h)
+    _has_crypto_h = any(e.startswith("CRYPTO") for e in _active_excs_h)
+    _crypto_exc_h = next((e for e in _active_excs_h if e.startswith("CRYPTO")), "CRYPTO")
 
-    checks = [
-        {"name": "Universe Constituents Sync", "frequency": "Weekly (Sun 8pm AEST)", "log": latest_universe},
-        {"name": "EOD Price Data Ingestion", "frequency": "Daily (Mon-Fri 5pm AEST)", "log": latest_price},
-        {"name": "Market Regime Evaluation", "frequency": "Daily (Mon-Fri 5:15pm AEST)", "log": latest_regime,
-         "active_regime": last_eval, "regime_is_simulated": False},
-        {"name": "AstraTrade Daily Screener", "frequency": "Daily (Mon-Fri 5:30pm AEST)", "log": latest_screen},
-        {"name": "Intraday Breakout Entry Check", "frequency": "Every 5 min (10am-4:12pm AEST)", "log": latest_entry},
-        {"name": "Intraday Position Exit Check", "frequency": "Every 5 min (10am-4:12pm AEST)", "log": latest_exit},
-    ]
+    checks = []
+
+    if _has_asx_h:
+        checks += [
+            {"name": "Universe Sync (ASX)", "frequency": "Weekly · Sun 8:00pm",
+             "log": get_latest_check(AuditAction.TASK_RUN, "Universe", exch="ASX") or
+                    get_latest_check(AuditAction.SYSTEM_STARTED, "Universe")},
+            {"name": "Price Data (ASX)", "frequency": "Mon–Fri · 5:00pm",
+             "log": get_latest_check(AuditAction.TASK_RUN, "Price data", exch="ASX")},
+            {"name": "Market Regime (ASX)", "frequency": "Mon–Fri · 5:15pm",
+             "log": get_latest_check(AuditAction.MARKET_REGIME_CHANGE, exch="ASX"),
+             "active_regime": _regime_val_home("ASX"), "regime_is_simulated": False},
+            {"name": "Screener (ASX)", "frequency": "Mon–Fri · 5:30pm",
+             "log": get_latest_check(AuditAction.SCREENER_RUN, exch="ASX")},
+            {"name": "Entry Checks (ASX)", "frequency": "Every 5 min · 10am–4:12pm",
+             "log": get_latest_check(AuditAction.TASK_RUN, "Entry check", exch="ASX")},
+            {"name": "Exit Checks (ASX)", "frequency": "Every 5 min · 10am–4:12pm",
+             "log": get_latest_check(AuditAction.TASK_RUN, "Exit check", exch="ASX")},
+        ]
+
+    if _has_us_h:
+        checks += [
+            {"name": "Price Data (US)", "frequency": "Tue–Sat · 7:00am",
+             "log": get_latest_check(AuditAction.TASK_RUN, "Price data", exch="NYSE")},
+            {"name": "Market Regime (US)", "frequency": "Tue–Sat · 7:15am",
+             "log": get_latest_check(AuditAction.MARKET_REGIME_CHANGE, exch="NYSE"),
+             "active_regime": _regime_val_home("NYSE"), "regime_is_simulated": False},
+            {"name": "Screener (US)", "frequency": "Tue–Sat · 7:30am",
+             "log": get_latest_check(AuditAction.SCREENER_RUN, exch="NYSE")},
+            {"name": "Entry + Exit Checks (US)", "frequency": "Every 5 min · 11:30pm–6:05am",
+             "log": get_latest_check(AuditAction.TASK_RUN, "Entry check", exch="NYSE")},
+        ]
+
+    if _has_crypto_h:
+        checks += [
+            {"name": "Price Data (Crypto)", "frequency": "Every 4h · 24/7",
+             "log": get_latest_check(AuditAction.TASK_RUN, "Price data", exch="CRYPTO")},
+            {"name": "Market Regime (Crypto)", "frequency": "Every 4h · 24/7",
+             "log": get_latest_check(AuditAction.MARKET_REGIME_CHANGE, exch="CRYPTO"),
+             "active_regime": _regime_val_home(_crypto_exc_h), "regime_is_simulated": False},
+            {"name": "Screener (Crypto)", "frequency": "Every 4h · 6× daily",
+             "log": get_latest_check(AuditAction.SCREENER_RUN, exch="CRYPTO")},
+            {"name": "Entry + Exit Checks (Crypto)", "frequency": "Every 5 min · 24/7",
+             "log": get_latest_check(AuditAction.TASK_RUN, "Entry check", exch="CRYPTO")},
+        ]
 
     # ── Watchlist Market Data Table ──
     from app.models.signal import Watchlist, WatchlistStatus, WatchlistLabel

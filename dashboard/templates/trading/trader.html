@@ -105,6 +105,14 @@
       border: 1px solid transparent;
     }
     .back-link:hover { color: var(--accent); border-color: var(--border); background: var(--surf2); }
+    .nav-link-item {
+      color: var(--muted); text-decoration: none; font-size: 10px;
+      font-weight: 600; letter-spacing: 0.04em;
+      padding: 2px 6px; border-radius: 3px;
+      transition: color .15s, background .15s;
+    }
+    .nav-link-item:hover { color: var(--text); background: var(--surf2); }
+    .nav-link-item.active-nav { color: var(--accent); font-weight: 700; }
 
     /* ── Ticker tape ────────────────────────────────────────────────────── */
     .tv-tape {

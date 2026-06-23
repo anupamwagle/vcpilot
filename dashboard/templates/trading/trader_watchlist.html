@@ -546,8 +546,8 @@
         </div>
       </template>
 
-      <!-- EQUITY section -->
-      <template x-if="data && (assetFilter === 'ALL' || assetFilter === 'EQUITY')">
+      <!-- EQUITY section (show for ALL, EQUITY, ASX, US — any non-crypto-only filter) -->
+      <template x-if="data && assetFilter !== 'CRYPTO'">
         <div>
           <template x-if="assetFilter === 'ALL' && stats && stats.equity_count > 0">
             <div class="asset-divider">
@@ -619,8 +619,8 @@
         </div>
       </template>
 
-      <!-- CRYPTO section -->
-      <template x-if="data && (assetFilter === 'ALL' || assetFilter === 'CRYPTO')">
+      <!-- CRYPTO section (show for ALL and CRYPTO — any non-equity-only filter) -->
+      <template x-if="data && assetFilter !== 'EQUITY' && assetFilter !== 'ASX' && assetFilter !== 'US'">
         <div>
           <template x-if="assetFilter === 'ALL' && stats && stats.crypto_count > 0">
             <div class="asset-divider" style="border-top:2px solid #f7931a22;margin-top:8px">
@@ -1198,6 +1198,7 @@ function wlApp() {
           ...g,
           items: g.items.filter(i =>
             !this.isCrypto(i) &&
+            this.matchesExchange(i, this.assetFilter) &&
             (this.tierFilter === 'ALL' || i.setup_tier === this.tierFilter) &&
             (!q || i.display_ticker.toLowerCase().includes(q) || (i.name||'').toLowerCase().includes(q))
           )
@@ -1214,6 +1215,7 @@ function wlApp() {
           ...g,
           items: g.items.filter(i =>
             this.isCrypto(i) &&
+            this.matchesExchange(i, this.assetFilter) &&
             (this.tierFilter === 'ALL' || i.setup_tier === this.tierFilter) &&
             (!q || i.display_ticker.toLowerCase().includes(q) || (i.name||'').toLowerCase().includes(q))
           )
