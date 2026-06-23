@@ -17,6 +17,7 @@ volumes:
   postgres-data:
   redis-data:
   waha-data:
+  ibkr-jts:
 
 services:
 
@@ -233,7 +234,7 @@ services:
       - "4002:4002"
       - "5900:5900"
     volumes:
-      - /share/Container/vcpilot/dev_user/vcpilot/docker/ibkr:/root/Jts
+      - ibkr-jts:/root/Jts
     networks:
       - vcpilot-net
     profiles:
