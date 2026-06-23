@@ -7325,9 +7325,9 @@ async def superadmin_operations(request: Request, db: Session = Depends(get_db))
         "regime_asx":    _glr(["Market regime"], "ASX",   actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_asx else None,
         "regime_us":     _glr(["Market regime"], "NYSE",  actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_us else None,
         "regime_crypto": _glr(["Market regime"], "CRYPTO",actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_crypto else None,
-        "screen_asx":    _glr(["screen", "Screen"], "ASX",   actions=[AuditAction.TASK_RUN]) if has_asx else None,
-        "screen_us":     _glr(["screen", "Screen"], "NYSE",  actions=[AuditAction.TASK_RUN]) if has_us else None,
-        "screen_crypto": _glr(["screen", "Screen"], "CRYPTO",actions=[AuditAction.TASK_RUN]) if has_crypto else None,
+        "screen_asx":    _glr(["Force screen", "Screen complete"], "ASX",   actions=[AuditAction.SCREENER_RUN]) if has_asx else None,
+        "screen_us":     _glr(["Force screen", "Screen complete"], "NYSE",  actions=[AuditAction.SCREENER_RUN]) if has_us else None,
+        "screen_crypto": _glr(["Force screen", "Screen complete"], "CRYPTO",actions=[AuditAction.SCREENER_RUN]) if has_crypto else None,
         "heartbeat":     _glr(["Heartbeat"], actions=[AuditAction.HEALTH_CHECK]),
     }
 
@@ -8576,9 +8576,9 @@ async def superadmin_operations(request: Request, db: Session = Depends(get_db))
         "regime_asx":    _glr(["Market regime"], "ASX",   actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_asx else None,
         "regime_us":     _glr(["Market regime"], "NYSE",  actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_us else None,
         "regime_crypto": _glr(["Market regime"], "CRYPTO",actions=[AuditAction.MARKET_REGIME_CHANGE, AuditAction.TASK_RUN]) if has_crypto else None,
-        "screen_asx":    _glr(["screen", "Screen"], "ASX",   actions=[AuditAction.TASK_RUN]) if has_asx else None,
-        "screen_us":     _glr(["screen", "Screen"], "NYSE",  actions=[AuditAction.TASK_RUN]) if has_us else None,
-        "screen_crypto": _glr(["screen", "Screen"], "CRYPTO",actions=[AuditAction.TASK_RUN]) if has_crypto else None,
+        "screen_asx":    _glr(["Force screen", "Screen complete"], "ASX",   actions=[AuditAction.SCREENER_RUN]) if has_asx else None,
+        "screen_us":     _glr(["Force screen", "Screen complete"], "NYSE",  actions=[AuditAction.SCREENER_RUN]) if has_us else None,
+        "screen_crypto": _glr(["Force screen", "Screen complete"], "CRYPTO",actions=[AuditAction.SCREENER_RUN]) if has_crypto else None,
         "heartbeat":     _glr(["Heartbeat"], actions=[AuditAction.HEALTH_CHECK]),
     }
 
