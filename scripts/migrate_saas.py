@@ -926,6 +926,91 @@ def migrate():
         conn.commit()
         logger.info("Migration 006 complete.")
 
+        # ── Migration 007 — Minervini rule tune-up (RS 80, stop cap, trailing exit, earnings cushion) ─
+        logger.info("Running migration 007 — Minervini rule optimisation...")
+
+        # 1. Raise RS rating floor 70 → 80 (only where still at the old default, so we
+        #    don't clobber a value an admin deliberately set). Widen max to 99.
+        conn.execute(text("""
+            UPDATE rule_configs
+            SET threshold = 80, threshold_max = 99,
+                label = 'Relative Strength ≥ 80',
+                minervini_ref = 'RS Rating: leaders are 80–90+, not merely ≥ 70'
+            WHERE rule_id = 'trend_rs_rating_min' AND threshold = 70;
+        """))
+        # Ensure the max is wide enough even on rows already bumped
+        conn.execute(text("""
+            UPDATE rule_configs SET threshold_max = 99
+            WHERE rule_id = 'trend_rs_rating_min' AND (threshold_max IS NULL OR threshold_max < 90);
+        """))
+
+        # 2. Seed three new rules to the global template AND every org copy.
+        #    (rule_id, category, label, description, minervini_ref, asset_types, threshold,
+        #     threshold_label, threshold_min, threshold_max, sort_order)
+        new_rules = [
+            ("equity_stop_width_max_pct", "EXIT_DEFENSIVE",
+             "Max equity stop width: 8% below entry",
+             "Caps how far the protective stop can sit below the actual entry price. The VCP stop "
+             "(low of the final contraction) can occasionally imply a very wide loss; Minervini's "
+             "discipline is a 7–8% maximum stop, never beyond 10%, average loss 5–6%. When the natural "
+             "stop is wider than this cap it is tightened to the cap (position size rises while honouring "
+             "the 2% capital-risk rule). Crypto keeps its own wider stop (crypto_stop_width_pct).",
+             "Cut losses short — stop ≤ 7–8%, never beyond 10%", "EQUITY",
+             8.0, "Max stop distance below entry (%)", 5.0, 12.0, 65),
+            ("exit_earnings_hold_cushion_pct", "EXIT_DEFENSIVE",
+             "Hold through earnings if cushion ≥ 10%",
+             "Minervini does not blanket-exit before every earnings report — he holds through a print "
+             "when the position already has a comfortable profit cushion, and only avoids initiating into "
+             "earnings. When enabled and the open gain is at least this threshold, the position is held "
+             "through earnings; below the cushion it is exited per exit_earnings_avoid.",
+             "Hold through earnings only with a profit cushion", "EQUITY",
+             10.0, "Min open gain % to hold through earnings", 5.0, 40.0, 64),
+            ("exit_trail_giveback_pct", "EXIT_OFFENSIVE",
+             "Trailing give-back after activation: 10%",
+             "After the trailing stop activates (exit_profit_target_2), the position is held as long as "
+             "it keeps making new highs and is only exited once price retraces this much from its peak "
+             "since entry. A 10% give-back lets a runner breathe while still locking in the bulk of an "
+             "extended move — the opposite of dumping the whole position at an arbitrary fixed target.",
+             "Trail a winner; exit on meaningful give-back from the high", "BOTH",
+             10.0, "Max give-back from peak (%)", 5.0, 25.0, 73),
+        ]
+        orgs_list = conn.execute(text("SELECT id FROM organizations")).fetchall()
+        for (rid, cat, label, desc, ref, at, thr, tlabel, tmin, tmax, so) in new_rules:
+            for oid in [None] + [o[0] for o in orgs_list]:
+                if oid is None:
+                    exists = conn.execute(text(
+                        "SELECT 1 FROM rule_configs WHERE rule_id = :r AND organization_id IS NULL"
+                    ), {"r": rid}).fetchone()
+                else:
+                    exists = conn.execute(text(
+                        "SELECT 1 FROM rule_configs WHERE rule_id = :r AND organization_id = :o"
+                    ), {"r": rid, "o": oid}).fetchone()
+                if exists:
+                    continue
+                conn.execute(text("""
+                    INSERT INTO rule_configs (rule_id, organization_id, category, label, description,
+                        minervini_ref, enabled_globally, is_mandatory, asset_types,
+                        threshold, threshold_label, threshold_min, threshold_max, sort_order, updated_by)
+                    VALUES (:rid, :oid, :cat, :label, :desc, :ref, true, false, :at,
+                        :thr, :tlabel, :tmin, :tmax, :so, 'migration_007')
+                """), {"rid": rid, "oid": oid, "cat": cat, "label": label, "desc": desc, "ref": ref,
+                       "at": at, "thr": thr, "tlabel": tlabel, "tmin": tmin, "tmax": tmax, "so": so})
+
+        # 3. Re-point exit_profit_target_2 label/description toward trailing behaviour
+        conn.execute(text("""
+            UPDATE rule_configs
+            SET label = 'Activate trailing stop at 40% profit',
+                description = 'Once the open gain reaches this level the remaining position is no longer '
+                              'hard-sold at a fixed number — a trailing give-back stop activates '
+                              '(exit_trail_giveback_pct) so big winners can keep running. If the trailing '
+                              'rule is disabled this falls back to a hard full exit at the target.',
+                minervini_ref = 'Let your winners run — trail, don''t cap',
+                threshold_min = 20
+            WHERE rule_id = 'exit_profit_target_2';
+        """))
+        conn.commit()
+        logger.info("Migration 007 complete.")
+
         # ── Seed per-org multi-market config keys ──────────────────────────────
         multi_market_configs = [
             ("active_exchanges", "ASX,CRYPTO_INDEPENDENTRESERVE", "STRING",

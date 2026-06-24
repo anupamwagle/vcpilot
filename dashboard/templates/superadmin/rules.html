@@ -3,6 +3,23 @@
 {% block page_title %}Global Config per Tier{% endblock %}
 
 {% block content %}
+<style>
+.mv-tip{position:relative;display:inline-flex;align-items:center;cursor:help}
+.mv-tip > .mv-ico{width:.95rem;height:.95rem;border-radius:50%;border:1px solid var(--border);
+  color:var(--text-subtle);font-size:.62rem;font-weight:700;font-style:normal;
+  display:inline-flex;align-items:center;justify-content:center;line-height:1}
+.mv-tip:hover > .mv-ico{border-color:var(--t-accent);color:var(--t-accent)}
+.mv-tip .mv-box{visibility:hidden;opacity:0;transition:opacity .15s ease;pointer-events:none;
+  position:absolute;z-index:60;bottom:150%;left:0;width:19rem;max-width:78vw;
+  padding:.625rem .75rem;border-radius:.5rem;background:var(--surface);
+  border:1px solid var(--border);box-shadow:0 10px 28px rgba(0,0,0,.22);text-align:left;white-space:normal}
+.mv-tip:hover .mv-box,.mv-tip:focus .mv-box,.mv-tip:focus-within .mv-box{visibility:visible;opacity:1}
+.mv-tip .mv-ref{display:block;font-size:.66rem;font-style:italic;color:var(--t-accent);
+  margin-bottom:.3rem;font-weight:600}
+.mv-tip .mv-desc{display:block;font-size:.72rem;color:var(--text-muted);line-height:1.4}
+.cat-badge{font-size:.6rem;font-weight:600;padding:.05rem .4rem;border-radius:.35rem;
+  background:var(--surface);color:var(--text-subtle);border:1px solid var(--border)}
+</style>
 
 {% set saved = request.query_params.get('saved', '') %}
 {% set synced = request.query_params.get('synced', '') %}
@@ -145,6 +162,16 @@ function resetSimulation() {
           <div class="flex-1">
             <div class="flex items-center gap-2 flex-wrap">
               <span class="text-sm font-semibold" style="color:var(--text)">{{ r.label }}</span>
+              {% if r.minervini_ref or r.description %}
+              <span class="mv-tip" tabindex="0" aria-label="Rule explanation">
+                <span class="mv-ico">i</span>
+                <span class="mv-box">
+                  {% if r.minervini_ref %}<span class="mv-ref">📖 {{ r.minervini_ref }}</span>{% endif %}
+                  {% if r.description %}<span class="mv-desc">{{ r.description }}</span>{% endif %}
+                </span>
+              </span>
+              {% endif %}
+              <span class="cat-badge">{{ label }}</span>
               {% if r.is_mandatory %}
                 <span class="text-[10px] font-bold px-1.5 py-0.5 rounded" style="background:var(--border);color:var(--text-subtle)">Mandatory</span>
               {% endif %}

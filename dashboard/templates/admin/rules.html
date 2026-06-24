@@ -3,6 +3,23 @@
 {% block page_title %}AstraTrade Rules Configuration{% endblock %}
 
 {% block content %}
+<style>
+.mv-tip{position:relative;display:inline-flex;align-items:center;cursor:help}
+.mv-tip > .mv-ico{width:.95rem;height:.95rem;border-radius:50%;border:1px solid var(--border);
+  color:var(--text-subtle);font-size:.62rem;font-weight:700;font-style:normal;
+  display:inline-flex;align-items:center;justify-content:center;line-height:1}
+.mv-tip:hover > .mv-ico{border-color:var(--t-accent);color:var(--t-accent)}
+.mv-tip .mv-box{visibility:hidden;opacity:0;transition:opacity .15s ease;pointer-events:none;
+  position:absolute;z-index:60;bottom:150%;left:0;width:19rem;max-width:78vw;
+  padding:.625rem .75rem;border-radius:.5rem;background:var(--surface);
+  border:1px solid var(--border);box-shadow:0 10px 28px rgba(0,0,0,.22);text-align:left;white-space:normal}
+.mv-tip:hover .mv-box,.mv-tip:focus .mv-box,.mv-tip:focus-within .mv-box{visibility:visible;opacity:1}
+.mv-tip .mv-ref{display:block;font-size:.66rem;font-style:italic;color:var(--t-accent);
+  margin-bottom:.3rem;font-weight:600}
+.mv-tip .mv-desc{display:block;font-size:.72rem;color:var(--text-muted);line-height:1.4}
+.cat-badge{font-size:.6rem;font-weight:600;padding:.05rem .4rem;border-radius:.35rem;
+  background:var(--surface-alt);color:var(--text-subtle);border:1px solid var(--border)}
+</style>
 {% if saved %}
 <div class="alert-success mb-4">
   <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
@@ -51,6 +68,16 @@
             <!-- Title row -->
             <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.375rem">
               <span style="font-size:.875rem;font-weight:600;color:{% if rule.enabled %}var(--text){% else %}var(--text-subtle){% endif %}">{{ rule.label }}</span>
+              {% if rule.minervini_ref or rule.description %}
+              <span class="mv-tip" tabindex="0" aria-label="Rule explanation">
+                <span class="mv-ico">i</span>
+                <span class="mv-box">
+                  {% if rule.minervini_ref %}<span class="mv-ref">📖 {{ rule.minervini_ref }}</span>{% endif %}
+                  {% if rule.description %}<span class="mv-desc">{{ rule.description }}</span>{% endif %}
+                </span>
+              </span>
+              {% endif %}
+              <span class="cat-badge">{{ cat_label }}</span>
               {% if rule.is_mandatory %}<span class="tag-neg" style="font-size:.65rem">🔒 Mandatory</span>{% endif %}
               {% if rule.minervini_ref %}<span class="tag" style="font-size:.65rem;font-style:italic">{{ rule.minervini_ref }}</span>{% endif %}
               {% set at = rule.asset_types | default('BOTH') %}

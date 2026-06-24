@@ -388,15 +388,21 @@ def test_action_recategorise_labels_reads_organization_id_from_session():
     import dashboard.main as m
     req = _mock_request({"authenticated": True, "organization_id": 77})
     captured = {}
-    mock_task = MagicMock()
-    mock_task.delay = lambda **kw: captured.update(kw)
+    mock_recat = MagicMock()
+    mock_recat.si = lambda **kw: captured.update(kw) or MagicMock()
+    mock_refresh = MagicMock()
+    mock_refresh.si = lambda **kw: MagicMock()
 
-    with patch("app.tasks.screening.recategorise_watchlist_labels", mock_task):
+    # Route chains refresh_asx_sector_data -> recategorise_watchlist_labels via
+    # celery.chain, invoking each task's .si(); assert org_id flows through .si().
+    with patch("app.tasks.screening.recategorise_watchlist_labels", mock_recat), \
+         patch("app.tasks.screening.refresh_asx_sector_data", mock_refresh):
         _run(m.action_recategorise_labels(request=req, force="0"))
 
     assert captured.get("organization_id") == 77, (
-        f"action_recategorise_labels must pass org_id=77; got {captured!r}"
+        f"action_recategorise_labels must pass org_id=77 via chain .si(); got {captured!r}"
     )
+    assert captured.get("force") is False
 
 
 # ---------------------------------------------------------------------------

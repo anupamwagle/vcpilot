@@ -496,6 +496,33 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                 else:
                     asset_currency = "USD" if signal.exchange_key in ("NYSE", "NASDAQ") else "AUD"
 
+                # ── Equity stop-width cap (Minervini: max ~7–8% stop, never beyond 10%) ──
+                # The VCP stop (low of the final contraction) can occasionally sit further
+                # than a prudent maximum below the actual entry. Tighten it to the cap so no
+                # equity trade risks more than `equity_stop_width_max_pct` from entry. This
+                # also lifts position size while holding the 2% capital-risk rule constant.
+                # Crypto keeps its own (wider) stop via crypto_stop_width_pct — untouched here.
+                # `signal` is detached (session closed), so this mutation is in-memory only and
+                # is consumed consistently by sizing, the broker order, and the Position below.
+                if not is_crypto_asset and engine.is_enabled("equity_stop_width_max_pct"):
+                    _cap_pct = float(engine.threshold("equity_stop_width_max_pct") or 8.0)
+                    _min_stop = entry_price * (1.0 - _cap_pct / 100.0)
+                    _raw_stop = float(signal.stop_price)
+                    if _raw_stop < _min_stop:
+                        signal.stop_price = round(_min_stop, 6)
+                        with get_db() as _cap_db:
+                            _cap_db.add(AuditLog(
+                                action=AuditAction.TASK_RUN,
+                                organization_id=org.id,
+                                ticker=signal.ticker,
+                                message=(f"🛡 {signal.ticker}: equity stop tightened "
+                                         f"${_raw_stop:.3f} → ${_min_stop:.3f} "
+                                         f"(capped at {_cap_pct:.0f}% below entry ${entry_price:.3f})"),
+                                detail={"signal_id": signal.id, "orig_stop": _raw_stop,
+                                        "capped_stop": round(_min_stop, 6),
+                                        "cap_pct": _cap_pct, "entry": entry_price},
+                            ))
+
                 sizing = calculate_position_size(
                     capital_aud=capital,
                     entry_price=entry_price,

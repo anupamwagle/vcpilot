@@ -134,10 +134,20 @@ class CryptoBroker:
             self._exchange = exchange_class(exchange_config)
 
             if self.testnet and self.ccxt_provider != "mexc":
-                # Enable sandbox/testnet if supported (not MEXC)
-                if hasattr(self._exchange, "set_sandbox_mode"):
+                # Only some exchanges expose a ccxt sandbox/testnet. Independent
+                # Reserve (and others) have none — calling set_sandbox_mode points
+                # the client at non-existent URLs and fetch_balance() then fails
+                # with "NoneType object is not iterable". Detect a real "test"
+                # endpoint first; if absent, use local simulation, not a crash.
+                test_url = (getattr(self._exchange, "urls", {}) or {}).get("test")
+                if test_url and hasattr(self._exchange, "set_sandbox_mode"):
                     self._exchange.set_sandbox_mode(True)
                     logger.info(f"CryptoBroker: {self.ccxt_provider} testnet enabled")
+                else:
+                    logger.info(f"CryptoBroker: {self.ccxt_provider} has no ccxt testnet — using simulation mode")
+                    self._exchange = None
+                    self._connected = False
+                    return False
 
             # Verify credentials with a balance fetch
             self._exchange.fetch_balance()

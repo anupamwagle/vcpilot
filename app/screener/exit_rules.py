@@ -102,12 +102,29 @@ def evaluate_exit_rules(
         buffer_days = int(engine.threshold(rule_id) or 5)
         early_warn_days = buffer_days * 3   # early warning at 3× the buffer (e.g. 15d if buffer=5)
         if 0 <= days_to_earnings <= buffer_days:
-            # Within the exit buffer — trigger full exit
-            signals.append(ExitSignal(
-                should_exit=True, reason=ExitReason.EARNINGS_AVOID, exit_type="FULL",
-                message=f"Earnings in {days_to_earnings}d — exiting per rule (buffer {buffer_days}d)",
-                rule_id=rule_id
-            ))
+            # Within the exit buffer. Minervini doesn't blanket-exit before every print —
+            # he holds through earnings WHEN there is a comfortable profit cushion, and only
+            # exits names that are thin/near breakeven (where a gap-down does real damage).
+            cushion_rule = "exit_earnings_hold_cushion_pct"
+            hold_cushion = engine.is_enabled(cushion_rule)
+            cushion_pct = float(engine.threshold(cushion_rule) or 10.0)
+            if hold_cushion and pnl_pct >= cushion_pct:
+                # Enough cushion — hold through earnings (surfaced as a hold in the log)
+                signals.append(ExitSignal(
+                    should_exit=False, reason=ExitReason.EARNINGS_AVOID,
+                    message=(f"Earnings in {days_to_earnings}d — holding through "
+                             f"(cushion {pnl_pct:.1f}% ≥ {cushion_pct:.0f}%)"),
+                    rule_id=rule_id
+                ))
+            else:
+                # Thin cushion (or rule disabled) — exit to avoid binary earnings risk
+                _why = (f"cushion {pnl_pct:.1f}% < {cushion_pct:.0f}%" if hold_cushion
+                        else f"buffer {buffer_days}d")
+                signals.append(ExitSignal(
+                    should_exit=True, reason=ExitReason.EARNINGS_AVOID, exit_type="FULL",
+                    message=f"Earnings in {days_to_earnings}d — exiting per rule ({_why})",
+                    rule_id=rule_id
+                ))
         elif days_to_earnings <= early_warn_days:
             # Early warning window — flag it but don't exit yet
             # (surfaces in audit log "holding" summary so operator can decide)
@@ -137,17 +154,51 @@ def evaluate_exit_rules(
             ))
 
     # -------------------------------------------------------------------------
-    # Profit Target 2 (full exit at 40–50%)
+    # Profit Target 2 → Trailing give-back stop (let winners run)
     # -------------------------------------------------------------------------
+    # Minervini's edge is asymmetric: a few very large winners pay for many small
+    # losses. A fixed "sell everything at 40%" cap guarantees you amputate those
+    # runners. Instead, once the gain reaches the activation level we trail from the
+    # peak-since-entry and only exit when price gives back `exit_trail_giveback_pct`
+    # from that high. If the trailing rule is disabled we fall back to the legacy
+    # hard full exit at the target so behaviour is never silently lost.
     rule_id = "exit_profit_target_2"
     if engine.is_enabled(rule_id):
         target_pct = float(engine.threshold(rule_id) or 40.0)
         if pnl_pct >= target_pct:
-            signals.append(ExitSignal(
-                should_exit=True, reason=ExitReason.PROFIT_TARGET_2, exit_type="FULL",
-                message=f"Target 2: {pnl_pct:.1f}% gain ≥ {target_pct}% — full exit",
-                rule_id=rule_id
-            ))
+            if engine.is_enabled("exit_trail_giveback_pct"):
+                giveback_pct = float(engine.threshold("exit_trail_giveback_pct") or 10.0)
+                # Peak since entry (fall back to the full window if dates unavailable)
+                try:
+                    _since = df_daily[df_daily.index >= pd.Timestamp(entry_date)]
+                    peak = float(_since["high"].max()) if not _since.empty else float(df_daily["high"].max())
+                except Exception:
+                    peak = float(df_daily["high"].max())
+                if not peak or peak <= 0:
+                    peak = max(current_price, entry_price)
+                trail_stop = peak * (1.0 - giveback_pct / 100.0)
+                if current_price <= trail_stop:
+                    signals.append(ExitSignal(
+                        should_exit=True, reason=ExitReason.PROFIT_TARGET_2, exit_type="FULL",
+                        message=(f"Trailing stop: +{pnl_pct:.1f}% — gave back ≥{giveback_pct:.0f}% "
+                                 f"from peak {peak:.3f} (trail {trail_stop:.3f})"),
+                        rule_id=rule_id
+                    ))
+                else:
+                    # Still riding the winner — surface as a hold so it shows in the log
+                    signals.append(ExitSignal(
+                        should_exit=False, reason=ExitReason.PROFIT_TARGET_2,
+                        message=(f"Riding winner +{pnl_pct:.1f}% — trailing stop {trail_stop:.3f} "
+                                 f"({giveback_pct:.0f}% below peak {peak:.3f})"),
+                        rule_id=rule_id
+                    ))
+            else:
+                # Legacy behaviour: hard full exit at the fixed target
+                signals.append(ExitSignal(
+                    should_exit=True, reason=ExitReason.PROFIT_TARGET_2, exit_type="FULL",
+                    message=f"Target 2: {pnl_pct:.1f}% gain ≥ {target_pct}% — full exit",
+                    rule_id=rule_id
+                ))
 
     # -------------------------------------------------------------------------
     # Climax Top (exhaustion — extreme volume + wide range up day after big run)
@@ -216,3 +267,4 @@ def evaluate_exit_rules(
                 logger.info(f"{ticker}: 3-weeks-tight pattern — holding position")
 
     return signals
+# end evaluate_exit_rules

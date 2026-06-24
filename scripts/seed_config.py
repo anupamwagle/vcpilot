@@ -229,11 +229,14 @@ RULE_CONFIGS = [
 
     dict(rule_id="trend_rs_rating_min",
          category="TREND_TEMPLATE", sort_order=18,
-         label="Relative Strength ≥ 70",
-         description="Stock RS rating must be ≥ 70th percentile vs ASX200. Equity only — not applicable to crypto.",
-         minervini_ref="RS Rating requirement (equivalent to IBD RS ≥ 70)",
-         threshold=70.0, threshold_label="Min RS percentile (0–100)",
-         threshold_min=50.0, threshold_max=90.0,
+         label="Relative Strength ≥ 80",
+         description="Stock RS rating must be ≥ 80th percentile vs ASX200. Minervini's real "
+                     "market leaders run RS 80–90+; 70 is only the bare floor. Raising to 80 "
+                     "concentrates the watchlist on genuine leadership — especially valuable in a "
+                     "thinner ASX universe. Equity only — not applicable to crypto.",
+         minervini_ref="RS Rating: leaders are 80–90+, not merely ≥ 70",
+         threshold=80.0, threshold_label="Min RS percentile (0–100)",
+         threshold_min=50.0, threshold_max=99.0,
          asset_types="EQUITY",
          enabled_globally=True, is_mandatory=False),
 
@@ -324,6 +327,7 @@ RULE_CONFIGS = [
          category="VCP", sort_order=32,
          label="VCP: Max base length",
          description="Upper limit on base length in weeks.",
+         minervini_ref="VCP: bases beyond ~1 year lose their coiled-spring character",
          threshold=52.0, threshold_label="Max base weeks",
          threshold_min=20.0, threshold_max=104.0,
          enabled_globally=True, is_mandatory=False),
@@ -448,6 +452,20 @@ RULE_CONFIGS = [
          minervini_ref="Cut losses short — never let a loss exceed stop",
          enabled_globally=True, is_mandatory=True, threshold=None),
 
+    dict(rule_id="equity_stop_width_max_pct",
+         category="EXIT_DEFENSIVE", sort_order=65, asset_types="EQUITY",
+         label="Max equity stop width: 8% below entry",
+         description="Caps how far the protective stop can sit below the actual entry price. "
+                     "The VCP stop (low of the final contraction) can occasionally imply a very wide "
+                     "loss; Minervini's discipline is a 7–8% maximum stop, never beyond 10%, with an "
+                     "average loss of 5–6%. When the natural stop is wider than this cap, the stop is "
+                     "tightened to the cap (and position size rises accordingly while still honouring the "
+                     "2% capital-risk rule). Crypto keeps its own wider stop (crypto_stop_width_pct).",
+         minervini_ref="Cut losses short — stop ≤ 7–8%, never beyond 10%",
+         threshold=8.0, threshold_label="Max stop distance below entry (%)",
+         threshold_min=5.0, threshold_max=12.0,
+         enabled_globally=True, is_mandatory=False),
+
     dict(rule_id="exit_time_stop",
          category="EXIT_DEFENSIVE", sort_order=61,
          label="Time Stop: Exit if not up 10% in 3 weeks",
@@ -461,6 +479,7 @@ RULE_CONFIGS = [
          category="EXIT_DEFENSIVE", sort_order=62,
          label="Time Stop: Weeks before triggering",
          description="Number of weeks to wait before applying the time stop.",
+         minervini_ref="Time stop — don't let capital sit dead in a non-performer",
          threshold=3.0, threshold_label="Weeks",
          threshold_min=2.0, threshold_max=8.0,
          enabled_globally=True, is_mandatory=False),
@@ -472,6 +491,20 @@ RULE_CONFIGS = [
          minervini_ref="Never hold through earnings — binary risk event",
          threshold=5.0, threshold_label="Trading days before earnings to exit",
          threshold_min=1.0, threshold_max=20.0,
+         enabled_globally=True, is_mandatory=False),
+
+    dict(rule_id="exit_earnings_hold_cushion_pct",
+         category="EXIT_DEFENSIVE", sort_order=63.5, asset_types="EQUITY",
+         label="Hold through earnings if cushion ≥ 10%",
+         description="Minervini does not blanket-exit before every earnings report — he will hold "
+                     "through a print when the position already has a comfortable profit cushion, and "
+                     "only avoids initiating into earnings. When this rule is enabled and the open gain "
+                     "is at least this threshold, the position is held through earnings (and the stop "
+                     "tightened); below the cushion it is exited per exit_earnings_avoid. Disable to "
+                     "force an unconditional pre-earnings exit.",
+         minervini_ref="Hold through earnings only with a profit cushion",
+         threshold=10.0, threshold_label="Min open gain % to hold through earnings",
+         threshold_min=5.0, threshold_max=40.0,
          enabled_globally=True, is_mandatory=False),
 
     dict(rule_id="exit_break_below_50ma",
@@ -496,17 +529,35 @@ RULE_CONFIGS = [
     dict(rule_id="exit_profit_target_1_sell_pct",
          category="EXIT_OFFENSIVE", sort_order=71,
          label="Partial exit 1: % of position to sell",
+         minervini_ref="Sell into strength — bank part of the gain, ride the rest",
          threshold=50.0, threshold_label="% of position to sell at target 1",
          threshold_min=25.0, threshold_max=100.0,
          enabled_globally=True, is_mandatory=False),
 
     dict(rule_id="exit_profit_target_2",
          category="EXIT_OFFENSIVE", sort_order=72,
-         label="Full exit at 40% profit",
-         description="Exit remaining position at 40% gain.",
-         minervini_ref="Take full profits at extended targets",
-         threshold=40.0, threshold_label="Second profit target %",
-         threshold_min=30.0, threshold_max=100.0,
+         label="Activate trailing stop at 40% profit",
+         description="Once the open gain reaches this level the remaining position is no longer hard-sold "
+                     "at a fixed number — instead a trailing give-back stop activates (see "
+                     "exit_trail_giveback_pct) so big winners can keep running. This preserves Minervini's "
+                     "asymmetric edge: the occasional 100%+ winner pays for many small losses. If the "
+                     "trailing rule is disabled, this falls back to a hard full exit at the target.",
+         minervini_ref="Let your winners run — trail, don't cap",
+         threshold=40.0, threshold_label="Trailing-stop activation gain %",
+         threshold_min=20.0, threshold_max=100.0,
+         enabled_globally=True, is_mandatory=False),
+
+    dict(rule_id="exit_trail_giveback_pct",
+         category="EXIT_OFFENSIVE", sort_order=72.5,
+         label="Trailing give-back after activation: 10%",
+         description="After the trailing stop activates (exit_profit_target_2), the position is held as "
+                     "long as it keeps making new highs and is only exited once price retraces this much "
+                     "from its peak since entry. A 10% give-back lets a runner breathe while still locking "
+                     "in the bulk of an extended move — the opposite of dumping the whole position at an "
+                     "arbitrary fixed target.",
+         minervini_ref="Trail a winner; exit on meaningful give-back from the high",
+         threshold=10.0, threshold_label="Max give-back from peak (%)",
+         threshold_min=5.0, threshold_max=25.0,
          enabled_globally=True, is_mandatory=False),
 
     dict(rule_id="exit_climax_top",
@@ -521,6 +572,7 @@ RULE_CONFIGS = [
     dict(rule_id="exit_climax_top_min_run",
          category="EXIT_OFFENSIVE", sort_order=74,
          label="Climax top: min prior run to qualify",
+         minervini_ref="Climax tops only matter after an extended advance",
          threshold=50.0, threshold_label="Min % gain before checking climax",
          threshold_min=30.0, threshold_max=200.0,
          enabled_globally=True, is_mandatory=False),
@@ -559,6 +611,7 @@ RULE_CONFIGS = [
          category="POSITION_SIZING", sort_order=81,
          label="Max position size: 30% of capital",
          description="No single position can exceed 30% of total capital.",
+         minervini_ref="Concentration with control — cap single-name exposure (≤ 50%)",
          threshold=30.0, threshold_label="Max position size % of capital",
          threshold_min=10.0, threshold_max=50.0,
          enabled_globally=True, is_mandatory=False),
@@ -588,6 +641,7 @@ RULE_CONFIGS = [
          category="PORTFOLIO", sort_order=90,
          label="Max open positions: 5",
          description="Maximum number of simultaneously open positions.",
+         minervini_ref="Run a concentrated book of leaders (≈4–8 names)",
          threshold=5.0, threshold_label="Max open positions",
          threshold_min=1.0, threshold_max=20.0,
          enabled_globally=True, is_mandatory=False),
@@ -836,3 +890,4 @@ def seed_all():
 
 if __name__ == "__main__":
     seed_all()
+# end seed_config

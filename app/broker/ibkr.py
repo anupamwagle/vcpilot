@@ -102,7 +102,7 @@ class IBKRBroker:
             return True
         except Exception as e:
             IBKRBroker._last_fail_times[key] = time.time()
-            logger.error(f"IBKR connection failed: {e}")
+            logger.error(f"IBKR connection failed: {type(e).__name__}: {e!r}")
             return False
 
     def disconnect(self):

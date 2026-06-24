@@ -5000,12 +5000,13 @@ async def admin_rules(request: Request, db: Session = Depends(get_db)):
         "ENTRY": "Entry Rules",              "EXIT_DEFENSIVE": "Defensive Exits",
         "EXIT_OFFENSIVE": "Offensive Exits", "POSITION_SIZING": "Position Sizing",
         "PORTFOLIO": "Portfolio Rules",      "EARNINGS": "Earnings Rules",
+        "CRYPTO": "Crypto Rules",
     }
     CATEGORY_ICONS = {
         "TREND_TEMPLATE": "📈", "FUNDAMENTAL": "📊", "VCP": "🔄",
         "MARKET_REGIME": "🌡️",  "ENTRY": "🎯",       "EXIT_DEFENSIVE": "🛑",
         "EXIT_OFFENSIVE": "💰", "POSITION_SIZING": "⚖️", "PORTFOLIO": "🗂️",
-        "EARNINGS": "📅",
+        "EARNINGS": "📅",       "CRYPTO": "₿",
     }
 
     rules_by_cat = {}
@@ -5013,14 +5014,15 @@ async def admin_rules(request: Request, db: Session = Depends(get_db)):
         cat = r.category.value
         if cat not in rules_by_cat:
             rules_by_cat[cat] = []
-        
+
         enabled = r.is_enabled_for_tier(tier)
         threshold = r.threshold_for_tier(tier)
 
         rules_by_cat[cat].append({
-            "id": r.id, "rule_id": r.rule_id, "label": r.label,
+            "id": r.id, "rule_id": r.rule_id, "label": r.label, "category": cat,
             "description": r.description or "", "minervini_ref": r.minervini_ref or "",
             "enabled": enabled, "is_mandatory": r.is_mandatory,
+            "asset_types": r.asset_types or "BOTH",
             "threshold": float(threshold) if threshold is not None else None,
             "threshold_label": r.threshold_label or "",
             "threshold_min": float(r.threshold_min) if r.threshold_min else 0,

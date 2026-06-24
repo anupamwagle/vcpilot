@@ -45,7 +45,9 @@ def test_eps_growth_loss_to_profit():
 def test_eps_growth_insufficient_data():
     data = dict(BASE, eps_quarterly=[1.5, 1.3])
     r = evaluate_fundamentals("BHP.AX", data, Eng())
-    assert not r["fundamental_eps_growth_recent"].passed
+    # Data-availability policy: insufficient data -> pass (no penalty)
+    assert r["fundamental_eps_growth_recent"].passed
+    assert "unavailable" in r["fundamental_eps_growth_recent"].message.lower()
 
 
 # --- EPS acceleration ---
@@ -68,7 +70,9 @@ def test_eps_accel_fails():
 def test_eps_accel_insufficient_data():
     data = dict(BASE, eps_quarterly=[1.5, 1.3, 1.1])
     r = evaluate_fundamentals("BHP.AX", data, Eng())
-    assert not r["fundamental_eps_growth_accel"].passed
+    # Data-availability policy: insufficient data -> pass (no penalty)
+    assert r["fundamental_eps_growth_accel"].passed
+    assert "unavailable" in r["fundamental_eps_growth_accel"].message.lower()
 
 
 # --- Annual EPS growth ---
@@ -88,7 +92,9 @@ def test_annual_eps_growth_fails():
 def test_annual_eps_prior_zero():
     data = dict(BASE, eps_quarterly=[1.5, 1.3, 1.1, 0.9, -0.1, -0.2, -0.3, -0.4])
     r = evaluate_fundamentals("BHP.AX", data, Eng())
-    assert not r["fundamental_eps_growth_annual"].passed  # prior sum negative
+    # Prior-year TTM negative, current positive -> turned profitable annually -> pass
+    assert r["fundamental_eps_growth_annual"].passed
+    assert "profitable" in r["fundamental_eps_growth_annual"].message.lower()
 
 
 # --- Sales growth ---
@@ -108,7 +114,9 @@ def test_sales_growth_fails():
 def test_sales_growth_insufficient_data():
     data = dict(BASE, revenue_quarterly=[1000, 900])
     r = evaluate_fundamentals("BHP.AX", data, Eng())
-    assert not r["fundamental_sales_growth"].passed
+    # Data-availability policy: insufficient data -> pass (no penalty)
+    assert r["fundamental_sales_growth"].passed
+    assert "unavailable" in r["fundamental_sales_growth"].message.lower()
 
 
 # --- ROE ---
@@ -134,7 +142,9 @@ def test_roe_fails():
 def test_roe_not_available():
     data = dict(BASE, roe=None)
     r = evaluate_fundamentals("BHP.AX", data, Eng())
-    assert not r["fundamental_roe"].passed
+    # Data-availability policy: missing ROE -> pass (no penalty)
+    assert r["fundamental_roe"].passed
+    assert "unavailable" in r["fundamental_roe"].message.lower()
 
 
 # --- Profit margin ---
@@ -159,7 +169,9 @@ def test_profit_margin_fails_declining():
 def test_profit_margin_not_available():
     data = dict(BASE, net_margin=None)
     r = evaluate_fundamentals("BHP.AX", data, Eng())
-    assert not r["fundamental_profit_margin"].passed
+    # Data-availability policy: missing margin -> pass (no penalty)
+    assert r["fundamental_profit_margin"].passed
+    assert "unavailable" in r["fundamental_profit_margin"].message.lower()
 
 
 # --- Institutional ownership ---
