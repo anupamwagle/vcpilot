@@ -21,6 +21,14 @@
 </div>
 {% endif %}
 
+<!-- How a Signal becomes a position -->
+<div class="alert-info mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+  <div>
+    <strong>A Signal is not a position.</strong> Every 5 minutes during market hours, <code>check_entry_triggers</code> re-checks the live price for each PENDING signal against its pivot — a bracket order is only submitted once price is at/within 5% above the pivot <em>and</em> intraday volume is ≥150% of the 50-day average. A signal can sit PENDING for days if the breakout hasn't happened. Signals tagged <strong>👤 Manual Promotion</strong> used today's close as the pivot at the moment they were promoted, not a VCP-confirmed pivot.
+  </div>
+</div>
+
 {# ── Effective exchange: default to first tab if 'ALL' ──────────────────── #}
 {% set _tabs = exchange_filters | selectattr('key', 'ne', 'ALL') | list %}
 {% set _has_tabs = _tabs | length > 1 %}

@@ -61,7 +61,8 @@
           </select>
         </form>
         <form method="post" action="/watchlist/{{ w.id }}/promote">
-          <button type="submit" class="btn-primary text-xs py-1 px-2.5" style="background:var(--pos);color:white">Promote</button>
+          <button type="submit" class="btn-primary text-xs py-1 px-2.5" style="background:var(--pos);color:white"
+            title="Creates a Signal using TODAY'S CLOSE as the entry pivot and ~8% below as the stop — not the VCP pivot/stop shown in this card's Full Metrics panel. This does not open a position immediately: check_entry_triggers still has to confirm a live breakout (price at/near pivot + volume ≥150% avg) during market hours before any order is submitted.">Promote</button>
         </form>
         <form method="post" action="/watchlist/{{ w.id }}/remove">
           <button type="submit" class="btn-ghost text-xs py-1 px-2" style="color:var(--neg)">Remove</button>
@@ -92,7 +93,8 @@
       <strong data-ticker-price="{{ w.ticker }}" data-prev-price="{{ st.close }}">${{ "%.3f"|format(st.close) if st.close else '—' }}</strong>
     </span>
     {% if pct_from_pivot is not none %}
-    <span class="chip chip-sm {% if pct_from_pivot <= 0 %}chip-pos{% elif pct_from_pivot <= 3 %}chip-warn{% else %}chip-neg{% endif %}">{{ "{:+.1f}".format(pct_from_pivot) }}% vs pivot</span>
+    <span class="chip chip-sm {% if pct_from_pivot < 0 %}chip-dim{% elif pct_from_pivot <= 3 %}chip-pos{% elif pct_from_pivot <= 5 %}chip-warn{% else %}chip-neg{% endif %}"
+      title="{% if pct_from_pivot < 0 %}Still below the pivot — hasn't broken out yet. This is neutral, not a buy signal.{% elif pct_from_pivot <= 3 %}At/near the pivot — ideal breakout buy zone.{% elif pct_from_pivot <= 5 %}Slightly extended above pivot — still within Minervini's 5% buy window.{% else %}Extended more than 5% above pivot — chasing risk.{% endif %}">{{ "{:+.1f}".format(pct_from_pivot) }}% vs pivot</span>
     {% endif %}
     <span class="rs-pill {% if rs_v >= 80 %}rs-hi{% elif rs_v >= 60 %}rs-mid{% else %}rs-low{% endif %}" style="font-size:.68rem">RS {{ rs_v }}</span>
     {% if w.vcp_contractions is not none and w.vcp_contractions > 0 %}
@@ -115,17 +117,18 @@
          data-ticker-price="{{ w.ticker }}"
          data-prev-price="{{ st.close }}">${{ "%.3f"|format(st.close) if st.close else '—' }}</p>
       {% if pct_from_pivot is not none %}
-      <p class="dist-pill {% if pct_from_pivot <= 0 %}chip-pos{% elif pct_from_pivot <= 3 %}chip-warn{% else %}chip-neg{% endif %}" style="margin-top:.18rem;font-size:.62rem;padding:.05rem .3rem;display:inline-block">
+      <p class="dist-pill {% if pct_from_pivot < 0 %}chip-dim{% elif pct_from_pivot <= 3 %}chip-pos{% elif pct_from_pivot <= 5 %}chip-warn{% else %}chip-neg{% endif %}" style="margin-top:.18rem;font-size:.62rem;padding:.05rem .3rem;display:inline-block"
+        title="{% if pct_from_pivot < 0 %}Below pivot — not yet triggered{% elif pct_from_pivot <= 5 %}Within Minervini's 5% buy window{% else %}Extended — chasing risk{% endif %}">
         {{ "{:+.1f}".format(pct_from_pivot) }}% vs pivot
       </p>
       {% endif %}
     </div>
     <div class="metric-cell" style="padding:.6rem .75rem;border-right:1px solid var(--border)">
-      <p class="field-label" style="font-size:.6rem">Pivot</p>
+      <p class="field-label" style="font-size:.6rem" title="Planned breakout buy point — not today's price">Pivot</p>
       <p class="mono-pos" style="font-size:.82rem">{% if w.pivot %}${{ "%.3f"|format(w.pivot) }}{% else %}—{% endif %}</p>
     </div>
     <div class="metric-cell" style="padding:.6rem .75rem;border-right:1px solid var(--border)">
-      <p class="field-label" style="font-size:.6rem">Stop</p>
+      <p class="field-label" style="font-size:.6rem" title="Risk level if/when bought at the pivot — calculated from pivot, not from today's close">Stop</p>
       <p class="mono-neg" style="font-size:.82rem">{% if w.stop %}${{ "%.3f"|format(w.stop) }}{% else %}—{% endif %}</p>
       {% if w.pivot and w.stop %}
       <p class="mono-dim" style="font-size:.62rem;margin-top:.18rem">{{ "%.1f"|format((w.pivot - w.stop) / w.pivot * 100) }}% risk</p>
@@ -162,6 +165,9 @@
       <p class="mono-dim" style="font-size:.8rem">—</p>
       {% endif %}
     </div>
+  </div>
+  <div style="padding:.3rem .75rem;border-bottom:1px solid var(--border)">
+    <span style="font-size:.63rem;color:var(--text-subtle)">Pivot/Stop/Target are the planned breakout entry, risk and target levels for <em>if/when</em> this stock clears the pivot — they're not measured against today's close. No order is submitted until <code>check_entry_triggers</code> confirms a live breakout (price at/within 5% above pivot, volume ≥150% of average) during market hours.</span>
   </div>
 
   <!-- Secondary MA & technical metrics (symmetrical 6 columns) -->

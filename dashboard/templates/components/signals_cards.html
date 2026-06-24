@@ -81,7 +81,7 @@
       <span class="tag tag-blue" style="border-color:var(--t-accent-mid)">⚡ VCP Screener</span>
       {% endif %}
       {% if s.is_promoted_manual %}
-      <span style="font-size:.65rem;padding:.15rem .5rem;border-radius:.3rem;font-weight:600;background:rgba(245,158,11,.12);color:#d97706;border:1px solid rgba(245,158,11,.35)">👤 Manual Promotion</span>
+      <span title="Manually promoted: pivot/stop were set from the close price at the moment of promotion, not from a VCP-confirmed pivot." style="font-size:.65rem;padding:.15rem .5rem;border-radius:.3rem;font-weight:600;background:rgba(245,158,11,.12);color:#d97706;border:1px solid rgba(245,158,11,.35)">👤 Manual Promotion</span>
       {% endif %}
       {% if s.setup_tier == 'A' %}
       <span style="font-size:.6rem;font-weight:700;padding:.1rem .4rem;border-radius:.25rem;background:rgba(16,185,129,.15);color:#10b981;border:1px solid rgba(16,185,129,.35)">★ A</span>
@@ -121,8 +121,9 @@
       <p class="mono font-bold" style="font-size:.85rem;color:var(--text)"
          data-sig-price="{{ s.ticker }}">${{ "%.3f"|format(s.close) }}</p>
       {% if pct_from_pivot is not none %}
-      <p class="dist-pill {% if pct_from_pivot <= 0 %}chip-pos{% elif pct_from_pivot <= 3 %}chip-warn{% else %}chip-neg{% endif %}" style="margin-top:.2rem;font-size:.62rem;padding:.05rem .3rem"
-         data-sig-pct="{{ s.ticker }}" data-pivot="{{ s.pivot }}">
+      <p class="dist-pill {% if pct_from_pivot < 0 %}chip-dim{% elif pct_from_pivot <= 3 %}chip-pos{% elif pct_from_pivot <= 5 %}chip-warn{% else %}chip-neg{% endif %}" style="margin-top:.2rem;font-size:.62rem;padding:.05rem .3rem"
+         data-sig-pct="{{ s.ticker }}" data-pivot="{{ s.pivot }}"
+         title="{% if pct_from_pivot < 0 %}Below pivot — breakout hasn't happened yet, no order submitted{% elif pct_from_pivot <= 5 %}Within Minervini's 5% buy window{% else %}Extended — chasing risk{% endif %}">
         {{ "{:+.1f}".format(pct_from_pivot) }}% vs pivot
       </p>
       {% endif %}

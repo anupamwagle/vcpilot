@@ -1074,11 +1074,18 @@ async def home(
         if only_custom and not is_custom:
             continue
 
-        _h_rs = float(bar.rs_rating) if bar and bar.rs_rating else 0
-        _h_vol = float(bar.vol_ratio) if bar and bar.vol_ratio else None
-        if _h_rs >= 80 and (_h_vol is None or _h_vol <= 0.6):
+        _h_rr = w.rule_results or {}
+        _h_trend_keys = [k for k in _h_rr if k.startswith("trend_")]
+        _h_trend_passed = sum(1 for k in _h_trend_keys if (
+            _h_rr[k].get("passed") if isinstance(_h_rr[k], dict) else bool(_h_rr[k])
+        ))
+        _h_trend_total = len(_h_trend_keys)
+        _h_rs  = float(bar.rs_rating) if bar and bar.rs_rating else 0
+        _h_vol = float(bar.vol_ratio) if bar and bar.vol_ratio is not None else None
+        if (_h_trend_total > 0 and _h_trend_passed >= _h_trend_total
+                and _h_rs >= 80 and (_h_vol is None or _h_vol <= 0.6)):
             _h_tier = "A"
-        elif _h_rs >= 70:
+        elif _h_trend_total > 0 and _h_trend_passed >= max(_h_trend_total - 1, 1) and _h_rs >= 70:
             _h_tier = "B"
         else:
             _h_tier = "C"
@@ -1210,9 +1217,9 @@ async def positions(request: Request, db: Session = Depends(get_db),
         pass
     positions = pos_q.all()
 
-    # Bulk PriceBar lookup for setup_tier (RS rating)
+    # Bulk PriceBar lookup for setup_tier (RS + vol_ratio)
     _pos_tickers = list({p.ticker for p in positions})
-    _pos_bar_rs: dict[str, float] = {}
+    _pos_bar_map: dict[str, dict] = {}
     if _pos_tickers:
         from sqlalchemy import func as _pfunc
         from app.models.market import PriceBar as _PB
@@ -1223,7 +1230,10 @@ async def positions(request: Request, db: Session = Depends(get_db),
             .subquery()
         )
         for _pb in db.query(_PB).join(_psub, (_PB.ticker == _psub.c.ticker) & (_PB.date == _psub.c.max_date)).all():
-            _pos_bar_rs[_pb.ticker] = float(_pb.rs_rating or 0)
+            _pos_bar_map[_pb.ticker] = {
+                "rs": float(_pb.rs_rating or 0),
+                "vol_ratio": float(_pb.vol_ratio) if _pb.vol_ratio is not None else None,
+            }
 
     pos_data = []
     total_risk = 0.0
@@ -1296,8 +1306,14 @@ async def positions(request: Request, db: Session = Depends(get_db),
 
         ek = getattr(p, "exchange_key", "ASX") or "ASX"
         at = getattr(p, "asset_type",   "EQUITY") or "EQUITY"
-        _p_rs = _pos_bar_rs.get(p.ticker, 0)
-        _p_tier = "A" if _p_rs >= 80 else ("B" if _p_rs >= 70 else "C")
+        _p_bar = _pos_bar_map.get(p.ticker, {})
+        _p_rs  = _p_bar.get("rs", 0)
+        _p_vol = _p_bar.get("vol_ratio")
+        _p_tier = (
+            "A" if _p_rs >= 80 and (_p_vol is None or _p_vol <= 0.6) else
+            "B" if _p_rs >= 70 else
+            "C"
+        )
         pos_data.append({
             "id": p.id, "ticker": p.ticker,
             "exchange_key":  ek,
@@ -1892,6 +1908,7 @@ async def signals_items(request: Request, db: Session = Depends(get_db),
                 "high_52w":  float(_sb.high_52w or 0),
                 "low_52w":   float(_sb.low_52w or 0),
                 "rs_rating": float(_sb.rs_rating or 0),
+                "vol_ratio": float(_sb.vol_ratio) if _sb.vol_ratio is not None else None,
             }
             _sig_bar_lookup[_sb.ticker] = _bd
             _ck = f"latest_price_bar:{_sb.ticker}"
@@ -2037,9 +2054,11 @@ async def signals_items(request: Request, db: Session = Depends(get_db),
             _close = float(_live)
 
         _s_trend_total = 8 if at == "CRYPTO" else 9
-        _s_rs = float(s.rs_rating or 0)
+        _s_rs    = float(s.rs_rating or 0)
         _s_trend = s.trend_score or 0
-        if _s_trend >= _s_trend_total and _s_rs >= 80:
+        _s_vol   = (_sig_bar_lookup.get(s.ticker) or {}).get("vol_ratio")
+        if (_s_trend >= _s_trend_total and _s_rs >= 80
+                and (_s_vol is None or _s_vol <= 0.6)):
             _s_tier = "A"
         elif _s_trend >= max(_s_trend_total - 1, 1) and _s_rs >= 70:
             _s_tier = "B"
@@ -3549,7 +3568,7 @@ async def _trader_data_inner(request: Request, db):
             Watchlist.status == WatchlistStatus.WATCHING,
         )
         .order_by(Watchlist.created_at.desc())
-        .limit(150)
+        .limit(1000)
         .all()
     )
     wl_tickers = [w.ticker for w in wl_items]
@@ -4730,9 +4749,13 @@ async def admin_tasks(request: Request, db: Session = Depends(get_db)):
 
     ctx = _global(request, db)
 
-    # Seed latest 40 rows so the page is not blank on load
+    # Seed latest 40 rows so the page is not blank on load.
+    # Include NULL org rows (global tasks: regime, price refresh, universe, heartbeat)
+    # alongside org-scoped rows — same pattern as the health page _lr() helper.
     try:
-        logs = db.query(AuditLog).filter(AuditLog.organization_id == org_id).order_by(desc(AuditLog.id)).limit(40).all()
+        logs = db.query(AuditLog).filter(
+            or_(AuditLog.organization_id == org_id, AuditLog.organization_id == None)
+        ).order_by(desc(AuditLog.id)).limit(40).all()
     except Exception:
         logs = []
     last_id = logs[0].id if logs else 0
@@ -4812,7 +4835,10 @@ async def admin_tasks_poll(request: Request, after: int = 0, db: Session = Depen
 
     display_tz = _get_display_tz(org_id, db)
     try:
-        new_logs = db.query(AuditLog).filter(AuditLog.id > after, AuditLog.organization_id == org_id).order_by(desc(AuditLog.id)).limit(50).all()
+        new_logs = db.query(AuditLog).filter(
+            AuditLog.id > after,
+            or_(AuditLog.organization_id == org_id, AuditLog.organization_id == None)
+        ).order_by(desc(AuditLog.id)).limit(50).all()
     except Exception:
         new_logs = []
     return JSONResponse({

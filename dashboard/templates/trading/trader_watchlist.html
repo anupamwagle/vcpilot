@@ -928,6 +928,7 @@
                x-text="promoteMsg"></div>
           <button class="btn-promote"
                   :disabled="promoting || selectedItem?.has_pending_signal"
+                  title="Creates a Signal using the current close as the entry pivot (not the VCP-confirmed pivot, if any) — a position only opens once a live breakout with volume ≥150% avg is confirmed during market hours."
                   @click="promoteSelected()">
             <template x-if="promoting">
               <svg class="spin" width="12" height="12" fill="none" viewBox="0 0 24 24">
