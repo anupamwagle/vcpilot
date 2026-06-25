@@ -1,0 +1,453 @@
+{# ===========================================================================
+   Stock Story modal (CommSec-style) — shared component.
+   Included in base.html (client pages) AND the standalone trader terminals.
+   Opened from anywhere via:  openStockStory('BHP.AX', 'BHP')
+
+   Self-contained theming: the modal maps a set of internal --ss-* variables
+   from whatever palette the host page provides (base.html uses --t-accent /
+   --surface-alt / --text-muted; the trader terminals use --accent / --surf2 /
+   --muted). Each alias has a fallback chain so the modal looks right on both,
+   light or dark, without depending on a specific host variable set.
+   =========================================================================== #}
+<div id="ss-overlay" class="ss-overlay" onclick="if(event.target===this)closeStockStory()">
+  <div class="ss-modal" role="dialog" aria-modal="true" aria-labelledby="ss-title">
+    <!-- Header -->
+    <div class="ss-head">
+      <div style="display:flex;align-items:center;gap:.6rem;min-width:0">
+        <span class="ss-eye-badge">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3"/></svg>
+        </span>
+        <div style="min-width:0">
+          <div id="ss-title" class="ss-mono" style="font-weight:800;font-size:1.05rem;color:var(--ss-text);line-height:1.1;display:flex;align-items:center;gap:.45rem;flex-wrap:wrap">
+            <span id="ss-code">—</span>
+            <span id="ss-exch" class="ss-tag" style="display:none"></span>
+          </div>
+          <div id="ss-name" style="font-size:.78rem;color:var(--ss-text-subtle);line-height:1.2"></div>
+        </div>
+      </div>
+      <button onclick="closeStockStory()" class="ss-close" title="Close (Esc)">✕</button>
+    </div>
+
+    <!-- Scroll body -->
+    <div class="ss-body" id="ss-body">
+      <div id="ss-loading" class="ss-loading">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" style="animation:ss-spin 1s linear infinite;color:var(--ss-t-accent)"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" stroke-dasharray="42" stroke-linecap="round" opacity=".85"/></svg>
+        <div style="margin-top:.6rem;color:var(--ss-text-muted);font-size:.85rem">Loading Stock Story…</div>
+      </div>
+      <div id="ss-content" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
+<style>
+  @keyframes ss-spin{to{transform:rotate(360deg)}}
+  .ss-overlay{
+    /* internal palette — mapped from host vars with fallback chains */
+    --ss-bg:var(--bg,#0a0a12);
+    --ss-surface:var(--surface,#11111c);
+    --ss-surface-alt:var(--surface-alt,var(--surf2,#18182a));
+    --ss-border:var(--border,#22223a);
+    --ss-text:var(--text,#e2e2ec);
+    --ss-text-muted:var(--text-muted,var(--muted,#8b8ba6));
+    --ss-text-subtle:var(--text-subtle,var(--subtle,var(--muted,#6b6b85)));
+    --ss-t-accent:var(--t-accent,var(--accent,#1d4ed8));
+    --ss-a-accent:var(--a-accent,#7c3aed);
+    --ss-pos:var(--pos,var(--up,#10b981));
+    --ss-neg:var(--neg,var(--down,#ef4444));
+    --ss-warn:var(--warn,#f59e0b);
+    position:fixed;inset:0;z-index:99999;background:rgba(2,6,23,.66);
+    backdrop-filter:blur(3px);display:none;align-items:flex-start;justify-content:center;
+    padding:2.5rem 1rem;overflow-y:auto;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+  .ss-overlay.open{display:flex}
+  .ss-mono{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace}
+  .ss-modal{background:var(--ss-bg);border:1px solid var(--ss-border);border-radius:1rem;
+    width:100%;max-width:880px;box-shadow:0 24px 60px rgba(0,0,0,.5);
+    display:flex;flex-direction:column;max-height:90vh;overflow:hidden;text-align:left}
+  .ss-head{display:flex;align-items:center;justify-content:space-between;gap:1rem;
+    padding:1rem 1.25rem;border-bottom:1px solid var(--ss-border);
+    background:var(--ss-surface);flex-shrink:0}
+  .ss-eye-badge{display:inline-flex;align-items:center;justify-content:center;
+    width:34px;height:34px;border-radius:.6rem;background:var(--ss-t-accent);color:#fff;flex-shrink:0}
+  .ss-close{background:none;border:1px solid var(--ss-border);color:var(--ss-text-muted);
+    width:32px;height:32px;border-radius:.5rem;cursor:pointer;font-size:.9rem;flex-shrink:0}
+  .ss-close:hover{background:var(--ss-surface-alt);color:var(--ss-text)}
+  .ss-body{padding:1.25rem;overflow-y:auto}
+  .ss-loading{padding:4rem 1rem;text-align:center}
+  .ss-tag{font-size:.6rem;font-weight:700;padding:.12rem .4rem;border-radius:.3rem;
+    background:var(--ss-surface-alt);color:var(--ss-text-muted);border:1px solid var(--ss-border)}
+  .ss-section{margin-top:1.6rem}
+  .ss-section:first-child{margin-top:0}
+  .ss-q{font-size:1.02rem;font-weight:800;color:var(--ss-text);margin-bottom:.3rem}
+  .ss-sub{font-size:.82rem;color:var(--ss-text-muted);line-height:1.5;margin-bottom:.7rem}
+  .ss-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.7rem}
+  .ss-card{background:var(--ss-surface);border:1px solid var(--ss-border);border-radius:.7rem;
+    padding:.8rem .9rem}
+  .ss-card .lbl{font-size:.66rem;color:var(--ss-text-subtle);text-transform:uppercase;
+    letter-spacing:.03em;font-weight:600}
+  .ss-card .val{font-size:1.15rem;font-weight:800;color:var(--ss-text);margin-top:.2rem;line-height:1.1}
+  .ss-card .sub{font-size:.68rem;color:var(--ss-text-subtle);margin-top:.15rem}
+  .ss-chips{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.2rem}
+  .ss-chip{display:flex;align-items:center;gap:.4rem;background:var(--ss-surface-alt);
+    border:1px solid var(--ss-border);border-radius:.5rem;padding:.4rem .6rem;
+    font-size:.76rem;color:var(--ss-text-muted)}
+  .ss-pos{color:var(--ss-pos)} .ss-neg{color:var(--ss-neg)} .ss-warn{color:var(--ss-warn)}
+  .ss-chart{margin-top:.4rem;min-height:40px}
+  .ss-na{padding:1.4rem;text-align:center;color:var(--ss-text-subtle);font-size:.82rem;
+    background:var(--ss-surface);border:1px dashed var(--ss-border);border-radius:.7rem}
+  .ss-divider{height:1px;background:var(--ss-border);margin:1.5rem 0;border:none}
+  .ss-calc{background:var(--ss-surface);border:1px solid var(--ss-border);border-radius:.7rem;
+    padding:1rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
+    gap:.8rem;align-items:end}
+  .ss-calc input{width:100%;padding:.45rem .6rem;border-radius:.5rem;
+    border:1px solid var(--ss-border);background:var(--ss-bg);color:var(--ss-text);font-size:.95rem}
+  @media (max-width:560px){.ss-modal{max-height:94vh}.ss-body{padding:.9rem}}
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/apexcharts@3.49.1/dist/apexcharts.min.js"></script>
+<script>
+/* ── Stock Story modal controller (shared by base.html + trader terminals) ─ */
+if(!window._ssInit){
+window._ssInit=true;
+window._ssCharts=[];
+function _ssDestroyCharts(){
+  (window._ssCharts||[]).forEach(c=>{try{c.destroy();}catch(e){}});
+  window._ssCharts=[];
+}
+window.closeStockStory=function(){
+  const ov=document.getElementById('ss-overlay');
+  if(ov)ov.classList.remove('open');
+  document.body.style.overflow='';
+  _ssDestroyCharts();
+};
+document.addEventListener('keydown',e=>{if(e.key==='Escape')window.closeStockStory();});
+
+/* Formatting helpers */
+function _ssCur(v,cur){if(v==null||isNaN(v))return'—';return _ssNum(v)+(cur?' '+cur:'');}
+function _ssNum(v){
+  if(v==null||isNaN(v))return'—';
+  const a=Math.abs(v),s=v<0?'-':'';
+  if(a>=1e12)return s+(a/1e12).toFixed(2)+'T';
+  if(a>=1e9)return s+(a/1e9).toFixed(2)+'B';
+  if(a>=1e6)return s+(a/1e6).toFixed(2)+'M';
+  if(a>=1e3)return s+(a/1e3).toFixed(1)+'K';
+  return s+a.toFixed(a<1?4:2);
+}
+function _ssPct(v,dp){if(v==null||isNaN(v))return'—';return(v>0?'+':'')+v.toFixed(dp==null?2:dp)+'%';}
+function _ssPctFrac(v){return v==null||isNaN(v)?'—':_ssPct(v*100);}
+/* Read first defined CSS var from :root, with hard fallback (resolves on both palettes) */
+function _ssVar(names,fb){
+  const cs=getComputedStyle(document.documentElement);
+  for(const n of names){const v=cs.getPropertyValue(n).trim();if(v)return v;}
+  return fb;
+}
+function _ssEsc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
+function _ssIsDark(){
+  if(document.documentElement.classList.contains('dark'))return true;
+  try{
+    const c=getComputedStyle(document.body).backgroundColor;
+    const m=c.match(/\d+/g);
+    if(m){const l=0.2126*+m[0]+0.7152*+m[1]+0.0722*+m[2];return l<128;}
+  }catch(e){}
+  return false;
+}
+function _ssBaseChartOpts(){
+  const muted=_ssVar(['--text-muted','--muted'],'#8b8ba6');
+  return {chart:{toolbar:{show:false},zoom:{enabled:false},fontFamily:'inherit',
+    foreColor:muted,animations:{enabled:true,speed:400},background:'transparent'},
+    grid:{borderColor:_ssVar(['--border'],'#22223a'),strokeDashArray:3},
+    theme:{mode:_ssIsDark()?'dark':'light'},
+    tooltip:{theme:_ssIsDark()?'dark':'light'},
+    dataLabels:{enabled:false},legend:{labels:{colors:muted}}};
+}
+
+window.openStockStory=async function(ticker,label){
+  const ov=document.getElementById('ss-overlay');
+  if(!ov){console.warn('Stock Story modal not present on this page');return;}
+  ov.classList.add('open');
+  document.body.style.overflow='hidden';
+  document.getElementById('ss-loading').style.display='block';
+  document.getElementById('ss-content').style.display='none';
+  document.getElementById('ss-content').innerHTML='';
+  document.getElementById('ss-code').textContent=label||ticker;
+  document.getElementById('ss-name').textContent='';
+  document.getElementById('ss-exch').style.display='none';
+  _ssDestroyCharts();
+  try{
+    const r=await fetch('/stock-story/'+encodeURIComponent(ticker));
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    if(d.error)throw new Error(d.error);
+    _ssRender(d);
+  }catch(e){
+    document.getElementById('ss-loading').style.display='none';
+    const c=document.getElementById('ss-content');
+    c.style.display='block';
+    c.innerHTML='<div class="ss-na">Could not load Stock Story.<br><span style="font-size:.7rem">'+_ssEsc(e.message)+'</span></div>';
+  }
+};
+
+function _ssRender(d){
+  document.getElementById('ss-loading').style.display='none';
+  const c=document.getElementById('ss-content');
+  c.style.display='block';
+  const cur=d.currency||'';
+  const code=d.display_code||d.ticker;
+  const name=d.company_name||code;
+  document.getElementById('ss-code').textContent=code;
+  document.getElementById('ss-name').textContent=name;
+  if(d.exchange_key&&d.exchange_key!=='ASX'){
+    const e=document.getElementById('ss-exch');
+    e.textContent=String(d.exchange_key).replace('CRYPTO_','');e.style.display='inline-block';
+  }
+  const p=d.price||{};
+
+  if(d.asset_type==='CRYPTO'||d.unavailable){
+    c.innerHTML='<div class="ss-na">Stock Story is available for listed equities only.<br>'
+      +'<span style="font-size:.72rem">No company fundamentals are published for this instrument.</span></div>';
+    return;
+  }
+
+  let h='';
+  /* Headline cards */
+  const perfClass=p.perf_1y_pct==null?'':(p.perf_1y_pct>=0?'ss-pos':'ss-neg');
+  h+='<div class="ss-cards">';
+  h+=_ssCardHTML('Last Price',_ssCur(p.last,cur),'');
+  h+='<div class="ss-card"><div class="lbl">1Y Performance</div>'
+    +'<div class="val '+perfClass+'">'+_ssPct(p.perf_1y_pct)+'</div>'
+    +'<div class="ss-chart" id="ss-spark" style="min-height:38px;margin-top:.1rem"></div></div>';
+  h+=_ssCardHTML('Net Profit Margin',_ssPctFrac(d.net_profit_margin),
+       d.net_income!=null?('Net Income '+_ssCur(d.net_income,cur)):'');
+  h+=_ssCardHTML('Market Cap',_ssCur(d.market_cap,cur),'');
+  h+='</div>';
+
+  /* Who is X */
+  h+='<div class="ss-section"><div class="ss-q">Who is '+_ssEsc(name)+'?</div>';
+  if(d.summary)h+='<div class="ss-sub">'+_ssEsc(d.summary)+'</div>';
+  const sectorBits=[d.sector,d.industry].filter(Boolean).join(' · ');
+  if(sectorBits)h+='<div class="ss-sub" style="color:var(--ss-text-subtle)">'+_ssEsc(sectorBits)+'</div>';
+  h+='<div class="ss-chips">';
+  if(d.hq)h+=_ssChip('🏠','Headquarters',d.hq);
+  if(d.ipo_date)h+=_ssChip('📈','Listed',d.ipo_date);
+  if(d.employees!=null)h+=_ssChip('👥','Employees',Number(d.employees).toLocaleString());
+  if(d.website)h+=_ssChip('🔗','Website',String(d.website).replace(/^https?:\/\//,''));
+  h+='</div>';
+  h+='<div class="ss-cards" style="margin-top:.7rem">';
+  h+=_ssCardHTML('Annual Revenue',_ssCur(d.annual_revenue,cur),'');
+  h+=_ssCardHTML('Analyst Rating',_ssRating(d.recommendation_key),
+       d.num_analysts!=null?(d.num_analysts+' analyst'+(d.num_analysts==1?'':'s')):'');
+  h+=_ssCardHTML('P/B Ratio',d.price_to_book!=null?Number(d.price_to_book).toFixed(2):'—','');
+  h+=_ssCardHTML('Key Person',d.key_person||'—',
+       (d.officers&&d.officers[0]&&d.officers[0].title)?d.officers[0].title:'');
+  h+='</div></div>';
+
+  /* How is X performing */
+  h+='<hr class="ss-divider"><div class="ss-section"><div class="ss-q">How is '+_ssEsc(code)+' performing?</div>';
+  if(p.sparkline&&p.sparkline.length>1){
+    h+='<div class="ss-sub">'+_ssEsc(code)+' is '+(p.perf_1y_pct>=0?'up':'down')+' '
+      +_ssPct(p.perf_1y_pct)+' over the last year.</div><div class="ss-chart" id="ss-perf"></div>';
+  }else h+='<div class="ss-na">Price history not available.</div>';
+  h+='</div>';
+
+  /* Earnings */
+  h+='<hr class="ss-divider"><div class="ss-section"><div class="ss-q">Does '+_ssEsc(code)+' have strong earnings?</div>';
+  if(d.earnings_history&&d.earnings_history.length){
+    h+='<div class="ss-sub">EPS actuals vs analyst estimates.</div><div class="ss-chart" id="ss-earn"></div>';
+  }else h+='<div class="ss-na">Earnings estimates are not available at this time.</div>';
+  h+='</div>';
+
+  /* Dividends */
+  h+='<hr class="ss-divider"><div class="ss-section"><div class="ss-q">Does '+_ssEsc(code)+' pay a dividend?</div>';
+  if(d.dividends&&d.dividends.length){
+    const dy=d.dividend_yield!=null?(' Current yield '+_ssPctFrac(d.dividend_yield)+'.'):'';
+    h+='<div class="ss-sub">Dividends paid per year.'+dy+'</div><div class="ss-chart" id="ss-div"></div>';
+  }else h+='<div class="ss-na">Dividends information is not available at this time.</div>';
+  h+='</div>';
+
+  /* Profitable */
+  h+='<hr class="ss-divider"><div class="ss-section"><div class="ss-q">Is '+_ssEsc(code)+' profitable?</div>';
+  if(d.net_income_history&&d.net_income_history.length){
+    let txt='';
+    if(d.net_profit_margin!=null)txt+=code+'’s net margin is '+_ssPctFrac(d.net_profit_margin)+'. ';
+    if(d.operating_margin!=null)txt+='Operating margin '+_ssPctFrac(d.operating_margin)+'.';
+    h+='<div class="ss-sub">'+_ssEsc(txt||'Net income over time.')+'</div><div class="ss-chart" id="ss-ni"></div>';
+  }else h+='<div class="ss-na">Profitability history is not available.</div>';
+  h+='</div>';
+
+  /* Growing */
+  h+='<hr class="ss-divider"><div class="ss-section"><div class="ss-q">Is '+_ssEsc(code)+' growing?</div>';
+  if(d.revenue_growth!=null||d.earnings_growth!=null){
+    h+='<div class="ss-sub">Year-on-year revenue and earnings growth.</div><div class="ss-chart" id="ss-grow"></div>';
+  }else h+='<div class="ss-na">Growth data is not available.</div>';
+  h+='</div>';
+
+  /* Debt */
+  h+='<hr class="ss-divider"><div class="ss-section"><div class="ss-q">How much debt does '+_ssEsc(code)+' have?</div>';
+  const haveDebt=d.debt_history&&d.debt_history.some(x=>x.total_debt!=null||x.total_equity!=null);
+  if(haveDebt){
+    let txt='';
+    if(d.debt_to_equity!=null)txt+='Debt-to-equity ratio of '+Number(d.debt_to_equity).toFixed(0)+'. ';
+    if(d.current_ratio!=null)txt+='Current ratio of '+Number(d.current_ratio).toFixed(2)+'.';
+    h+='<div class="ss-sub">'+_ssEsc(txt||'Total debt vs total equity over time.')+'</div><div class="ss-chart" id="ss-debt"></div>';
+  }else h+='<div class="ss-na">Balance sheet data is not available.</div>';
+  h+='</div>';
+
+  /* Valuation */
+  h+='<hr class="ss-divider"><div class="ss-section"><div class="ss-q">Is '+_ssEsc(code)+' overvalued?</div>';
+  const valBits=[];
+  if(d.trailing_pe!=null)valBits.push({k:'P/E (TTM)',v:Number(d.trailing_pe).toFixed(2)});
+  if(d.forward_pe!=null)valBits.push({k:'Forward P/E',v:Number(d.forward_pe).toFixed(2)});
+  if(d.price_to_book!=null)valBits.push({k:'Price/Book',v:Number(d.price_to_book).toFixed(2)});
+  if(d.peg_ratio!=null)valBits.push({k:'PEG',v:Number(d.peg_ratio).toFixed(2)});
+  if(d.beta!=null)valBits.push({k:'Beta',v:Number(d.beta).toFixed(2)});
+  if(valBits.length){
+    h+='<div class="ss-cards">'+valBits.map(b=>_ssCardHTML(b.k,b.v,'')).join('')+'</div>';
+  }else h+='<div class="ss-na">Valuation ratios are not available.</div>';
+  h+='</div>';
+
+  /* Analysts */
+  if(d.target_mean!=null||d.recommendation_key){
+    h+='<hr class="ss-divider"><div class="ss-section"><div class="ss-q">What do analysts say about '+_ssEsc(code)+'?</div>';
+    h+='<div class="ss-cards">';
+    h+=_ssCardHTML('Consensus',_ssRating(d.recommendation_key),
+        d.num_analysts!=null?(d.num_analysts+' rating'+(d.num_analysts==1?'':'s')):'');
+    if(d.target_mean!=null)h+=_ssCardHTML('Target (mean)',_ssCur(d.target_mean,cur),'');
+    if(d.target_low!=null)h+=_ssCardHTML('Target (low)',_ssCur(d.target_low,cur),'');
+    if(d.target_high!=null)h+=_ssCardHTML('Target (high)',_ssCur(d.target_high,cur),'');
+    h+='</div></div>';
+  }
+
+  /* Hypothetical Trade Calculator */
+  h+='<hr class="ss-divider"><div class="ss-section"><div class="ss-q">Hypothetical Trade Calculator</div>'
+    +'<div class="ss-calc">'
+    +'<div><div class="lbl" style="font-size:.66rem;color:var(--ss-text-subtle);text-transform:uppercase">Number of Shares</div>'
+    +'<input id="ss-calc-qty" type="number" min="0" step="1" value="50" oninput="_ssCalc()"></div>'
+    +'<div><div class="lbl" style="font-size:.66rem;color:var(--ss-text-subtle);text-transform:uppercase">Current Price</div>'
+    +'<div class="val" style="font-size:1.05rem;font-weight:800;color:var(--ss-text)">'+_ssCur(p.last,cur)+'</div></div>'
+    +'<div><div class="lbl" style="font-size:.66rem;color:var(--ss-text-subtle);text-transform:uppercase">Estimated Trade</div>'
+    +'<div class="val" id="ss-calc-out" style="font-size:1.05rem;font-weight:800;color:var(--ss-t-accent)">—</div></div>'
+    +'</div>'
+    +'<div style="font-size:.66rem;color:var(--ss-text-subtle);margin-top:.5rem">'
+    +(d.fetched_at?('Fundamentals as of '+String(d.fetched_at).slice(0,10)+' · '):'')
+    +'Indicative only — not financial advice.</div></div>';
+
+  c.innerHTML=h;
+  window._ssLastPrice=p.last;
+  _ssCalc();
+  _ssMountCharts(d,cur,code);
+}
+
+function _ssCardHTML(lbl,val,sub){
+  return '<div class="ss-card"><div class="lbl">'+_ssEsc(lbl)+'</div>'
+    +'<div class="val">'+_ssEsc(val)+'</div>'
+    +(sub?'<div class="sub">'+_ssEsc(sub)+'</div>':'')+'</div>';
+}
+function _ssChip(icon,lbl,val){
+  return '<span class="ss-chip"><span>'+icon+'</span><span><strong style="color:var(--ss-text)">'
+    +_ssEsc(lbl)+':</strong> '+_ssEsc(val)+'</span></span>';
+}
+function _ssRating(k){
+  if(!k)return'Not Rated';
+  return String(k).replace(/_/g,' ').replace(/\b\w/g,m=>m.toUpperCase());
+}
+window._ssCalc=function(){
+  const el=document.getElementById('ss-calc-qty');
+  if(!el)return;
+  const q=parseFloat(el.value)||0;
+  const out=document.getElementById('ss-calc-out');
+  if(window._ssLastPrice==null){out.textContent='—';return;}
+  out.textContent=_ssNum(q*window._ssLastPrice);
+};
+
+function _ssMountCharts(d,cur,code){
+  const acc=_ssVar(['--t-accent','--accent'],'#1d4ed8');
+  const violet=_ssVar(['--a-accent'],'#7c3aed');
+  const pos=_ssVar(['--pos','--up'],'#10b981');
+  const neg=_ssVar(['--neg','--down'],'#ef4444');
+  const muted=_ssVar(['--text-subtle','--text-muted','--muted'],'#94a3b8');
+  const p=d.price||{};
+
+  if(p.sparkline&&p.sparkline.length>1){
+    const up=p.perf_1y_pct>=0;
+    const o=Object.assign(_ssBaseChartOpts(),{
+      chart:Object.assign(_ssBaseChartOpts().chart,{type:'line',height:38,sparkline:{enabled:true}}),
+      series:[{data:p.sparkline.map(x=>x.close)}],
+      stroke:{width:2,curve:'smooth'},colors:[up?pos:neg],tooltip:{enabled:false}});
+    _ssChart('#ss-spark',o);
+    const o2=Object.assign(_ssBaseChartOpts(),{
+      chart:Object.assign(_ssBaseChartOpts().chart,{type:'area',height:240}),
+      series:[{name:code,data:p.sparkline.map(x=>[new Date(x.date).getTime(),x.close])}],
+      xaxis:{type:'datetime',labels:{style:{colors:muted}}},
+      yaxis:{labels:{formatter:v=>_ssNum(v),style:{colors:muted}}},
+      stroke:{width:2,curve:'smooth'},colors:[up?pos:neg],
+      fill:{type:'gradient',gradient:{shadeIntensity:.4,opacityFrom:.35,opacityTo:.02}}});
+    _ssChart('#ss-perf',o2);
+  }
+
+  if(d.earnings_history&&d.earnings_history.length){
+    const cats=d.earnings_history.map(x=>x.period);
+    const o=Object.assign(_ssBaseChartOpts(),{
+      chart:Object.assign(_ssBaseChartOpts().chart,{type:'bar',height:240}),
+      series:[{name:'Actual',data:d.earnings_history.map(x=>x.actual)},
+              {name:'Estimate',data:d.earnings_history.map(x=>x.estimate)}],
+      xaxis:{categories:cats,labels:{style:{colors:muted},rotate:-30,hideOverlappingLabels:true}},
+      yaxis:{labels:{formatter:v=>v==null?'':v.toFixed(2),style:{colors:muted}}},
+      colors:[acc,muted],plotOptions:{bar:{columnWidth:'62%',borderRadius:3}},
+      legend:{position:'top',labels:{colors:muted}}});
+    _ssChart('#ss-earn',o);
+  }
+
+  if(d.dividends&&d.dividends.length){
+    const o=Object.assign(_ssBaseChartOpts(),{
+      chart:Object.assign(_ssBaseChartOpts().chart,{type:'bar',height:220}),
+      series:[{name:'Dividend / share',data:d.dividends.map(x=>x.amount)}],
+      xaxis:{categories:d.dividends.map(x=>x.year),labels:{style:{colors:muted}}},
+      yaxis:{labels:{formatter:v=>v.toFixed(2),style:{colors:muted}}},
+      colors:[pos],plotOptions:{bar:{columnWidth:'52%',borderRadius:3}}});
+    _ssChart('#ss-div',o);
+  }
+
+  if(d.net_income_history&&d.net_income_history.length){
+    const o=Object.assign(_ssBaseChartOpts(),{
+      chart:Object.assign(_ssBaseChartOpts().chart,{type:'line',height:230}),
+      series:[{name:'Net Profit',data:d.net_income_history.map(x=>x.value)}],
+      xaxis:{categories:d.net_income_history.map(x=>x.year),labels:{style:{colors:muted}}},
+      yaxis:{labels:{formatter:v=>_ssNum(v),style:{colors:muted}}},
+      stroke:{width:3,curve:'smooth'},colors:[pos],markers:{size:4}});
+    _ssChart('#ss-ni',o);
+  }
+
+  if(d.revenue_growth!=null||d.earnings_growth!=null){
+    const o=Object.assign(_ssBaseChartOpts(),{
+      chart:Object.assign(_ssBaseChartOpts().chart,{type:'bar',height:210}),
+      series:[{name:'YoY Growth %',data:[
+        d.revenue_growth!=null?+(d.revenue_growth*100).toFixed(1):null,
+        d.earnings_growth!=null?+(d.earnings_growth*100).toFixed(1):null]}],
+      xaxis:{categories:['Revenue Growth','Earnings Growth'],labels:{style:{colors:muted}}},
+      yaxis:{labels:{formatter:v=>v==null?'':v.toFixed(0)+'%',style:{colors:muted}}},
+      colors:[violet],plotOptions:{bar:{columnWidth:'40%',borderRadius:3,
+        colors:{ranges:[{from:-1e9,to:0,color:neg},{from:0,to:1e9,color:violet}]}}}});
+    _ssChart('#ss-grow',o);
+  }
+
+  const haveDebt=d.debt_history&&d.debt_history.some(x=>x.total_debt!=null||x.total_equity!=null);
+  if(haveDebt){
+    const o=Object.assign(_ssBaseChartOpts(),{
+      chart:Object.assign(_ssBaseChartOpts().chart,{type:'line',height:230}),
+      series:[{name:'Total Debt',data:d.debt_history.map(x=>x.total_debt)},
+              {name:'Total Equity',data:d.debt_history.map(x=>x.total_equity)}],
+      xaxis:{categories:d.debt_history.map(x=>x.year),labels:{style:{colors:muted}}},
+      yaxis:{labels:{formatter:v=>_ssNum(v),style:{colors:muted}}},
+      stroke:{width:3,curve:'smooth'},colors:[neg,acc],markers:{size:4},
+      legend:{position:'top',labels:{colors:muted}}});
+    _ssChart('#ss-debt',o);
+  }
+}
+
+function _ssChart(sel,opts){
+  const el=document.querySelector(sel);
+  if(!el)return;
+  try{const ch=new ApexCharts(el,opts);ch.render();window._ssCharts.push(ch);}catch(e){}
+}
+} /* end _ssInit guard */
+</script>

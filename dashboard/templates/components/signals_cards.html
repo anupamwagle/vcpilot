@@ -64,6 +64,11 @@
             </button>
           </form>
           {{ s.ticker.replace('.AX','').replace('-USD','').replace('-USDT','').replace('-AUD','') }}
+          <button type="button" onclick="openStockStory('{{ s.ticker }}','{{ s.ticker.replace('.AX','').replace('-USD','').replace('-USDT','').replace('-AUD','') }}')"
+            title="View Stock Story" aria-label="View Stock Story"
+            style="background:none;border:none;padding:0;cursor:pointer;color:var(--t-accent);display:inline-flex;align-items:center;line-height:1;vertical-align:middle">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
           {% if s.exchange_key and s.exchange_key != 'ASX' %}
           <span style="font-size:.6rem;font-weight:600;padding:.1rem .3rem;border-radius:.2rem;background:var(--surface-alt);color:var(--text-muted);border:1px solid var(--border)">
             {{ s.flag_emoji or '' }} {{ s.exchange_key.replace('CRYPTO_','') }}

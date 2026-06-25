@@ -258,6 +258,15 @@
       <button type="submit" class="btn-ghost text-xs py-1.5">&#x1F3F7; Re-categorise Labels</button>
     </form>
 
+    <form method="post" action="/action/refresh-fundamentals" style="display:inline-flex;align-items:center;gap:.35rem"
+          title="Refresh the CommSec-style Stock Story (fundamentals) shown behind the eye icon next to each ticker. Throttled and staleness-gated (skips anything fetched in the last 7 days) so it never hits yfinance rate limits. 'Force' re-fetches everything (more API calls).">
+      <select name="force" class="input py-1 text-xs" style="width:auto">
+        <option value="0">Stale only (&gt;7 days)</option>
+        <option value="1">Force (re-fetch all)</option>
+      </select>
+      <button type="submit" class="btn-ghost text-xs py-1.5">&#x1F441; Refresh Stock Story</button>
+    </form>
+
   </div>
 </div>
 

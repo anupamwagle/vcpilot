@@ -177,3 +177,47 @@ class EntryCheckLog(Base):
 
     def __repr__(self):
         return f"<EntryCheckLog {self.ticker} @ {self.checked_at} confirmed={self.breakout_confirmed}>"
+
+
+class StockFundamentals(Base):
+    """
+    Persisted "Stock Story" payload for a single instrument (CommSec-style).
+
+    Global table (no org_id) — keyed by yfinance canonical ticker, shared across
+    all tenant organisations exactly like `stocks` / `price_bars`.
+
+    The full narrative payload (business summary, key stats, EPS actuals vs
+    estimates, dividends, net-income history, growth rates, debt vs equity,
+    analyst ratings, etc.) is stored as a single JSON blob in `data` so the
+    schema never needs to change as the story grows. Price-derived figures
+    (last price, 1Y sparkline) are merged in at read-time from `price_bars`
+    — they are NOT stored here, so this table only needs refreshing when the
+    underlying fundamentals change (weekly cadence, staleness-gated).
+
+    `fetched_at` drives the staleness gate in `refresh_stock_fundamentals` and
+    the on-demand fetch in the `/stock-story/{ticker}` route.
+    """
+    __tablename__ = "stock_fundamentals"
+    __table_args__ = (
+        Index("ix_stockfund_fetched", "fetched_at"),
+    )
+
+    id           = Column(Integer, primary_key=True)
+    ticker       = Column(String(32), unique=True, nullable=False, index=True)
+    exchange_key = Column(String(32), nullable=False, default="ASX", index=True)
+    asset_type   = Column(String(16), nullable=False, default="EQUITY")
+    currency     = Column(String(8),  nullable=False, default="AUD")
+
+    company_name = Column(String(256), nullable=True)
+    # Full CommSec-style story payload (see app.data.fetcher.get_stock_story)
+    data         = Column(JSON, default=dict)
+
+    # Staleness / housekeeping
+    fetch_ok     = Column(Boolean, default=True)   # False = last fetch returned no usable data
+    fetch_error  = Column(Text, nullable=True)
+    fetched_at   = Column(DateTime, nullable=True, index=True)
+    created_at   = Column(DateTime, default=datetime.utcnow)
+    updated_at   = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<StockFundamentals {self.ticker} fetched={self.fetched_at}>"

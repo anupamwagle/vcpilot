@@ -570,6 +570,7 @@
                   <div class="card-row1">
                     <div>
                       <span class="card-ticker" x-text="item.display_ticker"></span>
+                      <button type="button" @click.stop="openStockStory(item.ticker, item.display_ticker)" title="Stock Story" style="background:none;border:none;padding:0;cursor:pointer;color:var(--accent);display:inline-flex;align-items:center;vertical-align:middle"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3"/></svg></button>
                       <template x-if="item.has_pending_signal">
                         <span style="color:var(--up);font-size:8px;font-weight:800;margin-left:4px">⚡ SIGNAL</span>
                       </template>
@@ -643,6 +644,7 @@
                   <div class="card-row1">
                     <div>
                       <span class="card-ticker" x-text="item.display_ticker"></span>
+                      <button type="button" @click.stop="openStockStory(item.ticker, item.display_ticker)" title="Stock Story" style="background:none;border:none;padding:0;cursor:pointer;color:var(--accent);display:inline-flex;align-items:center;vertical-align:middle"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3"/></svg></button>
                       <template x-if="item.has_pending_signal">
                         <span style="color:var(--up);font-size:8px;font-weight:800;margin-left:4px">⚡ SIGNAL</span>
                       </template>
@@ -1461,5 +1463,6 @@ function wlApp() {
   };
 }
 </script>
+{% include "components/stock_story_modal.html" %}
 </body>
 </html>

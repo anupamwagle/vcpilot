@@ -10,7 +10,7 @@ from celery import shared_task
 from app.tasks.celery_app import app
 from app.database import get_db
 from app.models.signal import Signal, SignalStatus, Watchlist, WatchlistStatus
-from app.models.market import Stock, PriceBar
+from app.models.market import Stock, PriceBar, StockFundamentals
 from app.models.audit import AuditLog, AuditAction
 from app.models.config import SystemConfig
 from app.data.fetcher import (
@@ -21,6 +21,7 @@ from app.data.fetcher import (
     get_nasdaq100_tickers, get_nasdaq100_metadata,
     get_price_history, get_batch_prices,
     get_fundamentals, compute_rs_ratings, get_top_crypto_tickers, normalize_ticker,
+    get_stock_story,
 )
 from app.data.calendar import today_is_trading_day
 from app.screener.rules import RuleEngine
@@ -707,6 +708,17 @@ def refresh_price_data(self, exchange_key: str = None):
             ))
 
         logger.info(f"Price data refreshed for {len(all_prices)} stocks")
+
+        # After the daily price refresh, opportunistically top up Stock Story
+        # data — but only for EQUITIES, only what's stale, and capped/throttled
+        # inside refresh_stock_fundamentals so we never burst yfinance. Crypto
+        # has no fundamentals so it's skipped. Fire-and-forget via Celery so a
+        # broker hiccup can't fail the price refresh itself.
+        if not _is_crypto:
+            try:
+                refresh_stock_fundamentals.delay(exchange_key=exchange_key)
+            except Exception as _sf_exc:
+                logger.warning(f"Could not queue refresh_stock_fundamentals: {_sf_exc}")
 
     except Exception as exc:
         logger.error(f"Price refresh failed: {exc}")
@@ -1946,6 +1958,19 @@ def screen_single_ticker(
                     db.add(stock_db)
                     db.commit()
 
+        # 4a. Stock Story — fetch & persist the CommSec-style payload on add.
+        # One ticker = one fetch; the eye-icon modal reads this straight from DB.
+        # force=True because the user just added it and expects data immediately.
+        try:
+            with get_db() as db:
+                upsert_stock_story(
+                    ticker, db, exchange_key=exchange_key,
+                    asset_type=asset_type, currency=currency, force=True,
+                )
+                db.commit()
+        except Exception as _story_exc:
+            logger.warning(f"Stock story upsert failed for {ticker}: {_story_exc}")
+
         # 4b. Share Price Range Filter (equity only, opt-in) — hard exclude,
         # even on manual add, so a configured price-band preference is never
         # bypassed by adding a ticker directly.
@@ -2268,3 +2293,171 @@ def refresh_asx_sector_data(self, organization_id: int = None):
 
     except Exception as exc:
         logger.error(f"refresh_asx_sector_data failed: {exc}")
+
+
+# ===========================================================================
+# Stock Story (CommSec-style) — persistence + rate-limit-safe refresh
+# ===========================================================================
+
+# Default cadence: only re-fetch a ticker's story if the stored copy is older
+# than this many days. Fundamentals barely change day-to-day, so a weekly
+# refresh is plenty and keeps us well under yfinance's soft rate limits.
+STORY_STALE_DAYS_DEFAULT = 7
+# Hard cap on how many tickers a single daily-triggered refresh will fetch, so
+# the daily price refresh never fans out into hundreds of .info calls at once.
+STORY_MAX_PER_RUN_DEFAULT = 40
+# Polite delay between per-ticker fetches (seconds) to avoid bursting yfinance.
+STORY_FETCH_DELAY_SECS = 1.5
+
+
+def upsert_stock_story(ticker: str, db, *, exchange_key: str = "ASX",
+                       asset_type: str = "EQUITY", currency: str = "AUD",
+                       force: bool = False, stale_days: int = STORY_STALE_DAYS_DEFAULT) -> bool:
+    """
+    Fetch (if needed) and persist the CommSec-style Stock Story for one ticker
+    into the shared `stock_fundamentals` table.
+
+    Staleness-gated: returns False WITHOUT any yfinance call when an existing row
+    was fetched within `stale_days` and force=False. This is the mechanism that
+    keeps the daily price refresh from re-hitting the network for every stock.
+
+    Crypto assets have no fundamentals — we store a minimal stub row so the UI
+    can render a graceful "not available" panel and we never retry the network.
+
+    Returns True if a network fetch + write happened, False if skipped.
+    Caller is responsible for committing the session.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+
+    row = db.query(StockFundamentals).filter(StockFundamentals.ticker == ticker).first()
+
+    # Staleness gate
+    if row and not force and row.fetched_at:
+        if row.fetched_at > _dt.utcnow() - _td(days=stale_days):
+            return False
+
+    if row is None:
+        row = StockFundamentals(ticker=ticker)
+        db.add(row)
+
+    row.exchange_key = exchange_key or row.exchange_key or "ASX"
+    row.asset_type   = asset_type or row.asset_type or "EQUITY"
+    row.currency     = currency or row.currency or "AUD"
+
+    # Crypto: no fundamentals to fetch — store a stub, no network call.
+    if (asset_type or "").upper() == "CRYPTO":
+        row.data = {"ticker": ticker, "asset_type": "CRYPTO", "unavailable": True}
+        row.fetch_ok = True
+        row.fetch_error = None
+        row.fetched_at = _dt.utcnow()
+        return True
+
+    try:
+        story = get_stock_story(ticker)
+        row.data = story
+        row.company_name = story.get("company_name") or row.company_name
+        # "ok" if we got at least a name or a summary or any headline figure
+        has_data = bool(
+            story.get("company_name") or story.get("summary")
+            or story.get("market_cap") or story.get("net_income_history")
+        )
+        row.fetch_ok = has_data
+        row.fetch_error = None if has_data else "no usable data returned"
+        row.fetched_at = _dt.utcnow()
+        return True
+    except Exception as exc:
+        row.fetch_ok = False
+        row.fetch_error = str(exc)[:500]
+        row.fetched_at = _dt.utcnow()
+        logger.warning(f"upsert_stock_story failed for {ticker}: {exc}")
+        return True
+
+
+@app.task(name="app.tasks.screening.refresh_stock_fundamentals", bind=True, max_retries=1)
+def refresh_stock_fundamentals(self, exchange_key: str = None,
+                               max_per_run: int = STORY_MAX_PER_RUN_DEFAULT,
+                               stale_days: int = STORY_STALE_DAYS_DEFAULT,
+                               force: bool = False):
+    """
+    Rate-limit-safe batch refresh of Stock Story data for EQUITY instruments.
+
+    Selection: active, non-blacklisted equities whose `stock_fundamentals` row is
+    missing OR older than `stale_days`. Capped at `max_per_run` per invocation and
+    throttled with a short sleep between tickers, so even when chained off the
+    daily price refresh this never bursts the yfinance endpoints.
+
+    Crypto is skipped entirely (no fundamentals). Run weekly via Celery Beat and
+    opportunistically after each daily price refresh — the staleness gate makes
+    repeat runs cheap (most rows are skipped with zero network calls).
+
+    Args:
+        exchange_key: limit to one venue ("ASX", "NYSE"/"NASDAQ"/"US"); None = all equities.
+        max_per_run:  hard cap on fetches this run.
+        stale_days:   re-fetch threshold.
+        force:        ignore staleness (use sparingly — full universe = many calls).
+    """
+    import time as _time
+    from datetime import datetime as _dt, timedelta as _td
+
+    logger.info(f"refresh_stock_fundamentals start (exchange={exchange_key}, "
+                f"max={max_per_run}, stale_days={stale_days}, force={force})")
+
+    # 1. Build candidate ticker list (equities only)
+    with get_db() as db:
+        q = db.query(Stock).filter(
+            Stock.is_active == True,
+            Stock.blacklisted == False,
+            Stock.asset_type == "EQUITY",
+        )
+        if exchange_key:
+            if exchange_key in ("US", "NYSE", "NASDAQ"):
+                q = q.filter(Stock.exchange_key.in_(["NYSE", "NASDAQ"]))
+            elif exchange_key == "ASX":
+                q = q.filter(Stock.exchange_key == "ASX")
+            else:
+                q = q.filter(Stock.exchange_key == exchange_key)
+        stocks = [(s.ticker, s.exchange_key, s.currency) for s in q.all()]
+
+        # Existing fetch timestamps for staleness filtering
+        existing = {
+            r.ticker: r.fetched_at
+            for r in db.query(StockFundamentals.ticker, StockFundamentals.fetched_at).all()
+        }
+
+    cutoff = _dt.utcnow() - _td(days=stale_days)
+    candidates = []
+    for tk, exk, cur in stocks:
+        ft = existing.get(tk)
+        if force or ft is None or ft < cutoff:
+            candidates.append((tk, exk, cur))
+
+    candidates = candidates[:max_per_run]
+    if not candidates:
+        logger.info("refresh_stock_fundamentals: nothing stale — skipping")
+        return {"fetched": 0, "skipped": True}
+
+    # 2. Fetch + persist, one ticker per DB session, throttled
+    fetched = 0
+    for tk, exk, cur in candidates:
+        try:
+            with get_db() as db:
+                did = upsert_stock_story(
+                    tk, db, exchange_key=exk or "ASX",
+                    asset_type="EQUITY", currency=cur or "AUD",
+                    force=True, stale_days=stale_days,
+                )
+                if did:
+                    fetched += 1
+        except Exception as exc:
+            logger.warning(f"refresh_stock_fundamentals: {tk} failed: {exc}")
+        _time.sleep(STORY_FETCH_DELAY_SECS)
+
+    with get_db() as db:
+        db.add(AuditLog(
+            action=AuditAction.TASK_RUN,
+            message=f"[{exchange_key or 'ALL'}] Stock Story refresh: "
+                    f"{fetched}/{len(candidates)} fetched (of {len(stocks)} equities)",
+        ))
+
+    logger.info(f"refresh_stock_fundamentals done: fetched {fetched}/{len(candidates)}")
+    return {"fetched": fetched, "candidates": len(candidates)}

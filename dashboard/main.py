@@ -1187,7 +1187,7 @@ async def positions(request: Request, db: Session = Depends(get_db),
     # Super admins allowed in standard views under active organization context
     org_id = request.session.get("organization_id")
 
-    from app.models.trade import Position, Trade, TradeStatus
+    from app.models.trade import Position, Trade, TradeStatus, exit_reason_rationale
     from app.models.market import Stock
     from app.models.account import Account
 
@@ -1361,6 +1361,8 @@ async def positions(request: Request, db: Session = Depends(get_db),
         "pnl_pct": round(float(t.pnl_pct or 0) * 100, 2),
         "pnl_aud": round(float(t.net_pnl_aud or 0), 2),
         "reason": str(t.exit_reason).replace("ExitReason.", "").replace("_", " "),
+        "rationale_summary": exit_reason_rationale(t.exit_reason)["summary"],
+        "rationale_detail": exit_reason_rationale(t.exit_reason)["detail"],
         "cgt": t.cgt_eligible_discount,
         "is_paper": t.is_paper,
     } for t in trades]
@@ -3288,6 +3290,119 @@ async def action_refresh_data(request: Request, exchange: str = Form(None)):
     except Exception:
         refresh_price_data.delay(exchange_key=exchange_key)
     return RedirectResponse("/admin/health?msg=data", 302)
+
+
+@app.post("/action/refresh-fundamentals")
+async def action_refresh_fundamentals(request: Request, exchange: str = Form(None),
+                                      force: str = Form(None)):
+    """Manually queue a throttled Stock Story (fundamentals) refresh for equities."""
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    exchange_key = exchange or None
+    from app.tasks.screening import refresh_stock_fundamentals
+    try:
+        refresh_stock_fundamentals.delay(
+            exchange_key=exchange_key,
+            force=(str(force).lower() in ("1", "true", "on", "yes")),
+        )
+    except Exception:
+        pass
+    return RedirectResponse("/admin/health?msg=fundamentals", 302)
+
+
+@app.get("/stock-story/{ticker:path}")
+async def stock_story(request: Request, ticker: str, db: Session = Depends(get_db)):
+    """
+    Return the persisted CommSec-style Stock Story for a ticker as JSON.
+
+    Reads the shared `stock_fundamentals` table. If the row is missing or stale
+    it is fetched on-demand (one ticker = one yfinance fetch — cheap and only
+    happens the first time a story is opened). Live price-derived figures
+    (last price, 1Y sparkline + performance) are merged in from the local
+    `price_bars` table so they stay current without re-hitting yfinance.
+    """
+    if not _auth(request):
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    try:
+        from app.models.market import StockFundamentals, PriceBar, Stock
+        from app.tasks.screening import upsert_stock_story, STORY_STALE_DAYS_DEFAULT
+        from datetime import datetime as _dt, timedelta as _td
+
+        ticker = (ticker or "").strip()
+        if not ticker:
+            return JSONResponse({"error": "no ticker"}, status_code=400)
+
+        # Resolve stock metadata (for exchange/asset/currency on first fetch)
+        stock = db.query(Stock).filter(Stock.ticker == ticker).first()
+        exch = stock.exchange_key if stock else "ASX"
+        atype = stock.asset_type if stock else "EQUITY"
+        cur = stock.currency if stock else "AUD"
+
+        row = db.query(StockFundamentals).filter(StockFundamentals.ticker == ticker).first()
+
+        # On-demand fetch if missing or stale (stale gate prevents repeat fetches)
+        need_fetch = row is None or row.fetched_at is None or (
+            row.fetched_at < _dt.utcnow() - _td(days=STORY_STALE_DAYS_DEFAULT)
+        )
+        if need_fetch:
+            try:
+                upsert_stock_story(ticker, db, exchange_key=exch, asset_type=atype,
+                                   currency=cur, force=True)
+                db.commit()
+                row = db.query(StockFundamentals).filter(
+                    StockFundamentals.ticker == ticker).first()
+            except Exception as _fx:
+                db.rollback()
+                logger.warning(f"On-demand stock story fetch failed for {ticker}: {_fx}")
+
+        payload = dict(row.data) if (row and row.data) else {"ticker": ticker, "unavailable": True}
+        payload["ticker"] = ticker
+        payload["display_code"] = (stock.exchange_code if stock else
+                                   ticker.replace(".AX", "").replace("-USD", "")
+                                         .replace("-USDT", "").replace("-AUD", ""))
+        payload["exchange_key"] = exch
+        payload["asset_type"] = atype
+        if not payload.get("currency"):
+            payload["currency"] = cur
+        payload["fetched_at"] = (row.fetched_at.isoformat()
+                                 if (row and row.fetched_at) else None)
+
+        # ── Merge live price series from local price_bars (last ~1yr) ─────────
+        bars = (db.query(PriceBar.date, PriceBar.close, PriceBar.high_52w,
+                         PriceBar.low_52w, PriceBar.ma_50, PriceBar.ma_150,
+                         PriceBar.ma_200, PriceBar.rs_rating)
+                .filter(PriceBar.ticker == ticker)
+                .order_by(PriceBar.date.desc())
+                .limit(260).all())
+        bars = list(reversed(bars))
+        spark = [{"date": str(b[0]), "close": float(b[1])}
+                 for b in bars if b[1] is not None]
+        last_price = spark[-1]["close"] if spark else None
+        perf_1y = None
+        if len(spark) >= 2 and spark[0]["close"]:
+            perf_1y = (spark[-1]["close"] - spark[0]["close"]) / spark[0]["close"] * 100.0
+        latest = bars[-1] if bars else None
+        payload["price"] = {
+            "last": last_price,
+            "perf_1y_pct": perf_1y,
+            "sparkline": spark,
+            "high_52w": float(latest[2]) if latest and latest[2] is not None else None,
+            "low_52w": float(latest[3]) if latest and latest[3] is not None else None,
+            "ma_50": float(latest[4]) if latest and latest[4] is not None else None,
+            "ma_150": float(latest[5]) if latest and latest[5] is not None else None,
+            "ma_200": float(latest[6]) if latest and latest[6] is not None else None,
+            "rs_rating": float(latest[7]) if latest and latest[7] is not None else None,
+        }
+
+        return JSONResponse(payload)
+    except Exception as exc:
+        import traceback
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return JSONResponse({"error": str(exc), "trace": traceback.format_exc()},
+                            status_code=500)
 
 
 @app.post("/action/refresh-universe")

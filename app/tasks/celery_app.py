@@ -211,6 +211,20 @@ app.conf.update(
         },
 
         # =================================================================
+        # Weekly Stock Story refresh (Sunday 9pm AEST — safety net).
+        # Refreshes CommSec-style fundamentals for equities whose stored copy
+        # is >7 days old. Capped + throttled internally so it never bursts
+        # yfinance. The daily price refresh also tops this up opportunistically;
+        # this weekly run guarantees nothing goes stale even if dailies are
+        # missed. Crypto is skipped (no fundamentals).
+        # =================================================================
+        "refresh-stock-fundamentals": {
+            "task": "app.tasks.screening.refresh_stock_fundamentals",
+            "schedule": crontab(hour=21, minute=0, day_of_week="sun"),
+            "options": {"queue": "screening_equities"},
+        },
+
+        # =================================================================
         # US MARKET — NYSE/NASDAQ
         # NYSE: 9:30am–4:00pm ET = ~11:30pm–6:00am AEST (next day)
         # All times below in AEST/AEDT (Sydney timezone).

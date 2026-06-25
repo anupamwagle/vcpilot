@@ -1767,3 +1767,267 @@ def get_fundamentals(ticker: str) -> dict:
         logger.debug(f"Fundamentals fetch failed for {ticker}: {e}")
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Stock Story (CommSec-style narrative payload)
+# ---------------------------------------------------------------------------
+
+def _pd_year_map(series_or_df, row_label=None, limit: int = 6) -> list[dict]:
+    """
+    Convert a yfinance annual statement row (columns = period Timestamps) into a
+    chronologically-ascending list of {"year": YYYY, "value": float} dicts.
+
+    Works for a DataFrame (pass row_label to pick a row) or a Series.
+    Returns [] on any problem — caller treats empty as "data not available".
+    """
+    try:
+        if series_or_df is None:
+            return []
+        if row_label is not None:
+            if series_or_df.empty or row_label not in series_or_df.index:
+                return []
+            row = series_or_df.loc[row_label]
+        else:
+            row = series_or_df
+        out = []
+        for col, val in row.items():
+            if val is None or pd.isna(val):
+                continue
+            try:
+                yr = col.year if hasattr(col, "year") else int(str(col)[:4])
+            except Exception:
+                continue
+            out.append({"year": int(yr), "value": float(val)})
+        # ascending by year, de-dup keeping last
+        seen = {}
+        for d in out:
+            seen[d["year"]] = d["value"]
+        return [{"year": y, "value": seen[y]} for y in sorted(seen)][-limit:]
+    except Exception:
+        return []
+
+
+def _first_row(df, labels):
+    """Return the first matching row label present in df.index, else None."""
+    try:
+        if df is None or df.empty:
+            return None
+        for lab in labels:
+            if lab in df.index:
+                return lab
+    except Exception:
+        pass
+    return None
+
+
+def get_stock_story(ticker: str) -> dict:
+    """
+    Fetch a rich, CommSec-style "Stock Story" payload for one instrument.
+
+    Mirrors the sections of CommSec's Stock Story:
+      Who is X · How is X performing · Strong earnings · Dividends ·
+      Profitable · Growing · Debt · Overvalued · Analysts
+
+    Everything is pulled from a SINGLE yf.Ticker object so yfinance can reuse
+    its internal per-ticker cache across the .info / .income_stmt /
+    .balance_sheet / .dividends / .earnings_history endpoints — this keeps the
+    request count to one logical instrument fetch. Designed to be called on a
+    weekly / staleness-gated cadence (NOT on every daily price refresh), so it
+    never contributes to intraday rate-limit pressure.
+
+    Returns a JSON-serialisable dict. Every field degrades gracefully to None /
+    [] so the UI can render "not available" panels (exactly like CommSec does
+    when, e.g., dividend data is missing).
+
+    NOTE: price-derived figures (last price, 1Y sparkline, 1Y performance) are
+    intentionally NOT fetched here — they are merged in at read-time from the
+    local price_bars table by the /stock-story route, so they stay live without
+    re-hitting yfinance.
+    """
+    story: dict = {
+        "ticker": ticker,
+        "company_name": None,
+        "summary": None,
+        "sector": None, "industry": None,
+        "hq": None, "country": None, "website": None,
+        "ipo_date": None, "employees": None,
+        "key_person": None, "officers": [],
+        "peers": [],
+        # headline cards
+        "market_cap": None, "net_income": None,
+        "net_profit_margin": None, "operating_margin": None,
+        "annual_revenue": None,
+        # valuation
+        "trailing_pe": None, "forward_pe": None, "price_to_book": None,
+        "peg_ratio": None, "beta": None,
+        # earnings actuals vs estimates  [{year, actual, estimate}]
+        "earnings_history": [],
+        # dividends  [{year, amount}]
+        "dividends": [], "dividend_yield": None, "payout_ratio": None,
+        # profitability  net income by year  [{year, value}]
+        "net_income_history": [],
+        # growth
+        "revenue_growth": None, "earnings_growth": None,
+        "earnings_quarterly_growth": None,
+        # debt  [{year, total_debt, total_equity}]
+        "debt_history": [],
+        "debt_to_equity": None, "current_ratio": None,
+        # analysts
+        "recommendation_key": None, "recommendation_mean": None,
+        "num_analysts": None,
+        "target_mean": None, "target_high": None, "target_low": None,
+        "currency": None,
+    }
+
+    try:
+        tk = yf.Ticker(ticker)
+        info = {}
+        try:
+            info = tk.info or {}
+        except Exception:
+            info = {}
+
+        # ── Who is X ──────────────────────────────────────────────────────────
+        story["company_name"] = (info.get("longName") or info.get("shortName") or "").strip() or None
+        story["summary"]      = info.get("longBusinessSummary") or None
+        story["sector"]       = info.get("sector") or None
+        story["industry"]     = info.get("industry") or None
+        city  = info.get("city") or ""
+        state = info.get("state") or ""
+        hq = ", ".join([p for p in (city, state) if p])
+        story["hq"]       = hq or None
+        story["country"]  = info.get("country") or None
+        story["website"]  = info.get("website") or None
+        story["employees"] = info.get("fullTimeEmployees")
+        story["currency"]  = info.get("currency") or info.get("financialCurrency")
+
+        # IPO / first trade date
+        epoch = info.get("firstTradeDateEpochUtc") or info.get("firstTradeDateMilliseconds")
+        if epoch:
+            try:
+                ts = float(epoch)
+                if ts > 1e11:   # milliseconds
+                    ts /= 1000.0
+                story["ipo_date"] = datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+            except Exception:
+                pass
+
+        # Key officers
+        try:
+            officers = info.get("companyOfficers") or []
+            ofs = []
+            for o in officers[:4]:
+                nm = o.get("name")
+                ttl = o.get("title")
+                if nm:
+                    ofs.append({"name": nm, "title": ttl or ""})
+            story["officers"] = ofs
+            if ofs:
+                story["key_person"] = ofs[0]["name"]
+        except Exception:
+            pass
+
+        # ── Headline cards ────────────────────────────────────────────────────
+        story["market_cap"]        = info.get("marketCap")
+        story["net_income"]        = info.get("netIncomeToCommon")
+        story["net_profit_margin"] = info.get("profitMargins")
+        story["operating_margin"]  = info.get("operatingMargins")
+        story["annual_revenue"]    = info.get("totalRevenue")
+
+        # ── Valuation ─────────────────────────────────────────────────────────
+        story["trailing_pe"]   = info.get("trailingPE")
+        story["forward_pe"]    = info.get("forwardPE")
+        story["price_to_book"] = info.get("priceToBook")
+        story["peg_ratio"]     = info.get("pegRatio") or info.get("trailingPegRatio")
+        story["beta"]          = info.get("beta")
+
+        # ── Growth ────────────────────────────────────────────────────────────
+        story["revenue_growth"]            = info.get("revenueGrowth")
+        story["earnings_growth"]           = info.get("earningsGrowth")
+        story["earnings_quarterly_growth"] = info.get("earningsQuarterlyGrowth")
+
+        # ── Debt ratios ───────────────────────────────────────────────────────
+        story["debt_to_equity"] = info.get("debtToEquity")
+        story["current_ratio"]  = info.get("currentRatio")
+
+        # ── Dividends ─────────────────────────────────────────────────────────
+        story["dividend_yield"] = info.get("dividendYield")
+        story["payout_ratio"]   = info.get("payoutRatio")
+        try:
+            divs = tk.dividends
+            if divs is not None and not divs.empty:
+                by_year: dict[int, float] = {}
+                for dt_idx, amt in divs.items():
+                    try:
+                        yr = dt_idx.year
+                    except Exception:
+                        continue
+                    by_year[yr] = by_year.get(yr, 0.0) + float(amt)
+                story["dividends"] = [
+                    {"year": y, "amount": round(by_year[y], 4)} for y in sorted(by_year)
+                ][-8:]
+        except Exception:
+            pass
+
+        # ── Annual income statement: net income + EPS history ─────────────────
+        try:
+            inc = tk.income_stmt
+            ni_label = _first_row(inc, ("Net Income", "Net Income Common Stockholders",
+                                        "Net Income Continuous Operations"))
+            if ni_label:
+                story["net_income_history"] = _pd_year_map(inc, ni_label, limit=6)
+        except Exception:
+            pass
+
+        # ── Balance sheet: total debt vs total equity ─────────────────────────
+        try:
+            bs = tk.balance_sheet
+            debt_label = _first_row(bs, ("Total Debt", "Total Liabilities Net Minority Interest"))
+            eq_label   = _first_row(bs, ("Stockholders Equity", "Total Equity Gross Minority Interest",
+                                         "Common Stock Equity"))
+            debt_map = _pd_year_map(bs, debt_label, limit=6) if debt_label else []
+            eq_map   = _pd_year_map(bs, eq_label, limit=6)   if eq_label else []
+            eq_by_year = {d["year"]: d["value"] for d in eq_map}
+            debt_by_year = {d["year"]: d["value"] for d in debt_map}
+            years = sorted(set(eq_by_year) | set(debt_by_year))
+            story["debt_history"] = [
+                {"year": y,
+                 "total_debt": debt_by_year.get(y),
+                 "total_equity": eq_by_year.get(y)}
+                for y in years
+            ][-6:]
+        except Exception:
+            pass
+
+        # ── Earnings actuals vs estimates ─────────────────────────────────────
+        try:
+            eh = tk.earnings_history
+            rows = []
+            if eh is not None and not eh.empty:
+                # columns include epsActual, epsEstimate; index = quarter labels
+                for idx, r in eh.iterrows():
+                    act = r.get("epsActual") if hasattr(r, "get") else None
+                    est = r.get("epsEstimate") if hasattr(r, "get") else None
+                    label = str(idx)
+                    rows.append({
+                        "period": label,
+                        "actual": (None if act is None or pd.isna(act) else float(act)),
+                        "estimate": (None if est is None or pd.isna(est) else float(est)),
+                    })
+            story["earnings_history"] = rows[-8:]
+        except Exception:
+            pass
+
+        # ── Analyst views ─────────────────────────────────────────────────────
+        story["recommendation_key"]  = info.get("recommendationKey")
+        story["recommendation_mean"] = info.get("recommendationMean")
+        story["num_analysts"]        = info.get("numberOfAnalystOpinions")
+        story["target_mean"]         = info.get("targetMeanPrice")
+        story["target_high"]         = info.get("targetHighPrice")
+        story["target_low"]          = info.get("targetLowPrice")
+
+    except Exception as e:
+        logger.debug(f"Stock story fetch failed for {ticker}: {e}")
+
+    return story

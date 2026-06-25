@@ -3,6 +3,19 @@
 {% block page_title %}Positions{% endblock %}
 
 {% block content %}
+<style>
+/* "Why was this closed?" expander on each closed trade */
+details.why-exit{display:inline-block}
+details.why-exit > summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:.3rem}
+details.why-exit > summary::-webkit-details-marker{display:none}
+details.why-exit .why-ico{width:.95rem;height:.95rem;border-radius:50%;border:1px solid var(--border);
+  color:var(--text-subtle);font-size:.6rem;font-weight:700;display:inline-flex;align-items:center;justify-content:center;line-height:1}
+details.why-exit[open] .why-ico, details.why-exit > summary:hover .why-ico{border-color:var(--t-accent);color:var(--t-accent)}
+details.why-exit .why-box{margin-top:.4rem;padding:.55rem .65rem;border:1px solid var(--border);border-radius:.45rem;
+  background:var(--surface);width:min(24rem,70vw);white-space:normal;text-align:left}
+details.why-exit .why-sum{display:block;font-size:.7rem;font-weight:700;color:var(--text);margin-bottom:.3rem}
+details.why-exit .why-det{display:block;font-size:.7rem;line-height:1.45;color:var(--text-muted)}
+</style>
 <!-- Stats -->
 <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3 mb-6">
   <!-- Closed Trades Card -->
@@ -193,6 +206,11 @@
                 </button>
               </form>
               {{ p.ticker.replace('.AX','').replace('-USD','').replace('-USDT','').replace('-AUD','') }}
+              <button type="button" onclick="openStockStory('{{ p.ticker }}','{{ p.ticker.replace('.AX','').replace('-USD','').replace('-USDT','').replace('-AUD','') }}')"
+                title="View Stock Story" aria-label="View Stock Story"
+                style="background:none;border:none;padding:0;cursor:pointer;color:var(--t-accent);display:inline-flex;align-items:center;line-height:1;vertical-align:middle">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
               {% if p.exchange_key and p.exchange_key != 'ASX' %}
               <span style="font-size:.58rem;font-weight:600;padding:.08rem .28rem;border-radius:.2rem;background:var(--surface-alt);color:var(--text-muted);border:1px solid var(--border)">
                 {{ p.flag_emoji or '' }} {{ p.exchange_key.replace('CRYPTO_','') }}
@@ -454,7 +472,20 @@
             <span class="{% if t.pnl_aud >= 0 %}mono-pos{% else %}mono-neg{% endif %}" style="font-size:.78rem">${{ "{:+,.0f}".format(t.pnl_aud) }}</span>
           </td>
           <td class="tbl-cell" style="font-size:.73rem">
+            {% if t.rationale_detail %}
+            <details class="why-exit">
+              <summary title="{{ t.rationale_summary }}">
+                <span style="padding:.1rem .4rem;border-radius:.25rem;background:var(--surface-alt);color:var(--text-muted);font-size:.68rem;font-weight:600">{{ t.reason }}</span>
+                <span class="why-ico" aria-label="Why was this closed?">i</span>
+              </summary>
+              <div class="why-box">
+                {% if t.rationale_summary %}<span class="why-sum">{{ t.rationale_summary }}</span>{% endif %}
+                <span class="why-det">{{ t.rationale_detail }}</span>
+              </div>
+            </details>
+            {% else %}
             <span style="padding:.1rem .4rem;border-radius:.25rem;background:var(--surface-alt);color:var(--text-muted);font-size:.68rem;font-weight:600">{{ t.reason }}</span>
+            {% endif %}
           </td>
           <td class="tbl-cell tc">
             {% if t.cgt %}<span class="chip chip-pos chip-sm">✓ CGT 50%</span>{% else %}<span class="mono-dim" style="font-size:.72rem">—</span>{% endif %}

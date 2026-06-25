@@ -51,6 +51,124 @@ class ExitReason(str, enum.Enum):
     THREE_WEEKS_TIGHT= "THREE_WEEKS_TIGHT"   # 3-weeks-tight trailing stop
 
 
+# ---------------------------------------------------------------------------
+# Plain-English rationale for every exit reason.
+# Surfaced in the Closed Trades view so a non-expert user understands *why* a
+# position was closed and the Minervini idea behind it. Each entry has a short
+# `summary` (one line) and a fuller `detail` (a few sentences).
+# IMPORTANT: every ExitReason member MUST have an entry here — a regression test
+# (tests/test_exit_rationale.py) enforces this so new reasons can't ship without
+# a user-facing explanation.
+# ---------------------------------------------------------------------------
+EXIT_REASON_RATIONALE: dict[str, dict[str, str]] = {
+    "STOP_LOSS": {
+        "summary": "Price hit your protective stop — the loss was capped automatically.",
+        "detail": (
+            "The price fell to the pre-set stop level, so the position was sold to stop the loss "
+            "growing any further. This is the single most important discipline in the Minervini "
+            "method: cut losses short and keep every one small, because one big loss can erase many "
+            "good gains. As the saying goes, your first loss is usually your best loss."
+        ),
+    },
+    "TRAILING_STOP": {
+        "summary": "A profit-protecting stop was trailed up under the trend, and price broke it.",
+        "detail": (
+            "As the trade moved in your favour the stop was raised behind the price (often just under "
+            "the 50-day moving average). When the price closed back below that level the position was "
+            "sold to bank the gain. The idea: ride a winner for as long as the uptrend holds, but give "
+            "very little back once that trend clearly breaks."
+        ),
+    },
+    "PROFIT_TARGET_1": {
+        "summary": "Part of the position was sold into strength to lock in an early gain.",
+        "detail": (
+            "After a solid advance, a portion of the position was sold while the stock was still strong "
+            "— taking money off the table and reducing risk while letting the remainder run. Minervini "
+            "calls this 'selling into strength': bank some profit while buyers are eager, rather than "
+            "waiting until the move is already over."
+        ),
+    },
+    "PROFIT_TARGET_2": {
+        "summary": "A large winner gave back enough from its peak, so the remainder was sold.",
+        "detail": (
+            "Once the trade reached a big gain it was managed with a trailing stop instead of a fixed "
+            "target, so it could keep running. This exit means the price pulled back far enough from its "
+            "high to take the rest off the table. The principle: let your winners run, then protect the "
+            "profit when the move finally runs out of steam."
+        ),
+    },
+    "TIME_STOP": {
+        "summary": "The trade hadn't made enough progress in the allotted time, so the capital was freed up.",
+        "detail": (
+            "A correct breakout should generally start working fairly soon. This position hadn't reached "
+            "its expected gain within the time window, so it was closed — for a loss, breakeven, or even a "
+            "small profit — to move the money into a faster-acting leader. Minervini calls this "
+            "'opportunity cost': money sitting in a stock that isn't moving is money that isn't compounding "
+            "somewhere better. Note: this can close a position that is modestly in profit simply because it "
+            "is rising too slowly."
+        ),
+    },
+    "MARKET_REGIME": {
+        "summary": "The broad market turned hostile, so exposure was reduced.",
+        "detail": (
+            "The overall market shifted into a downtrend (for example, the index fell below its 200-day "
+            "moving average). Around three out of four breakouts fail in a weak market, so the position was "
+            "trimmed or closed to protect your capital. Minervini's rule: never fight the tape — trade "
+            "aggressively in healthy markets and defensively in poor ones."
+        ),
+    },
+    "EARNINGS_AVOID": {
+        "summary": "Closed ahead of an earnings report to avoid a binary overnight gap.",
+        "detail": (
+            "Earnings announcements can gap a stock sharply up or down overnight — a coin-flip that a stop "
+            "can't protect you from. The position was exited (or trimmed) before the report. Minervini only "
+            "holds through earnings when there is already a comfortable profit cushion to absorb a bad reaction."
+        ),
+    },
+    "CLIMAX_TOP": {
+        "summary": "An exhaustion spike on heavy volume suggested a top, so it was sold into strength.",
+        "detail": (
+            "After a long run, a sharp surge on unusually high volume often marks the end of a move as the "
+            "last eager buyers pile in. The position was sold into that euphoria rather than waiting for the "
+            "pullback that usually follows. Minervini: sell into strength when a stock goes near-vertical — "
+            "that's when demand is highest and it's easiest to get a good price."
+        ),
+    },
+    "THREE_WEEKS_TIGHT": {
+        "summary": "A tight, calm consolidation pattern — normally a reason to hold, not sell.",
+        "detail": (
+            "Three weekly closes within a very narrow range ('three weeks tight') shows the stock is quietly "
+            "coiling for its next move, and is usually a signal to HOLD. If it appears here as a close reason, "
+            "treat it as a managed continuation exit. Minervini views this pattern as a sign of strength and "
+            "often a place to add, not exit."
+        ),
+    },
+    "MANUAL": {
+        "summary": "Closed manually by you (via the dashboard or a WhatsApp/Telegram command).",
+        "detail": (
+            "This position was closed by hand rather than by an automatic rule — for example from the "
+            "Positions page or a remote command. The system simply recorded and executed your decision."
+        ),
+    },
+}
+
+
+def exit_reason_rationale(reason) -> dict[str, str]:
+    """
+    Return {'summary','detail'} plain-English rationale for an ExitReason.
+    Accepts an ExitReason, its .value, or a raw string like 'ExitReason.TIME_STOP'.
+    Always returns a dict (empty strings if somehow unknown) so callers/templates
+    never break.
+    """
+    if reason is None:
+        return {"summary": "", "detail": ""}
+    if isinstance(reason, ExitReason):
+        key = reason.value
+    else:
+        key = str(reason).replace("ExitReason.", "").strip()
+    return EXIT_REASON_RATIONALE.get(key, {"summary": "", "detail": ""})
+
+
 class Order(Base):
     """Every order sent to IBKR or crypto exchange — entry, exit, stop, modification."""
     __tablename__ = "orders"

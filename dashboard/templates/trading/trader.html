@@ -490,6 +490,7 @@
               <div>
                 <div style="display:flex;align-items:center;gap:5px">
                   <span class="card-ticker" x-text="sig.display_ticker"></span>
+                  <button type="button" @click.stop="openStockStory(sig.ticker, sig.display_ticker)" title="Stock Story" style="background:none;border:none;padding:0;cursor:pointer;color:var(--accent);display:inline-flex;align-items:center;vertical-align:middle"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3"/></svg></button>
                   <span class="break-badge" x-show="sig.breakout_confirmed">● BREAK</span>
                 </div>
                 <div class="card-name" x-text="sig.name"></div>
@@ -563,6 +564,7 @@
                 <div>
                   <div style="display:flex;align-items:center;gap:5px">
                     <span class="card-ticker" x-text="item.display_ticker"></span>
+                    <button type="button" @click.stop="openStockStory(item.ticker, item.display_ticker)" title="Stock Story" style="background:none;border:none;padding:0;cursor:pointer;color:var(--accent);display:inline-flex;align-items:center;vertical-align:middle"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3"/></svg></button>
                     <!-- Quality tier badge (A/B only — C is implicit) -->
                     <template x-if="item.setup_tier === 'A'">
                       <span class="badge-xs" style="color:#00e676; background:#00e67618; border:1px solid #00e67644; font-size:8px; font-weight:800; padding:0 3px; border-radius:2px">★ A</span>
@@ -606,6 +608,7 @@
               <span class="mkt" :class="mktClass(pos.exchange_key)" x-text="mktLabel(pos.exchange_key)"></span>
               <div>
                 <span class="card-ticker" x-text="pos.display_ticker"></span>
+                <button type="button" @click.stop="openStockStory(pos.ticker, pos.display_ticker)" title="Stock Story" style="background:none;border:none;padding:0;cursor:pointer;color:var(--accent);display:inline-flex;align-items:center;vertical-align:middle"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3"/></svg></button>
                 <div class="card-name" x-text="pos.name"></div>
               </div>
             </div>
@@ -1793,5 +1796,6 @@ function traderApp() {
 }
 </script>
 <!-- AstraTrade Trader Terminal v2 -->
+{% include "components/stock_story_modal.html" %}
 </body>
 </html>
