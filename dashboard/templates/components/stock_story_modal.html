@@ -202,9 +202,43 @@ function _ssRender(d){
   }
   const p=d.price||{};
 
-  if(d.asset_type==='CRYPTO'||d.unavailable){
-    c.innerHTML='<div class="ss-na">Stock Story is available for listed equities only.<br>'
-      +'<span style="font-size:.72rem">No company fundamentals are published for this instrument.</span></div>';
+  const isCrypto=d.asset_type==='CRYPTO';
+
+  if(!isCrypto && d.unavailable){
+    c.innerHTML='<div class="ss-na">Stock Story isn’t available for this instrument.<br>'
+      +'<span style="font-size:.72rem">No company data is published for it.</span></div>';
+    return;
+  }
+
+  if(isCrypto){
+    /* Crypto: company fundamentals don't apply — show price, VCP setup + rule scorecard */
+    let hc='';
+    const pc=p.perf_1y_pct==null?'':(p.perf_1y_pct>=0?'ss-pos':'ss-neg');
+    hc+='<div class="ss-cards">';
+    hc+=_ssCardHTML('Last Price',_ssCur(p.last,cur),'');
+    hc+='<div class="ss-card"><div class="lbl">1Y Performance</div>'
+      +'<div class="val '+pc+'">'+_ssPct(p.perf_1y_pct)+'</div>'
+      +'<div class="ss-chart" id="ss-spark" style="min-height:38px;margin-top:.1rem"></div></div>';
+    if(d.market_cap!=null)hc+=_ssCardHTML('Market Cap',_ssCur(d.market_cap,cur),'');
+    if(p.rs_rating!=null)hc+=_ssCardHTML('RS Rating',Number(p.rs_rating).toFixed(0),'Relative strength');
+    hc+='</div>';
+    hc+='<div class="ss-section"><div class="ss-q">About '+_ssEsc(code)+'</div>'
+      +'<div class="ss-sub">'+_ssEsc(name)+' is a digital asset. Company fundamentals '
+      +'(earnings, dividends, balance sheet) don’t apply to crypto — the sections below focus on the '
+      +'price structure and your Minervini / crypto rule scorecard.</div></div>';
+    hc+='<hr class="ss-divider"><div class="ss-section"><div class="ss-q">How is '+_ssEsc(code)+' performing?</div>';
+    if(p.sparkline&&p.sparkline.length>1){
+      hc+='<div class="ss-sub">'+_ssEsc(code)+' is '+(p.perf_1y_pct>=0?'up':'down')+' '
+        +_ssPct(p.perf_1y_pct)+' over the last year.</div><div class="ss-chart" id="ss-perf"></div>';
+    }else hc+='<div class="ss-na">Price history not available.</div>';
+    hc+='</div>';
+    hc+=_ssVcpSection(d,code);
+    hc+=_ssRulesSection(d);
+    hc+=_ssCalcSection(d,cur,p);
+    c.innerHTML=hc;
+    window._ssLastPrice=p.last;
+    _ssCalc();
+    _ssMountCharts(d,cur,code);
     return;
   }
 
@@ -240,6 +274,10 @@ function _ssRender(d){
   h+=_ssCardHTML('Key Person',d.key_person||'—',
        (d.officers&&d.officers[0]&&d.officers[0].title)?d.officers[0].title:'');
   h+='</div></div>';
+
+  /* VCP pattern + Minervini rule scorecard (trading core) */
+  h+=_ssVcpSection(d,code);
+  h+=_ssRulesSection(d);
 
   /* How is X performing */
   h+='<hr class="ss-divider"><div class="ss-section"><div class="ss-q">How is '+_ssEsc(code)+' performing?</div>';
@@ -318,18 +356,7 @@ function _ssRender(d){
   }
 
   /* Hypothetical Trade Calculator */
-  h+='<hr class="ss-divider"><div class="ss-section"><div class="ss-q">Hypothetical Trade Calculator</div>'
-    +'<div class="ss-calc">'
-    +'<div><div class="lbl" style="font-size:.66rem;color:var(--ss-text-subtle);text-transform:uppercase">Number of Shares</div>'
-    +'<input id="ss-calc-qty" type="number" min="0" step="1" value="50" oninput="_ssCalc()"></div>'
-    +'<div><div class="lbl" style="font-size:.66rem;color:var(--ss-text-subtle);text-transform:uppercase">Current Price</div>'
-    +'<div class="val" style="font-size:1.05rem;font-weight:800;color:var(--ss-text)">'+_ssCur(p.last,cur)+'</div></div>'
-    +'<div><div class="lbl" style="font-size:.66rem;color:var(--ss-text-subtle);text-transform:uppercase">Estimated Trade</div>'
-    +'<div class="val" id="ss-calc-out" style="font-size:1.05rem;font-weight:800;color:var(--ss-t-accent)">—</div></div>'
-    +'</div>'
-    +'<div style="font-size:.66rem;color:var(--ss-text-subtle);margin-top:.5rem">'
-    +(d.fetched_at?('Fundamentals as of '+String(d.fetched_at).slice(0,10)+' · '):'')
-    +'Indicative only — not financial advice.</div></div>';
+  h+=_ssCalcSection(d,cur,p);
 
   c.innerHTML=h;
   window._ssLastPrice=p.last;
@@ -349,6 +376,96 @@ function _ssChip(icon,lbl,val){
 function _ssRating(k){
   if(!k)return'Not Rated';
   return String(k).replace(/_/g,' ').replace(/\b\w/g,m=>m.toUpperCase());
+}
+
+/* ── Hypothetical trade calculator section (shared equity + crypto) ── */
+function _ssCalcSection(d,cur,p){
+  return '<hr class="ss-divider"><div class="ss-section"><div class="ss-q">Hypothetical Trade Calculator</div>'
+    +'<div class="ss-calc">'
+    +'<div><div class="lbl" style="font-size:.66rem;color:var(--ss-text-subtle);text-transform:uppercase">Quantity</div>'
+    +'<input id="ss-calc-qty" type="number" min="0" step="1" value="50" oninput="_ssCalc()"></div>'
+    +'<div><div class="lbl" style="font-size:.66rem;color:var(--ss-text-subtle);text-transform:uppercase">Current Price</div>'
+    +'<div class="val" style="font-size:1.05rem;font-weight:800;color:var(--ss-text)">'+_ssCur(p.last,cur)+'</div></div>'
+    +'<div><div class="lbl" style="font-size:.66rem;color:var(--ss-text-subtle);text-transform:uppercase">Estimated Trade</div>'
+    +'<div class="val" id="ss-calc-out" style="font-size:1.05rem;font-weight:800;color:var(--ss-t-accent)">—</div></div>'
+    +'</div>'
+    +'<div style="font-size:.66rem;color:var(--ss-text-subtle);margin-top:.5rem">'
+    +(d.fetched_at?('Data as of '+String(d.fetched_at).slice(0,10)+' · '):'')
+    +'Indicative only — not financial advice.</div></div>';
+}
+
+/* ── VCP (Volatility Contraction Pattern) section ── */
+function _ssVcpSection(d,code){
+  const v=d.vcp;
+  let h='<hr class="ss-divider"><div class="ss-section"><div class="ss-q">Does '+_ssEsc(code)+' show a VCP setup?</div>';
+  h+='<div class="ss-sub">The <strong>Volatility Contraction Pattern</strong> — the heart of Mark Minervini’s SEPA method — is a base where price makes a sequence of progressively <em>shallower</em> pullbacks (T1, T2, T3…) while volume dries up. Each contraction should be tighter than the last as supply is absorbed and weak holders are shaken out; the high of the final, tightest contraction becomes the <strong>pivot</strong> buy-point, and a breakout through it on a surge of volume is the entry trigger.</div>';
+  if(!v||!v.available){
+    h+='<div class="ss-na">'+_ssEsc((v&&v.reason)||'VCP analysis not available.')+'</div></div>';
+    return h;
+  }
+  const cs=v.contractions||[];
+  let statusTxt, statusCls;
+  if(v.detected){statusTxt='✓ Valid VCP detected — '+v.contraction_count+' contractions';statusCls='ss-pos';}
+  else if(cs.length){statusTxt='Base forming — '+cs.length+' contraction'+(cs.length==1?'':'s')+' so far (Minervini wants ≥ '+v.min_contractions+')';statusCls='ss-warn';}
+  else{statusTxt='No clear contraction sequence detected yet';statusCls='ss-warn';}
+  h+='<div style="font-weight:700;margin-bottom:.4rem" class="'+statusCls+'">'+_ssEsc(statusTxt)+'</div>';
+  h+='<div class="ss-chart" id="ss-vcp"></div>';
+  if(cs.length){
+    h+='<div class="ss-chips" style="margin-top:.6rem">';
+    cs.forEach((c,i)=>{
+      const pct=c.pct!=null?Number(c.pct).toFixed(1):'?';
+      h+='<span class="ss-chip"><strong style="color:var(--ss-text)">T'+(i+1)+'</strong> &nbsp;−'+pct+'%'
+        +(c.high_date?(' <span style="color:var(--ss-text-subtle)">'+_ssEsc(String(c.high_date).slice(0,10))+'</span>'):'')+'</span>';
+    });
+    h+='</div>';
+    if(cs.length>=2){
+      const tightening=Number(cs[cs.length-1].pct)<=Number(cs[0].pct);
+      h+='<div class="ss-sub" style="margin-top:.5rem">'
+        +(tightening
+          ? 'Contractions are tightening (T'+cs.length+' '+Number(cs[cs.length-1].pct).toFixed(1)+'% ≤ T1 '+Number(cs[0].pct).toFixed(1)+'%) — textbook VCP behaviour: each pullback shallower than the last as supply dries up.'
+          : 'Contractions are not yet consistently tightening — Minervini wants each successive pullback shallower than the one before.')
+        +'</div>';
+    }
+  }
+  h+='<div class="ss-cards" style="margin-top:.6rem">';
+  h+=_ssCardHTML('Pivot (buy point)',v.pivot!=null?_ssNum(v.pivot):'—','High of final contraction');
+  h+=_ssCardHTML('Stop',v.stop!=null?_ssNum(v.stop):'—','Low of final contraction');
+  h+=_ssCardHTML('Base Length',v.base_weeks?(v.base_weeks+' weeks'):'—','Time building the base');
+  h+=_ssCardHTML('Volume Dry-up',v.volume_dried_up?'Yes ✓':'Not yet','Final-leg volume vs 50-day avg');
+  h+='</div></div>';
+  return h;
+}
+
+/* ── Minervini rule scorecard (org-config aware) ── */
+function _ssRulesSection(d){
+  const r=d.rules;
+  let h='<hr class="ss-divider"><div class="ss-section"><div class="ss-q">Minervini rule scorecard</div>';
+  h+='<div class="ss-sub">Every rule below is evaluated <strong>under your organisation’s own configuration</strong> — only the rules you’ve enabled, at the thresholds you’ve set. Green ✓ = ticked off, red ✗ = not met.</div>';
+  if(!r||!r.available){
+    h+='<div class="ss-na">'+_ssEsc((r&&r.reason)||'Rule breakdown not available.')+'</div></div>';
+    return h;
+  }
+  h+='<div style="font-weight:800;font-size:1.05rem;margin-bottom:.5rem;color:var(--ss-text)">'+r.passed+' / '+r.total+' rules passed</div>';
+  (r.groups||[]).forEach(g=>{
+    h+='<div style="margin-top:.8rem"><div style="display:flex;justify-content:space-between;align-items:center;font-weight:700;font-size:.82rem;color:var(--ss-text);border-bottom:1px solid var(--ss-border);padding-bottom:.25rem">'
+      +'<span>'+_ssEsc(g.label)+'</span><span style="font-size:.72rem;color:var(--ss-text-subtle)">'+g.passed+'/'+g.total+'</span></div>';
+    (g.items||[]).forEach(it=>{
+      const ic=it.passed?'<span style="color:var(--ss-pos);font-weight:800">✓</span>':'<span style="color:var(--ss-neg);font-weight:800">✗</span>';
+      h+='<div style="padding:.5rem 0;border-bottom:1px solid var(--ss-border)">'
+        +'<div style="display:flex;gap:.55rem;align-items:baseline">'
+        +'<span style="width:14px;flex-shrink:0;text-align:center">'+ic+'</span>'
+        +'<div style="flex:1;min-width:0">'
+        +'<span style="font-weight:600;color:var(--ss-text);font-size:.81rem">'+_ssEsc(it.label)+'</span>'
+        +(it.detail?(' <span style="color:var(--ss-text-muted);font-size:.74rem">— '+_ssEsc(it.detail)+'</span>'):'')
+        +(it.threshold?(' <span class="ss-tag" style="margin-left:.3rem">'+_ssEsc(it.threshold)+'</span>'):'')
+        +(it.description?('<div style="color:var(--ss-text-subtle);font-size:.72rem;margin-top:.18rem;line-height:1.4">'+_ssEsc(it.description)+'</div>'):'')
+        +(it.minervini_ref?('<div style="color:var(--ss-text-subtle);font-size:.7rem;font-style:italic;margin-top:.12rem">“'+_ssEsc(it.minervini_ref)+'”</div>'):'')
+        +'</div></div></div>';
+    });
+    h+='</div>';
+  });
+  h+='</div>';
+  return h;
 }
 window._ssCalc=function(){
   const el=document.getElementById('ss-calc-qty');
@@ -382,6 +499,33 @@ function _ssMountCharts(d,cur,code){
       stroke:{width:2,curve:'smooth'},colors:[up?pos:neg],
       fill:{type:'gradient',gradient:{shadeIntensity:.4,opacityFrom:.35,opacityTo:.02}}});
     _ssChart('#ss-perf',o2);
+  }
+
+  /* VCP base chart — price line with contraction-leg markers + pivot/stop lines */
+  if(d.vcp&&d.vcp.available&&d.vcp.series&&d.vcp.series.length>1){
+    const s=d.vcp.series;
+    const pts=[];
+    (d.vcp.contractions||[]).forEach((c,i)=>{
+      if(c.high_date&&c.high!=null)pts.push({x:new Date(c.high_date).getTime(),y:c.high,
+        marker:{size:5,fillColor:acc,strokeColor:'#fff',strokeWidth:1},
+        label:{text:'T'+(i+1)+' −'+(c.pct!=null?Number(c.pct).toFixed(0):'?')+'%',
+               borderColor:acc,style:{background:acc,color:'#fff',fontSize:'9px'}}});
+      if(c.low_date&&c.low!=null)pts.push({x:new Date(c.low_date).getTime(),y:c.low,
+        marker:{size:4,fillColor:neg,strokeColor:'#fff',strokeWidth:1}});
+    });
+    const yann=[];
+    if(d.vcp.pivot)yann.push({y:d.vcp.pivot,borderColor:'#f97316',strokeDashArray:5,
+      label:{text:'Pivot '+_ssNum(d.vcp.pivot),style:{background:'#f97316',color:'#fff',fontSize:'9px'}}});
+    if(d.vcp.stop)yann.push({y:d.vcp.stop,borderColor:neg,strokeDashArray:5,
+      label:{text:'Stop '+_ssNum(d.vcp.stop),style:{background:neg,color:'#fff',fontSize:'9px'}}});
+    const ov=Object.assign(_ssBaseChartOpts(),{
+      chart:Object.assign(_ssBaseChartOpts().chart,{type:'line',height:280}),
+      series:[{name:code,data:s.map(x=>[new Date(x.date).getTime(),x.close])}],
+      xaxis:{type:'datetime',labels:{style:{colors:muted}}},
+      yaxis:{labels:{formatter:v=>_ssNum(v),style:{colors:muted}}},
+      stroke:{width:2,curve:'straight'},colors:[acc],
+      annotations:{yaxis:yann,points:pts}});
+    _ssChart('#ss-vcp',ov);
   }
 
   if(d.earnings_history&&d.earnings_history.length){

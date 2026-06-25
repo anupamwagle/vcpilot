@@ -184,9 +184,23 @@ def detect_vcp(
     vcp.stop_price = stop_price
     vcp.contraction_count = contraction_count
     vcp.final_contraction_pct = final_contraction_pct
+    # Map pivot indices back to calendar dates when the window carries a "date"
+    # column (it does when the df is built from PriceBar rows). This lets the
+    # Stock Story plot each contraction leg on the price timeline. Additive —
+    # the pct/high/low keys are preserved for existing callers/tests.
+    _dates = window["date"].tolist() if "date" in window.columns else None
+    def _leg_date(idx):
+        if _dates is None:
+            return None
+        try:
+            return str(_dates[idx])[:10]
+        except Exception:
+            return None
+
     vcp.detail = {
         "contractions": [
-            {"pct": round(c["contraction_pct"], 2), "high": c["high_val"], "low": c["low_val"]}
+            {"pct": round(c["contraction_pct"], 2), "high": c["high_val"], "low": c["low_val"],
+             "high_date": _leg_date(c["high_idx"]), "low_date": _leg_date(c["low_idx"])}
             for c in valid_contractions
         ]
     }

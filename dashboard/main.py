@@ -1630,6 +1630,193 @@ def _build_vcp_chart_svg(ticker: str, bars: list[dict], pivot: float, stop: floa
     )
 
 
+# Display metadata for the Stock Story rule scorecard — category order + labels.
+_SS_RULE_CATEGORY_ORDER = [
+    ("TREND_TEMPLATE", "Trend Template"),
+    ("VCP",            "Volatility Contraction (VCP)"),
+    ("FUNDAMENTAL",    "Fundamentals"),
+    ("CRYPTO",         "Crypto"),
+    ("MARKET_REGIME",  "Market Regime"),
+    ("ENTRY",          "Entry"),
+    ("EARNINGS",       "Earnings"),
+]
+
+
+def _build_vcp_analysis(ticker: str, exchange_key: str, asset_type: str,
+                        org_id: int, db) -> dict:
+    """
+    Recompute the Volatility Contraction Pattern for `ticker` from locally-stored
+    price_bars (NO network) using the org's RuleEngine, so thresholds/enabled
+    rules match exactly what the screener uses for this organisation.
+
+    Returns the detected contraction legs (with dates + depths), pivot/stop,
+    base length, volume dry-up, the price series for the chart, and the VCP
+    rule pass/fail — everything the modal needs to draw + explain the pattern.
+    Degrades to {"available": False, "reason": ...} when there isn't enough
+    history to run the detector.
+    """
+    from app.models.market import PriceBar
+    from app.models.account import Organization
+    from app.screener.rules import RuleEngine
+    from app.screener.vcp import detect_vcp
+    import pandas as _pd
+
+    rows = (db.query(PriceBar.date, PriceBar.open, PriceBar.high, PriceBar.low,
+                     PriceBar.close, PriceBar.volume, PriceBar.vol_ratio,
+                     PriceBar.avg_vol_50)
+            .filter(PriceBar.ticker == ticker)
+            .order_by(PriceBar.date.asc())
+            .limit(450).all())
+    if len(rows) < 60:
+        return {"available": False,
+                "reason": f"Only {len(rows)} days of price history stored — the VCP "
+                          f"detector needs at least 60. It will populate as daily data accrues."}
+
+    df = _pd.DataFrame([{
+        "date": r[0], "open": float(r[1]) if r[1] is not None else None,
+        "high": float(r[2]) if r[2] is not None else None,
+        "low":  float(r[3]) if r[3] is not None else None,
+        "close": float(r[4]) if r[4] is not None else None,
+        "volume": float(r[5]) if r[5] is not None else 0.0,
+        "vol_ratio": float(r[6]) if r[6] is not None else None,
+    } for r in rows])
+    avg_vol_50 = None
+    if rows[-1][7] is not None:
+        try:
+            avg_vol_50 = float(rows[-1][7])
+        except Exception:
+            avg_vol_50 = None
+
+    org = db.query(Organization).get(org_id) if org_id else None
+    tier = org.tier.value if (org and org.tier) else "BRONZE"
+    engine = RuleEngine(organization_id=org_id, tier=tier,
+                        asset_type=(asset_type or "EQUITY"))
+
+    vcp, vcp_rules = detect_vcp(ticker, df, engine, avg_vol_50)
+
+    # Chart series — last ~252 sessions is plenty to frame the base.
+    series = [{"date": str(r[0]), "close": float(r[4])}
+              for r in rows[-252:] if r[4] is not None]
+
+    rules = []
+    for rid, rr in vcp_rules.items():
+        rules.append({
+            "rule_id": rid,
+            "passed": bool(getattr(rr, "passed", False)),
+            "message": getattr(rr, "message", None),
+        })
+
+    return {
+        "available": True,
+        "detected": bool(vcp.detected),
+        "pivot": vcp.pivot_price,
+        "stop": vcp.stop_price,
+        "contraction_count": vcp.contraction_count,
+        "base_weeks": vcp.base_weeks,
+        "volume_dried_up": bool(vcp.volume_dried_up),
+        "final_contraction_pct": vcp.final_contraction_pct,
+        "contractions": (vcp.detail or {}).get("contractions", []),
+        "series": series,
+        "rules": rules,
+        "min_contractions": int(engine.threshold("vcp_min_contractions") or 3),
+    }
+
+
+def _build_rule_breakdown(ticker: str, org_id: int, db) -> dict:
+    """
+    Build the Minervini rule scorecard for `ticker` from the rule_results the
+    screener already stored on the org's Watchlist (or Signal) row — i.e. the
+    exact pass/fail decided under THIS organisation's rule config — joined with
+    RuleConfig metadata (label, plain-English description, Minervini reference,
+    threshold) so each tick can be explained, grouped by category.
+    """
+    from app.models.signal import Watchlist, Signal
+    from app.models.config import RuleConfig
+
+    # Prefer the watchlist row's results; fall back to the latest signal's.
+    src = "watchlist"
+    rr = {}
+    wl = (db.query(Watchlist)
+          .filter(Watchlist.organization_id == org_id, Watchlist.ticker == ticker)
+          .first())
+    if wl and wl.rule_results:
+        rr = wl.rule_results
+    else:
+        sig = (db.query(Signal)
+               .filter(Signal.organization_id == org_id, Signal.ticker == ticker)
+               .order_by(Signal.id.desc()).first())
+        if sig and sig.rule_results:
+            rr = sig.rule_results
+            src = "signal"
+
+    if not rr:
+        return {"available": False,
+                "reason": "No screener evaluation stored yet for this ticker under your "
+                          "organisation. It populates after the stock is screened."}
+
+    # RuleConfig metadata: org-specific first, global as fallback per rule_id.
+    meta = {}
+    for r in db.query(RuleConfig).filter(RuleConfig.organization_id == org_id).all():
+        meta[r.rule_id] = r
+    for r in db.query(RuleConfig).filter(RuleConfig.organization_id == None).all():
+        meta.setdefault(r.rule_id, r)
+
+    # Reuse existing enrichment for the human-readable actual-vs-threshold detail.
+    try:
+        enriched = _enrich_rule_results(ticker, rr, db)
+        detail_map = {e["rule_id"]: e.get("detail") for e in enriched}
+    except Exception:
+        detail_map = {}
+
+    groups_map: dict = {}
+    passed_total = 0
+    rule_total = 0
+    for rid, robj in rr.items():
+        passed = robj.get("passed", False) if isinstance(robj, dict) else bool(robj)
+        rule_total += 1
+        if passed:
+            passed_total += 1
+        m = meta.get(rid)
+        cat = m.category.value if (m and m.category) else "OTHER"
+        label = m.label if m else rid.replace("_", " ").title()
+        desc = (m.description if m else None) or None
+        ref = (m.minervini_ref if m else None) or None
+        thr = None
+        if m is not None and m.threshold is not None:
+            tl = m.threshold_label or "Threshold"
+            thr = f"{tl}: {float(m.threshold):g}"
+        detail = detail_map.get(rid)
+        if not detail and isinstance(robj, dict):
+            detail = robj.get("message") or (str(robj.get("value")) if robj.get("value") is not None else None)
+        groups_map.setdefault(cat, []).append({
+            "rule_id": rid, "label": label, "passed": passed,
+            "detail": detail, "description": desc, "minervini_ref": ref,
+            "threshold": thr,
+        })
+
+    # Order groups by the curated category order, appending any extras.
+    ordered = []
+    seen = set()
+    for key, disp in _SS_RULE_CATEGORY_ORDER:
+        if key in groups_map:
+            items = groups_map[key]
+            ordered.append({
+                "category": key, "label": disp, "items": items,
+                "passed": sum(1 for i in items if i["passed"]), "total": len(items),
+            })
+            seen.add(key)
+    for key, items in groups_map.items():
+        if key in seen:
+            continue
+        ordered.append({
+            "category": key, "label": key.replace("_", " ").title(), "items": items,
+            "passed": sum(1 for i in items if i["passed"]), "total": len(items),
+        })
+
+    return {"available": True, "source": src, "groups": ordered,
+            "passed": passed_total, "total": rule_total}
+
+
 @app.get("/signals", response_class=HTMLResponse)
 async def signals(request: Request, db: Session = Depends(get_db),
                   exchange: str = Query("ALL"), tier: str = Query(None)):
@@ -3393,6 +3580,19 @@ async def stock_story(request: Request, ticker: str, db: Session = Depends(get_d
             "ma_200": float(latest[6]) if latest and latest[6] is not None else None,
             "rs_rating": float(latest[7]) if latest and latest[7] is not None else None,
         }
+
+        # ── VCP pattern analysis (recomputed locally) + org-config rule scorecard ─
+        org_id = request.session.get("organization_id")
+        try:
+            payload["vcp"] = _build_vcp_analysis(ticker, exch, atype, org_id, db)
+        except Exception as _vex:
+            logger.warning(f"VCP analysis failed for {ticker}: {_vex}")
+            payload["vcp"] = {"available": False, "reason": "VCP analysis unavailable."}
+        try:
+            payload["rules"] = _build_rule_breakdown(ticker, org_id, db)
+        except Exception as _rex:
+            logger.warning(f"Rule breakdown failed for {ticker}: {_rex}")
+            payload["rules"] = {"available": False, "reason": "Rule breakdown unavailable."}
 
         return JSONResponse(payload)
     except Exception as exc:
