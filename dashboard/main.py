@@ -19,6 +19,172 @@ app = FastAPI(title="AstraTrade", docs_url=None, redoc_url=None)
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("APP_SECRET_KEY", "changeme-secret"))
 
 # ---------------------------------------------------------------------------
+# User Activity Logging — records who used which feature (access + changes),
+# with parameters and source IP, into audit_logs. Surfaced in the Super Admin
+# User Activity Console (/superadmin/activity) with a per-user filter.
+# ---------------------------------------------------------------------------
+from urllib.parse import parse_qs as _parse_qs
+
+# Ordered longest-prefix-first so the most specific feature wins.
+_FEATURE_MAP = [
+    ("/superadmin/activity",      "User Activity Console"),
+    ("/superadmin/organizations", "Organisations"),
+    ("/superadmin/operations",    "Central Operations"),
+    ("/superadmin/exchanges",     "Exchanges"),
+    ("/superadmin/rules",         "Global Rules"),
+    ("/superadmin/users",         "User Management"),
+    ("/superadmin/data",          "Market Data"),
+    ("/superadmin/mcp",           "MCP Credentials"),
+    ("/superadmin",               "Super Admin"),
+    ("/admin/data-log",           "Data Log"),
+    ("/admin/whatsapp",           "WhatsApp"),
+    ("/admin/config",             "Org Config"),
+    ("/admin/health",             "Health & Ops"),
+    ("/admin/rules",              "Rules"),
+    ("/admin/audit",              "Audit Log"),
+    ("/admin/tasks",              "Task Log"),
+    ("/admin/backtest",           "Backtest"),
+    ("/admin",                    "Admin"),
+    ("/trader/watchlist",         "Watchlist Terminal"),
+    ("/trader",                   "Trader Terminal"),
+    ("/positions",                "Positions"),
+    ("/signals",                  "Signals"),
+    ("/watchlist",                "Watchlist"),
+    ("/action",                   "Quick Action"),
+    ("/",                         "Dashboard Home"),
+]
+
+# Never log these (auth/secret flows, static assets, high-frequency polling/JSON).
+_ACTIVITY_SKIP_PREFIXES = (
+    "/static", "/favicon", "/login", "/logout", "/forgot-password",
+    "/reset-password", "/request-otp", "/verify-otp", "/webhook", "/api/", "/healthz",
+)
+_ACTIVITY_SKIP_SUBSTR = (
+    "/poll", "/data", "/prices", "/exit-checks", "/ping-worker", "/heartbeat",
+)
+# Parameters whose values must never be stored.
+_SENSITIVE_PARAM_KEYS = (
+    "password", "passwd", "secret", "client_secret", "api_key", "apikey",
+    "api_secret", "token", "otp", "passcode", "code", "vnc_password",
+    "ibkr_password", "crypto_api_secret",
+)
+
+
+def _activity_feature_for(path: str) -> str:
+    for prefix, name in _FEATURE_MAP:
+        if path == prefix or path.startswith(prefix + "/") or (prefix == "/" and path == "/"):
+            return name
+    return "Other"
+
+
+def _activity_should_skip(path: str) -> bool:
+    if any(path.startswith(p) for p in _ACTIVITY_SKIP_PREFIXES):
+        return True
+    if any(s in path for s in _ACTIVITY_SKIP_SUBSTR):
+        return True
+    return False
+
+
+def _redact_params(params: dict) -> dict:
+    out = {}
+    for k, v in params.items():
+        lk = str(k).lower()
+        if any(s in lk for s in _SENSITIVE_PARAM_KEYS):
+            out[k] = "***redacted***"
+        else:
+            val = v[0] if isinstance(v, list) and len(v) == 1 else v
+            sval = str(val)
+            out[k] = sval if len(sval) <= 300 else sval[:300] + "…"
+    return out
+
+
+@app.middleware("http")
+async def activity_logger(request: Request, call_next):
+    method = request.method
+    path = request.url.path
+    capture = not _activity_should_skip(path)
+
+    # Safely read & replay urlencoded form bodies so route handlers still get them.
+    # Resetting request._receive is the canonical BaseHTTPMiddleware body pattern.
+    form_params = {}
+    if capture and method in ("POST", "PUT", "PATCH", "DELETE"):
+        ctype = request.headers.get("content-type", "")
+        if "application/x-www-form-urlencoded" in ctype:
+            try:
+                clen = int(request.headers.get("content-length") or 0)
+            except ValueError:
+                clen = 0
+            if 0 < clen <= 20000:
+                try:
+                    body = await request.body()
+
+                    async def _replay():
+                        return {"type": "http.request", "body": body, "more_body": False}
+
+                    request._receive = _replay
+                    form_params = {k: v for k, v in _parse_qs(body.decode("utf-8", "ignore")).items()}
+                except Exception:
+                    form_params = {}
+
+    response = await call_next(request)
+
+    if capture:
+        try:
+            _record_activity(request, response, method, path, form_params)
+        except Exception as e:
+            logger.debug(f"activity_logger: record failed: {e}")
+    return response
+
+
+def _record_activity(request: Request, response, method: str, path: str, form_params: dict):
+    sess = request.session
+    if not sess.get("authenticated"):
+        return  # only log authenticated users
+
+    from app.database import SessionLocal
+    from app.models.audit import AuditLog, AuditAction
+
+    # Source IP — honour reverse-proxy headers (Cloudflare / X-Forwarded-For).
+    ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+          or (request.client.host if request.client else None))
+
+    is_change = method in ("POST", "PUT", "PATCH", "DELETE")
+    feature = _activity_feature_for(path)
+    params = {}
+    if request.query_params:
+        params.update(_redact_params(dict(request.query_params.multi_items())
+                                     if hasattr(request.query_params, "multi_items")
+                                     else dict(request.query_params)))
+    if form_params:
+        params.update(_redact_params(form_params))
+
+    status = getattr(response, "status_code", None)
+    param_summary = ", ".join(f"{k}={v}" for k, v in list(params.items())[:8])
+    verb = method
+    msg = f"{verb} {path}" + (f" — {param_summary}" if param_summary else "")
+
+    db = SessionLocal()
+    try:
+        db.add(AuditLog(
+            action=AuditAction.FEATURE_ACTION if is_change else AuditAction.FEATURE_ACCESS,
+            organization_id=sess.get("organization_id"),
+            user_id=sess.get("user_id"),
+            actor=sess.get("email", "user"),
+            feature=feature,
+            http_method=method,
+            ip_address=ip,
+            message=msg[:1000],
+            detail={"path": path, "method": method, "params": params, "status": status},
+        ))
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.debug(f"_record_activity write failed: {e}")
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
 # Mobile REST API (JWT-authenticated, consumed by React Native app)
 # ---------------------------------------------------------------------------
 from app.api.mobile import router as mobile_router
@@ -7590,6 +7756,8 @@ async def superadmin_activity(
     request: Request,
     org_id: str = None,
     action: str = None,
+    user_id: str = None,
+    feature: str = None,
     search: str = None,
     db: Session = Depends(get_db)
 ):
@@ -7600,15 +7768,22 @@ async def superadmin_activity(
 
     from app.models.audit import AuditLog, AuditAction
     from app.models.account import Organization
+    from app.models.auth import User
     from sqlalchemy import desc, or_
 
     q = db.query(AuditLog).order_by(desc(AuditLog.created_at))
 
     if org_id:
         q = q.filter(AuditLog.organization_id == int(org_id))
-    
+
+    if user_id:
+        q = q.filter(AuditLog.user_id == int(user_id))
+
     if action and action != "ALL":
         q = q.filter(AuditLog.action == action)
+
+    if feature and feature != "ALL":
+        q = q.filter(AuditLog.feature == feature)
 
     if search:
         s_term = f"%{search.strip()}%"
@@ -7620,10 +7795,30 @@ async def superadmin_activity(
             )
         )
 
-    logs = q.limit(200).all()
+    logs = q.limit(300).all()
 
     organizations = db.query(Organization).order_by(Organization.name).all()
     actions = sorted([a.value for a in AuditAction])
+
+    # Users for the filter dropdown (id, email, org name)
+    users = (
+        db.query(User, Organization.name)
+        .outerjoin(Organization, User.organization_id == Organization.id)
+        .order_by(User.email)
+        .all()
+    )
+    user_options = [
+        {"id": u.id, "email": u.email, "org_name": oname or "—"}
+        for (u, oname) in users
+    ]
+    # Distinct feature labels seen in the log, for the feature dropdown
+    feature_rows = (
+        db.query(AuditLog.feature)
+        .filter(AuditLog.feature.isnot(None))
+        .distinct()
+        .all()
+    )
+    features = sorted({r[0] for r in feature_rows if r[0]})
 
     display_tz = _get_display_tz(None, db)
     formatted_logs = []
@@ -7633,6 +7828,9 @@ async def superadmin_activity(
             "time": _fmt_dt(str(l.created_at), display_tz),
             "action": str(l.action).replace("AuditAction.", ""),
             "actor": l.actor,
+            "feature": l.feature or "—",
+            "method": l.http_method or "—",
+            "ip": l.ip_address or "—",
             "ticker": l.ticker or "—",
             "message": l.message or "",
             "org_name": l.organization.name if l.organization else "System",
@@ -7645,8 +7843,12 @@ async def superadmin_activity(
         "logs": formatted_logs,
         "organizations": organizations,
         "actions": actions,
+        "user_options": user_options,
+        "features": features,
         "selected_org_id": org_id,
         "selected_action": action,
+        "selected_user_id": user_id,
+        "selected_feature": feature,
         "search": search,
     })
     return templates.TemplateResponse("superadmin/activity.html", ctx)

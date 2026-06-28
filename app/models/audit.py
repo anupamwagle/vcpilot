@@ -41,6 +41,10 @@ class AuditAction(str, enum.Enum):
     AGENT_COMMAND       = "AGENT_COMMAND"
     MANUAL_OVERRIDE     = "MANUAL_OVERRIDE"
 
+    # User activity tracking (captured by the dashboard middleware)
+    FEATURE_ACCESS      = "FEATURE_ACCESS"   # User opened a feature/page (GET)
+    FEATURE_ACTION      = "FEATURE_ACTION"   # User submitted a change (POST/PUT/PATCH/DELETE)
+
     # Task execution tracking
     TASK_RUN            = "TASK_RUN"     # Periodic task fired + summary
     TASK_ERROR          = "TASK_ERROR"   # Error inside a task
@@ -61,6 +65,8 @@ class AuditLog(Base):
     entity_type     = Column(String(64), nullable=True)       # e.g. "RuleConfig", "Position"
     entity_id       = Column(String(64), nullable=True)       # e.g. rule_id or position id
     ticker          = Column(String(16), nullable=True, index=True)
+    feature         = Column(String(64), nullable=True, index=True)  # Friendly feature label (e.g. "Org Config")
+    http_method     = Column(String(8),  nullable=True)              # GET / POST / ... for activity rows
 
     # Relationships
     organization    = relationship("Organization")

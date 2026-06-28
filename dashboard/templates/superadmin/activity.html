@@ -7,6 +7,16 @@
 <!-- Filters -->
 <div class="card p-4 mb-6">
   <form method="get" action="/superadmin/activity" class="flex flex-wrap items-end gap-3">
+    <div class="flex-1 min-w-[180px]">
+      <label class="field-label mb-1.5">User</label>
+      <select name="user_id" class="input w-full text-xs">
+        <option value="">All Users</option>
+        {% for u in user_options %}
+          <option value="{{ u.id }}" {% if selected_user_id|string == u.id|string %}selected{% endif %}>{{ u.email }} · {{ u.org_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
     <div class="flex-1 min-w-[150px]">
       <label class="field-label mb-1.5">Organisation</label>
       <select name="org_id" class="input w-full text-xs">
@@ -16,7 +26,17 @@
         {% endfor %}
       </select>
     </div>
-    
+
+    <div class="flex-1 min-w-[150px]">
+      <label class="field-label mb-1.5">Feature</label>
+      <select name="feature" class="input w-full text-xs">
+        <option value="ALL">All Features</option>
+        {% for f in features %}
+          <option value="{{ f }}" {% if f == selected_feature %}selected{% endif %}>{{ f }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
     <div class="flex-1 min-w-[150px]">
       <label class="field-label mb-1.5">Action</label>
       <select name="action" class="input w-full text-xs">
@@ -51,32 +71,32 @@
       <thead>
         <tr style="background:var(--surface-alt);border-bottom:1px solid var(--border)">
           <th class="p-3 text-xs font-semibold" style="color:var(--text-muted);width:9rem">Time</th>
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted);width:10rem">User / Actor</th>
           <th class="p-3 text-xs font-semibold" style="color:var(--text-muted);width:9rem">Organisation</th>
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted);width:9rem">Feature</th>
           <th class="p-3 text-xs font-semibold" style="color:var(--text-muted);width:8rem">Action</th>
-          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted);width:10rem">Actor</th>
-          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted);width:5rem">Ticker</th>
           <th class="p-3 text-xs font-semibold" style="color:var(--text-muted)">Message</th>
-          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted);width:5rem">Before</th>
-          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted);width:5rem">After</th>
+          <th class="p-3 text-xs font-semibold" style="color:var(--text-muted);width:8rem">IP</th>
         </tr>
       </thead>
       <tbody>
         {% for log in logs %}
         <tr class="tbl-row border-b last:border-0" style="border-color:var(--border)">
           <td class="p-3 text-xs font-mono" style="color:var(--text-subtle)">{{ log.time }}</td>
+          <td class="p-3 text-xs font-mono" style="color:var(--text-muted)" title="{{ log.actor }}">{{ log.actor }}</td>
           <td class="p-3 text-xs font-semibold">
             <span class="badge-xs" style="background:var(--surface-alt);color:var(--text)" title="{{ log.org_name }}">
               {{ log.org_name }}
             </span>
           </td>
+          <td class="p-3 text-xs" style="color:var(--text)">{{ log.feature }}</td>
           <td class="p-3 text-xs">
             <span class="tag-admin" style="font-size:.7rem;text-transform:uppercase">{{ log.action }}</span>
           </td>
-          <td class="p-3 text-xs font-mono" style="color:var(--text-muted)" title="{{ log.actor }}">{{ log.actor }}</td>
-          <td class="p-3 text-xs font-mono">{{ log.ticker }}</td>
-          <td class="p-3 text-xs" style="color:var(--text-muted);max-width:25rem;word-wrap:break-word">{{ log.message }}</td>
-          <td class="p-3 text-xs font-mono" style="color:var(--text-subtle)">{{ log.before }}</td>
-          <td class="p-3 text-xs font-mono" style="color:{% if log.after not in ('—','') %}var(--pos){% else %}var(--text-subtle){% endif %}">{{ log.after }}</td>
+          <td class="p-3 text-xs" style="color:var(--text-muted);max-width:28rem;word-wrap:break-word">
+            {% if log.method not in ('—','GET','') %}<span class="font-mono" style="color:var(--text-subtle)">[{{ log.method }}]</span> {% endif %}{{ log.message }}
+          </td>
+          <td class="p-3 text-xs font-mono" style="color:var(--text-subtle)">{{ log.ip }}</td>
         </tr>
         {% endfor %}
       </tbody>

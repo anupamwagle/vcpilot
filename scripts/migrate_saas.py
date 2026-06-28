@@ -1164,6 +1164,36 @@ def migrate():
             conn.commit()
             logger.info("mcp_base_url seeded.")
 
+    # ── Migration 008 — user activity tracking columns on audit_logs ──────────
+    logger.info("Running migration 008 — user activity tracking columns...")
+    with engine.connect() as conn:
+        def _col_exists_m8(tbl, col):
+            return conn.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name=:t AND column_name=:c"
+            ), {"t": tbl, "c": col}).fetchone() is not None
+
+        def _safe_m8(stmt):
+            try:
+                conn.execute(text(stmt))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                logger.debug(f"Migration 008 stmt skipped: {str(e)[:120]}")
+
+        for col, defn in [
+            ("feature",     "VARCHAR(64)"),
+            ("http_method", "VARCHAR(8)"),
+            ("ip_address",  "VARCHAR(45)"),   # belt-and-braces: model has it but older DBs may lack it
+        ]:
+            if not _col_exists_m8("audit_logs", col):
+                logger.info(f"Adding audit_logs.{col}...")
+                _safe_m8(f"ALTER TABLE audit_logs ADD COLUMN {col} {defn}")
+
+        _safe_m8("CREATE INDEX IF NOT EXISTS ix_audit_logs_feature ON audit_logs (feature)")
+        _safe_m8("CREATE INDEX IF NOT EXISTS ix_audit_logs_user_id ON audit_logs (user_id)")
+        logger.info("Migration 008 complete.")
+
     logger.info("SaaS/Multi-tenant migration and seeding complete!")
 
 
