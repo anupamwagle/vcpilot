@@ -87,6 +87,24 @@ class IBKRBroker:
             self.last_error = f"in {remaining}s connection cooldown after a recent failure"
             return False
 
+        # Celery prefork workers inherit a (often closed/stale) asyncio event
+        # loop from the parent process. ib_insync drives the API handshake on
+        # that loop, so a broken loop means the inbound bytes are never pumped
+        # and connect() hangs until TimeoutError — with nothing logged on the
+        # gateway side. When we're NOT already inside a running loop (i.e. the
+        # Celery worker, not uvicorn), install a fresh loop for this connection.
+        import asyncio
+        try:
+            asyncio.get_running_loop()  # raises if no loop is running (worker case)
+        except RuntimeError:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_closed():
+                    raise RuntimeError
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
         try:
             from ib_insync import util
             util.patchAsyncio()
