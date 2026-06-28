@@ -88,34 +88,54 @@ class IBKRBroker:
             return False
 
         try:
+            from ib_insync import util
+            util.patchAsyncio()
+        except Exception:
+            pass
+
+        # Try the configured clientId first; on failure (commonly a clientId
+        # collision when multiple containers all use id=1, which the gateway
+        # answers with silence → TimeoutError) retry with random high ids.
+        import random
+        candidate_ids = [self.client_id] + [random.randint(2000, 9999) for _ in range(2)]
+        last_exc = None
+        for cid in candidate_ids:
             try:
-                from ib_insync import util
-                util.patchAsyncio()
-            except Exception:
-                pass
-            self._ib = IB()
-            self._ib.connect(
-                host=self.host,
-                port=self.port,
-                clientId=self.client_id,
-                timeout=20,
-                readonly=False,
-            )
-            self._connected = True
-            self.last_error = ""
-            logger.info(
-                f"IBKR connected: host={self.host} port={self.port} "
-                f"clientId={self.client_id} paper={self.paper_mode}"
-            )
-            return True
-        except Exception as e:
-            IBKRBroker._last_fail_times[key] = time.time()
-            self.last_error = (
-                f"{type(e).__name__}: {e} "
-                f"(host={self.host} port={self.port} clientId={self.client_id})"
-            )
-            logger.error(f"IBKR connection failed: {self.last_error!r}")
-            return False
+                self._ib = IB()
+                self._ib.connect(
+                    host=self.host,
+                    port=self.port,
+                    clientId=cid,
+                    timeout=15,
+                    readonly=False,
+                )
+                self._connected = True
+                self.client_id = cid
+                self.last_error = ""
+                logger.info(
+                    f"IBKR connected: host={self.host} port={self.port} "
+                    f"clientId={cid} paper={self.paper_mode}"
+                )
+                return True
+            except Exception as e:
+                last_exc = e
+                logger.warning(
+                    f"IBKR connect attempt failed (clientId={cid}): {type(e).__name__}: {e}"
+                )
+                try:
+                    self._ib.disconnect()
+                except Exception:
+                    pass
+
+        IBKRBroker._last_fail_times[key] = time.time()
+        self.last_error = (
+            f"{type(last_exc).__name__}: {last_exc} "
+            f"(host={self.host} port={self.port}, tried clientIds {candidate_ids}). "
+            f"If the gateway console shows NO incoming connection, this is a network/"
+            f"trusted-IP block, not a clientId clash."
+        )
+        logger.error(f"IBKR connection failed after retries: {self.last_error!r}")
+        return False
 
     def disconnect(self):
         if self._ib and self._connected:

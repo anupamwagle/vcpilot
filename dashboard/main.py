@@ -5223,7 +5223,7 @@ async def admin_tasks(request: Request, db: Session = Depends(get_db)):
     # Super admins allowed in standard views under active organization context
     org_id = request.session.get("organization_id")
 
-    from app.models.audit import AuditLog
+    from app.models.audit import AuditLog, AuditAction
     from app.models.market import Stock, PriceBar
     from app.models.signal import Signal, Watchlist, WatchlistStatus
     from sqlalchemy import func
@@ -5233,9 +5233,12 @@ async def admin_tasks(request: Request, db: Session = Depends(get_db)):
     # Seed latest 40 rows so the page is not blank on load.
     # Include NULL org rows (global tasks: regime, price refresh, universe, heartbeat)
     # alongside org-scoped rows — same pattern as the health page _lr() helper.
+    # Exclude user-activity rows (FEATURE_ACCESS/FEATURE_ACTION) — those are
+    # surfaced in the Super Admin User Activity Console, not the operational log.
     try:
         logs = db.query(AuditLog).filter(
-            or_(AuditLog.organization_id == org_id, AuditLog.organization_id == None)
+            or_(AuditLog.organization_id == org_id, AuditLog.organization_id == None),
+            AuditLog.action.notin_([AuditAction.FEATURE_ACCESS, AuditAction.FEATURE_ACTION]),
         ).order_by(desc(AuditLog.id)).limit(40).all()
     except Exception:
         logs = []
@@ -5291,7 +5294,7 @@ async def admin_tasks_poll(request: Request, after: int = 0, db: Session = Depen
     org_id = request.session.get("organization_id")
 
     from fastapi.responses import JSONResponse
-    from app.models.audit import AuditLog
+    from app.models.audit import AuditLog, AuditAction
     from app.models.market import Stock, PriceBar
     from app.models.signal import Signal, Watchlist, WatchlistStatus
     from sqlalchemy import func
@@ -5318,7 +5321,8 @@ async def admin_tasks_poll(request: Request, after: int = 0, db: Session = Depen
     try:
         new_logs = db.query(AuditLog).filter(
             AuditLog.id > after,
-            or_(AuditLog.organization_id == org_id, AuditLog.organization_id == None)
+            or_(AuditLog.organization_id == org_id, AuditLog.organization_id == None),
+            AuditLog.action.notin_([AuditAction.FEATURE_ACCESS, AuditAction.FEATURE_ACTION]),
         ).order_by(desc(AuditLog.id)).limit(50).all()
     except Exception:
         new_logs = []
@@ -5886,6 +5890,10 @@ async def admin_audit(request: Request, db: Session = Depends(get_db)):
     exchange_f = request.query_params.get("exchange", "ALL").upper()
 
     q = db.query(AuditLog).filter(AuditLog.organization_id == org_id).order_by(desc(AuditLog.created_at))
+    # User-activity rows live in the Super Admin Activity Console, not the org
+    # operational audit — hide them unless the admin explicitly selects them.
+    if action_f == "ALL":
+        q = q.filter(AuditLog.action.notin_([AuditAction.FEATURE_ACCESS, AuditAction.FEATURE_ACTION]))
     if action_f != "ALL":
         q = q.filter(AuditLog.action == action_f)
     if ticker_f:
@@ -6716,7 +6724,7 @@ async def superadmin_org_detail(org_id: int, request: Request, db: Session = Dep
 
     from app.models.account import Organization, Account
     from app.models.auth import User
-    from app.models.audit import AuditLog
+    from app.models.audit import AuditLog, AuditAction
     from app.models.config import SystemConfig
 
     org = db.query(Organization).filter(Organization.id == org_id).first()
@@ -6727,7 +6735,11 @@ async def superadmin_org_detail(org_id: int, request: Request, db: Session = Dep
     users = db.query(User).filter(User.organization_id == org_id).all()
     accounts = db.query(Account).filter(Account.organization_id == org_id).all()
     try:
-        logs = db.query(AuditLog).filter(AuditLog.organization_id == org_id).order_by(desc(AuditLog.created_at)).limit(50).all()
+        # Operational trail only — user-activity rows live in the Activity Console.
+        logs = db.query(AuditLog).filter(
+            AuditLog.organization_id == org_id,
+            AuditLog.action.notin_([AuditAction.FEATURE_ACCESS, AuditAction.FEATURE_ACTION]),
+        ).order_by(desc(AuditLog.created_at)).limit(50).all()
     except Exception:
         logs = []
 
