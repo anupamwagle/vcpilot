@@ -277,6 +277,7 @@ class IBKRBroker:
                     "qty":           p.position,
                     "avg_cost":      p.avgCost,
                     "market_value":  getattr(p, "marketValue", None),
+                    "account":       getattr(p, "account", "") or "",
                 })
             return result
         except Exception as e:

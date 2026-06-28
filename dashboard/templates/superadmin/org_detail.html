@@ -24,6 +24,15 @@
 <div class="alert-danger mb-4">
   Cannot deactivate the organisation you are currently viewing as. Switch to a different org first.
 </div>
+{% elif msg == 'sync_queued' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  IBKR position sync queued. Results appear in the Organisation Audit Trail below — refresh in a few seconds.
+</div>
+{% elif msg == 'sync_failed' %}
+<div class="alert-danger mb-4">
+  Could not queue the position sync (worker/Redis may be offline). Try again once the worker is online.
+</div>
 {% endif %}
 
 <!-- Overview Cards -->
@@ -177,6 +186,15 @@
           </svg>
           Open Gateway Login Screen
         </a>
+        {% endif %}
+        {% if ibkr_connected %}
+        <form method="post" action="/superadmin/organizations/{{ organization.id }}/sync-positions" style="display:inline">
+          <button type="submit" class="btn-admin text-xs"
+            style="display:inline-flex;align-items:center;gap:.35rem;background:var(--a-accent);color:#fff"
+            onclick="return confirm('Reconcile this org\'s open positions against live IBKR holdings?\n\n• IBKR holdings missing from the DB will be IMPORTED\n• DB positions missing from IBKR will be CLOSED as MANUAL\n• Quantity drifts will be reconciled\n\nEquities only — crypto is untouched.')">
+            🔄 Sync Positions
+          </button>
+        </form>
         {% endif %}
         <button onclick="location.reload()" class="btn-admin text-xs" style="background:var(--surface-alt)">↻ Refresh</button>
       </div>

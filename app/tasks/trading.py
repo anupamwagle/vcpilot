@@ -1577,7 +1577,193 @@ def promote_watchlist_item_task(self, item_id: int, organization_id: int, user_e
             logger.exception(f"Failed to revert watchlist item {item_id} to WATCHING after promotion error: {revert_exc}")
 
 
+def _norm_symbol(ticker: str) -> str:
+    """Normalise a ticker to a bare symbol for cross-source matching.
+    'BHP.AX' -> 'BHP', 'AAPL' -> 'AAPL'. Crypto suffixes stripped too for safety."""
+    t = (ticker or "").upper()
+    for suffix in (".AX", "-USD", "-AUD", "-USDT", "-BTC", "-ETH"):
+        if t.endswith(suffix):
+            t = t[: -len(suffix)]
+            break
+    return t
+
+
 @app.task(name="app.tasks.trading.sync_ibkr_positions_task", bind=True)
-def sync_ibkr_positions_task(self):
-    """Sync position data from IBKR to DB."""
-    logger.debug("Position sync task: placeholder — implement IBKR position sync")
+def sync_ibkr_positions_task(self, organization_id: int | None = None):
+    """
+    Reconcile DB open positions against LIVE IBKR positions.
+
+    Scope: equities only (ASX / NYSE / NASDAQ). Crypto positions are NEVER
+    touched here — IBKR doesn't hold them, so they'd look like orphans and get
+    wrongly closed. Crypto is reconciled separately via ccxt.
+
+    Reconciliation:
+      • IBKR holding not in DB   → import as OPEN Position (avg cost from IBKR,
+                                    stop defaulted to -10% and flagged for review)
+      • DB position not in IBKR  → auto-close as ExitReason.MANUAL (Trade row,
+                                    per the Position→Trade pattern in CLAUDE.md #30)
+      • Both present, qty drift  → DB qty reconciled to IBKR qty
+
+    Every action writes an AuditLog row. Multi-tenant: pass organization_id to
+    scope to one org (dashboard button); omit to loop all active orgs (scheduled).
+    """
+    from app.models.account import Organization, Account
+    from app.utils.time_helper import get_current_date
+
+    with get_db() as db:
+        if organization_id:
+            orgs = db.query(Organization).filter(Organization.id == organization_id).all()
+        else:
+            orgs = db.query(Organization).filter(Organization.is_active == True).all()
+
+        for org in orgs:
+            summary = {"imported": 0, "closed": 0, "updated": 0, "matched": 0}
+            try:
+                # --- Pull live IBKR positions for this org's account ---
+                broker = IBKRBroker(organization_id=org.id)
+                broker.connect()
+                if not broker.is_connected:
+                    db.add(AuditLog(
+                        action=AuditAction.TASK_RUN, organization_id=org.id,
+                        message="IBKR position sync skipped — gateway not connected",
+                    ))
+                    db.commit()
+                    continue
+                org_account = (broker.account or "").strip()
+                ib_positions = broker.get_open_positions()
+                broker.disconnect()
+
+                # Filter to this org's sub-account (when account tagging present)
+                # and drop zero-qty rows IBKR sometimes returns.
+                ib_positions = [
+                    p for p in ib_positions
+                    if float(p.get("qty") or 0) != 0
+                    and (not org_account or not p.get("account") or p.get("account") == org_account)
+                ]
+
+                account = db.query(Account).filter(
+                    Account.organization_id == org.id, Account.is_active == True,
+                ).first()
+
+                # DB open positions — EQUITY ONLY (never touch crypto here)
+                db_positions = [
+                    p for p in db.query(Position).filter(
+                        Position.organization_id == org.id,
+                        Position.status == TradeStatus.OPEN,
+                    ).all()
+                    if (p.asset_type or "EQUITY").upper() != "CRYPTO"
+                    and not (p.exchange_key or "").upper().startswith("CRYPTO")
+                ]
+
+                db_by_sym = {_norm_symbol(p.ticker): p for p in db_positions}
+                ib_by_sym = {_norm_symbol(p["ticker"]): p for p in ib_positions}
+                today = get_current_date()
+
+                # --- IBKR → DB: import new / reconcile qty drift ---
+                for sym, ibp in ib_by_sym.items():
+                    qty = abs(float(ibp.get("qty") or 0))
+                    avg = float(ibp.get("avg_cost") or 0)
+                    currency = (ibp.get("currency") or "AUD").upper()
+                    if sym in db_by_sym:
+                        pos = db_by_sym[sym]
+                        if abs(float(pos.qty or 0) - qty) > 1e-6:
+                            old_qty = float(pos.qty or 0)
+                            pos.qty = qty
+                            summary["updated"] += 1
+                            db.add(AuditLog(
+                                action=AuditAction.POSITION_UPDATED, organization_id=org.id,
+                                ticker=pos.ticker,
+                                message=f"IBKR sync: qty reconciled {old_qty:g} → {qty:g}",
+                                detail={"source": "ibkr_sync", "old_qty": old_qty, "new_qty": qty},
+                            ))
+                        else:
+                            summary["matched"] += 1
+                    else:
+                        exchange_key = "ASX" if currency == "AUD" else ("NYSE" if currency == "USD" else "ASX")
+                        ticker = ibp["ticker"].upper() + (".AX" if exchange_key == "ASX" else "")
+                        entry_price = avg if avg > 0 else 0.0
+                        stop = round(entry_price * 0.90, 4) if entry_price else 0.0
+                        db.add(Position(
+                            ticker=ticker,
+                            exchange_key=exchange_key,
+                            asset_type="EQUITY",
+                            currency=currency,
+                            account_id=account.id if account else 1,
+                            organization_id=org.id,
+                            entry_date=today,
+                            entry_price=entry_price,
+                            qty=qty,
+                            current_price=entry_price,
+                            initial_stop=stop,
+                            current_stop=stop,
+                            target_1=round(entry_price * 1.20, 4) if entry_price else None,
+                            target_2=round(entry_price * 1.40, 4) if entry_price else None,
+                            is_paper=(account.is_paper if account else True),
+                            status=TradeStatus.OPEN,
+                        ))
+                        summary["imported"] += 1
+                        db.add(AuditLog(
+                            action=AuditAction.POSITION_OPENED, organization_id=org.id, ticker=ticker,
+                            message=(f"IBKR sync: imported {qty:g}x{ticker} @ {entry_price:.4f} "
+                                     f"(avg cost from IBKR); stop defaulted to -10% — review"),
+                            detail={"source": "ibkr_sync", "avg_cost": avg, "qty": qty},
+                        ))
+
+                # --- DB → IBKR: orphans auto-close as MANUAL ---
+                for sym, pos in db_by_sym.items():
+                    if sym in ib_by_sym:
+                        continue
+                    entry_price = float(pos.entry_price or 0)
+                    close_price = float(pos.current_price or pos.entry_price or 0)
+                    qty = float(pos.qty or 0)
+                    pnl_aud = (close_price - entry_price) * qty
+                    pnl_pct = (close_price - entry_price) / entry_price * 100 if entry_price else 0
+                    pos.status = TradeStatus.CLOSED
+                    db.add(Trade(
+                        ticker=pos.ticker,
+                        account_id=pos.account_id,
+                        organization_id=org.id,
+                        signal_id=pos.signal_id,
+                        entry_date=pos.entry_date,
+                        exit_date=today,
+                        hold_days=(today - pos.entry_date).days if pos.entry_date else 0,
+                        entry_price=pos.entry_price,
+                        exit_price=close_price,
+                        qty=pos.qty,
+                        gross_pnl_aud=round(pnl_aud, 2),
+                        net_pnl_aud=round(pnl_aud, 2),
+                        pnl_pct=round(pnl_pct / 100, 4),
+                        initial_stop=pos.initial_stop,
+                        exit_reason=ExitReason.MANUAL,
+                        is_paper=pos.is_paper,
+                        cgt_eligible_discount=((today - pos.entry_date).days > 365) if pos.entry_date else False,
+                    ))
+                    summary["closed"] += 1
+                    db.add(AuditLog(
+                        action=AuditAction.POSITION_CLOSED, organization_id=org.id, ticker=pos.ticker,
+                        message=(f"IBKR sync: not found in IBKR — auto-closed as MANUAL @ "
+                                 f"${close_price:.4f} | P&L ${pnl_aud:+.0f}"),
+                        detail={"source": "ibkr_sync", "reason": "orphan_not_in_ibkr"},
+                    ))
+
+                db.add(AuditLog(
+                    action=AuditAction.TASK_RUN, organization_id=org.id,
+                    message=(f"IBKR position sync complete — imported {summary['imported']}, "
+                             f"closed {summary['closed']}, updated {summary['updated']}, "
+                             f"matched {summary['matched']}"),
+                    detail=summary,
+                ))
+                db.commit()
+                logger.info(f"sync_ibkr_positions_task org={org.id}: {summary}")
+            except Exception as e:
+                db.rollback()
+                logger.error(f"sync_ibkr_positions_task failed for org {org.id}: {e}")
+                try:
+                    db.add(AuditLog(
+                        action=AuditAction.TASK_ERROR, organization_id=org.id,
+                        message=f"IBKR position sync error: {e}",
+                    ))
+                    db.commit()
+                except Exception:
+                    db.rollback()
+# end sync_ibkr_positions_task

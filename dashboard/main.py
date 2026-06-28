@@ -6646,6 +6646,43 @@ async def superadmin_org_deactivate(org_id: int, request: Request, db: Session =
     return RedirectResponse(f"/superadmin/organizations?msg=deactivated&name={org.name}", 302)
 
 
+@app.post("/superadmin/organizations/{org_id}/sync-positions")
+async def superadmin_org_sync_positions(org_id: int, request: Request, db: Session = Depends(get_db)):
+    """Queue an IBKR ↔ DB position reconciliation for this org (super admin only)."""
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    if request.session.get("user_role") != "superadmin":
+        return RedirectResponse("/", 302)
+
+    from app.models.account import Organization
+    from app.models.audit import AuditLog, AuditAction
+
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    if not org:
+        return RedirectResponse("/superadmin/organizations?msg=not_found", 302)
+
+    queued = True
+    try:
+        from app.tasks.trading import sync_ibkr_positions_task
+        sync_ibkr_positions_task.delay(organization_id=org_id)
+    except Exception as e:
+        queued = False
+        from loguru import logger
+        logger.error(f"Failed to queue IBKR position sync for org {org_id}: {e}")
+
+    db.add(AuditLog(
+        action=AuditAction.MANUAL_OVERRIDE,
+        actor=request.session.get("email", "superadmin"),
+        user_id=request.session.get("user_id"),
+        organization_id=org_id,
+        message=f"IBKR position sync {'queued' if queued else 'FAILED to queue'} by super admin",
+    ))
+    db.commit()
+    return RedirectResponse(
+        f"/superadmin/organizations/{org_id}?msg={'sync_queued' if queued else 'sync_failed'}", 302
+    )
+
+
 @app.post("/superadmin/organizations/{org_id}/reactivate")
 async def superadmin_org_reactivate(org_id: int, request: Request, db: Session = Depends(get_db)):
     if not _auth(request):
