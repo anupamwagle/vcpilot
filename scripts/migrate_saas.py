@@ -1192,6 +1192,22 @@ def migrate():
 
         _safe_m8("CREATE INDEX IF NOT EXISTS ix_audit_logs_feature ON audit_logs (feature)")
         _safe_m8("CREATE INDEX IF NOT EXISTS ix_audit_logs_user_id ON audit_logs (user_id)")
+
+        # Add the new AuditAction enum VALUES to the Postgres enum type. Adding
+        # members to the Python enum does NOT alter the DB type, so without this
+        # every activity-log INSERT fails with InvalidTextRepresentation.
+        # ALTER TYPE ... ADD VALUE must run in AUTOCOMMIT (cannot be rolled back).
+        try:
+            ac_conn = conn.execution_options(isolation_level="AUTOCOMMIT")
+            for val in ("FEATURE_ACCESS", "FEATURE_ACTION"):
+                try:
+                    ac_conn.execute(text(f"ALTER TYPE auditaction ADD VALUE IF NOT EXISTS '{val}'"))
+                    logger.info(f"Ensured auditaction enum value '{val}'.")
+                except Exception as e:
+                    logger.debug(f"Migration 008 enum add skipped for {val}: {str(e)[:120]}")
+        except Exception as e:
+            logger.debug(f"Migration 008 enum block skipped: {str(e)[:120]}")
+
         logger.info("Migration 008 complete.")
 
     logger.info("SaaS/Multi-tenant migration and seeding complete!")

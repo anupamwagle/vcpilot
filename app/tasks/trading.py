@@ -1623,9 +1623,13 @@ def sync_ibkr_positions_task(self, organization_id: int | None = None):
                 broker = IBKRBroker(organization_id=org.id)
                 broker.connect()
                 if not broker.is_connected:
+                    reason = getattr(broker, "last_error", "") or "gateway not reachable"
                     db.add(AuditLog(
                         action=AuditAction.TASK_RUN, organization_id=org.id,
-                        message="IBKR position sync skipped — gateway not connected",
+                        message=f"IBKR position sync skipped — {reason}",
+                        detail={"source": "ibkr_sync", "reason": reason,
+                                "host": broker.host, "port": broker.port,
+                                "client_id": broker.client_id, "account": broker.account},
                     ))
                     db.commit()
                     continue

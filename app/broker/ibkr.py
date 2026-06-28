@@ -33,6 +33,7 @@ class IBKRBroker:
         self.organization_id = organization_id
         self._ib: Optional[object] = None
         self._connected = False
+        self.last_error: str = ""
         
         # Load credentials dynamically based on organization
         self.host = settings.ibkr_host
@@ -70,7 +71,11 @@ class IBKRBroker:
 
     def connect(self) -> bool:
         if settings.ibkr_simulate or not IB_AVAILABLE:
-            logger.info("IBKR sandbox/simulation mode enabled (either forced or ib_insync unavailable)")
+            self.last_error = (
+                "IBKR_SIMULATE is on" if settings.ibkr_simulate
+                else "ib_insync not installed in this container"
+            )
+            logger.info(f"IBKR sandbox/simulation mode enabled ({self.last_error})")
             return False
 
         # Cooldown check to prevent connection attempt spam when gateway is down
@@ -78,6 +83,8 @@ class IBKRBroker:
         key = (self.host, self.port)
         last_fail = IBKRBroker._last_fail_times.get(key, 0.0)
         if now - last_fail < IBKRBroker._FAIL_COOLDOWN:
+            remaining = int(IBKRBroker._FAIL_COOLDOWN - (now - last_fail))
+            self.last_error = f"in {remaining}s connection cooldown after a recent failure"
             return False
 
         try:
@@ -95,14 +102,19 @@ class IBKRBroker:
                 readonly=False,
             )
             self._connected = True
+            self.last_error = ""
             logger.info(
                 f"IBKR connected: host={self.host} port={self.port} "
-                f"paper={self.paper_mode}"
+                f"clientId={self.client_id} paper={self.paper_mode}"
             )
             return True
         except Exception as e:
             IBKRBroker._last_fail_times[key] = time.time()
-            logger.error(f"IBKR connection failed: {type(e).__name__}: {e!r}")
+            self.last_error = (
+                f"{type(e).__name__}: {e} "
+                f"(host={self.host} port={self.port} clientId={self.client_id})"
+            )
+            logger.error(f"IBKR connection failed: {self.last_error!r}")
             return False
 
     def disconnect(self):
