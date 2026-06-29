@@ -1,4 +1,4 @@
-# VCPilot — Agent Context & Developer Guide
+# AstraTrade — Agent Context & Developer Guide
 
 > Read this file first before touching any code. It captures every architectural decision, current state, and pattern used throughout the project.
 
@@ -6,7 +6,7 @@
 
 ## What This Is
 
-VCPilot is a multi-market automated stock trading system built on **Mark Minervini's SEPA (Specific Entry Point Analysis)** methodology — specifically the Volatility Contraction Pattern (VCP). It supports ASX equities, US equities (NYSE/NASDAQ), and has a crypto trading foundation. Users build custom watchlists by adding instruments from any supported exchange; VCPilot fetches price data on-demand, screens against Minervini rules, generates signals, and executes bracket orders through Interactive Brokers (equities) or ccxt (crypto). It is controlled remotely via WhatsApp.
+AstraTrade is a multi-market automated stock trading system built on **Mark Minervini's SEPA (Specific Entry Point Analysis)** methodology — specifically the Volatility Contraction Pattern (VCP). It supports ASX equities, US equities (NYSE/NASDAQ), and has a crypto trading foundation. Users build custom watchlists by adding instruments from any supported exchange; AstraTrade fetches price data on-demand, screens against Minervini rules, generates signals, and executes bracket orders through Interactive Brokers (equities) or ccxt (crypto). It is controlled remotely via WhatsApp.
 
 **Owner:** admin@astradigital.com.au (Australia — AU-based, not US)  
 **Repo:** github.com/anupamwagle/vcpilot  
@@ -596,7 +596,7 @@ docker compose --profile trading up ibkr -d
 
 ## WhatsApp Setup (WAHA)
 
-1. Open `/admin/whatsapp` on the VCPilot dashboard under the active organization.
+1. Open `/admin/whatsapp` on the AstraTrade dashboard under the active organization.
 2. If the session isn't running, click **Start Session**. This initializes a session named `org_{org_id}` (e.g. `org_1`, `org_2`) scoped to the organization.
 3. Scan the QR code shown on the page using your WhatsApp phone (Linked Devices).
 4. Each organization must configure its own `whatsapp_admin_number` in `/admin/config` (or through the database `SystemConfig` table) in order to send notifications and receive commands.

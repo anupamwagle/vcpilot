@@ -298,7 +298,7 @@
     <p class="font-semibold mb-1" style="color:var(--text-muted)">Claude Desktop config snippet (<code>claude_desktop_config.json</code>)</p>
     <pre class="overflow-x-auto text-xs font-mono" style="color:var(--text-subtle);white-space:pre">{
   "mcpServers": {
-    "vcpilot-{{ organization.name | lower | replace(' ', '-') }}": {
+    "astratrade-{{ organization.name | lower | replace(' ', '-') }}": {
       "transport": {
         "type": "sse",
         "url": "{{ mcp_base_url }}/mcp/sse"
@@ -520,31 +520,4 @@
 <div class="card p-4 mt-6" style="border-color:var(--neg)">
   <p class="text-sm font-bold mb-1" style="color:var(--neg)">⚠ Danger Zone</p>
   <p class="text-xs mb-3" style="color:var(--text-subtle)">
-    Soft-deleting sets the organisation to <strong>inactive</strong>. All data (users, signals, trades, rules) is preserved.
-    Celery tasks stop processing it immediately. Reactivate at any time.
-  </p>
-
-  {% if organization.is_active %}
-  <form method="post" action="/superadmin/organizations/{{ organization.id }}/deactivate"
-        onsubmit="return confirm('Deactivate {{ organization.name }}?\n\nScheduled tasks will stop for this org. Data is preserved and it can be reactivated.')">
-    <button type="submit"
-            style="font-size:.75rem;padding:.375rem .875rem;border-radius:.375rem;font-weight:700;
-                   background:transparent;color:var(--neg);border:1px solid var(--neg);cursor:pointer">
-      🗑 Deactivate Organisation
-    </button>
-  </form>
-  {% else %}
-  <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
-    <p class="text-xs font-bold" style="color:var(--neg)">This organisation is currently inactive.</p>
-    <form method="post" action="/superadmin/organizations/{{ organization.id }}/reactivate">
-      <button type="submit"
-              style="font-size:.75rem;padding:.375rem .875rem;border-radius:.375rem;font-weight:700;
-                     background:transparent;color:var(--pos);border:1px solid var(--pos);cursor:pointer">
-        ↺ Reactivate Organisation
-      </button>
-    </form>
-  </div>
-  {% endif %}
-</div>
-
-{% endblock %}
+    Soft-deleting sets the organisation to <strong>inactive</

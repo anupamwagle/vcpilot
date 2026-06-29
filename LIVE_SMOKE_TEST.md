@@ -1,4 +1,4 @@
-# VCPilot — Live Order Smoke-Test Checklist
+# AstraTrade — Live Order Smoke-Test Checklist
 
 > **Run by you, not the agent.** These steps place real orders. Paper/IBKR-paper and
 > crypto-simulation are no-money; the **LIVE** sections move real money. Do the paper

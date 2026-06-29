@@ -1,5 +1,5 @@
 # =============================================================================
-# VCPilot — Docker Compose (Code mounted from host — restart to pick up changes)
+# AstraTrade — Docker Compose (Code mounted from host — restart to pick up changes)
 # =============================================================================
 
 x-app-env: &app-env
