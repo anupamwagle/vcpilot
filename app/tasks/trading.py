@@ -1634,16 +1634,36 @@ def sync_ibkr_positions_task(self, organization_id: int | None = None):
                     db.commit()
                     continue
                 org_account = (broker.account or "").strip()
-                ib_positions = broker.get_open_positions()
+                gateway_accounts = list(getattr(broker._ib, "managedAccounts", lambda: [])() or []) \
+                    if getattr(broker, "_ib", None) else []
+                raw_positions = broker.get_open_positions()
                 broker.disconnect()
 
                 # Filter to this org's sub-account (when account tagging present)
                 # and drop zero-qty rows IBKR sometimes returns.
                 ib_positions = [
-                    p for p in ib_positions
+                    p for p in raw_positions
                     if float(p.get("qty") or 0) != 0
                     and (not org_account or not p.get("account") or p.get("account") == org_account)
                 ]
+
+                # SAFETY: if the org's configured ibkr_account doesn't match the
+                # account the gateway is actually logged into, the filter above
+                # can wipe out every IBKR position — which would then auto-close
+                # all DB equity positions as orphans. Detect that and skip the
+                # destructive orphan-close step (still allow imports of nothing).
+                account_mismatch = bool(
+                    org_account and gateway_accounts and org_account not in gateway_accounts
+                )
+                if account_mismatch:
+                    db.add(AuditLog(
+                        action=AuditAction.TASK_RUN, organization_id=org.id,
+                        message=(f"IBKR sync: configured account '{org_account}' is not in the "
+                                 f"gateway's logged-in accounts {gateway_accounts} — skipping "
+                                 f"orphan auto-close to avoid mass-closure. Fix ibkr_account in Config."),
+                        detail={"source": "ibkr_sync", "org_account": org_account,
+                                "gateway_accounts": gateway_accounts},
+                    ))
 
                 account = db.query(Account).filter(
                     Account.organization_id == org.id, Account.is_active == True,
@@ -1714,7 +1734,11 @@ def sync_ibkr_positions_task(self, organization_id: int | None = None):
                         ))
 
                 # --- DB → IBKR: orphans auto-close as MANUAL ---
-                for sym, pos in db_by_sym.items():
+                # Guarded: never mass-close when the account is mismatched or the
+                # broker returned no positions at all (likely a config/transient
+                # issue, not a real "everything was sold" event).
+                skip_orphan_close = account_mismatch or not raw_positions
+                for sym, pos in (db_by_sym.items() if not skip_orphan_close else []):
                     if sym in ib_by_sym:
                         continue
                     entry_price = float(pos.entry_price or 0)

@@ -62,7 +62,12 @@ class IBKRBroker:
                     paper_val = cfg("ibkr_paper_mode")
                     if paper_val is not None:
                         self.paper_mode = paper_val.lower() in ("true", "1", "yes")
-                        self.port = 4002 if self.paper_mode else 4001
+                        # gnzsnz/ib-gateway exposes the API via socat on 4004
+                        # (paper) / 4003 (live) — NOT the gateway's internal
+                        # 4002/4001. Use the socat ports so the handshake
+                        # actually reaches the API. (connect() still falls back
+                        # across these if the configured one fails.)
+                        self.port = 4004 if self.paper_mode else 4003
                 finally:
                     db.close()
             except Exception:
@@ -111,46 +116,56 @@ class IBKRBroker:
         except Exception:
             pass
 
-        # Try the configured clientId first; on failure (commonly a clientId
-        # collision when multiple containers all use id=1, which the gateway
-        # answers with silence → TimeoutError) retry with random high ids.
+        # Build the list of ports to try. The gnzsnz/ib-gateway image runs the
+        # gateway bound to 127.0.0.1:4001/4002 inside the container and exposes
+        # it via socat on DIFFERENT ports — 4004 for paper, 4003 for live. A TCP
+        # probe to 4002 can succeed (socat/half-open) while the API handshake
+        # never completes, which presents as a TimeoutError with nothing logged
+        # on the gateway. So if the configured port times out, fall back to the
+        # socat ports automatically.
         import random
-        candidate_ids = [self.client_id] + [random.randint(2000, 9999) for _ in range(2)]
+        socat_alts = [4004, 4003] if self.paper_mode else [4003, 4004]
+        candidate_ports = [self.port] + [p for p in socat_alts if p != self.port]
+        candidate_ids = [self.client_id, random.randint(2000, 9999)]
+
         last_exc = None
-        for cid in candidate_ids:
-            try:
-                self._ib = IB()
-                self._ib.connect(
-                    host=self.host,
-                    port=self.port,
-                    clientId=cid,
-                    timeout=15,
-                    readonly=False,
-                )
-                self._connected = True
-                self.client_id = cid
-                self.last_error = ""
-                logger.info(
-                    f"IBKR connected: host={self.host} port={self.port} "
-                    f"clientId={cid} paper={self.paper_mode}"
-                )
-                return True
-            except Exception as e:
-                last_exc = e
-                logger.warning(
-                    f"IBKR connect attempt failed (clientId={cid}): {type(e).__name__}: {e}"
-                )
+        for port in candidate_ports:
+            for cid in candidate_ids:
                 try:
-                    self._ib.disconnect()
-                except Exception:
-                    pass
+                    self._ib = IB()
+                    self._ib.connect(
+                        host=self.host,
+                        port=port,
+                        clientId=cid,
+                        timeout=12,
+                        readonly=False,
+                    )
+                    self._connected = True
+                    self.port = port
+                    self.client_id = cid
+                    self.last_error = ""
+                    logger.info(
+                        f"IBKR connected: host={self.host} port={port} "
+                        f"clientId={cid} paper={self.paper_mode}"
+                    )
+                    return True
+                except Exception as e:
+                    last_exc = e
+                    logger.warning(
+                        f"IBKR connect attempt failed (port={port} clientId={cid}): "
+                        f"{type(e).__name__}: {e}"
+                    )
+                    try:
+                        self._ib.disconnect()
+                    except Exception:
+                        pass
 
         IBKRBroker._last_fail_times[key] = time.time()
         self.last_error = (
             f"{type(last_exc).__name__}: {last_exc} "
-            f"(host={self.host} port={self.port}, tried clientIds {candidate_ids}). "
-            f"If the gateway console shows NO incoming connection, this is a network/"
-            f"trusted-IP block, not a clientId clash."
+            f"(host={self.host}, tried ports {candidate_ports} clientIds {candidate_ids}). "
+            f"TCP reachable but API handshake never completed — check the gateway "
+            f"socat port (paper=4004/live=4003) and API settings."
         )
         logger.error(f"IBKR connection failed after retries: {self.last_error!r}")
         return False
