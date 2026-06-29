@@ -776,6 +776,17 @@
             {% endfor %}
           </select>
         </form>
+        {# Org Selector (regular users who belong to more than one org) #}
+        {% elif user_role != 'superadmin' and user_orgs and user_orgs|length > 1 %}
+        <form action="/switch-org" method="post" title="Switch organisation">
+          <select name="organization_id" onchange="this.form.submit()"
+                  class="input py-1 px-2 text-xs font-semibold"
+                  style="max-width:140px;background:var(--surface);color:var(--text);border-color:var(--border);border-radius:.375rem">
+            {% for org in user_orgs %}
+              <option value="{{ org.id }}" {% if org.id == current_org_id %}selected{% endif %}>{{ org.name }}</option>
+            {% endfor %}
+          </select>
+        </form>
         {% endif %}
 
         <!-- Theme toggle -->

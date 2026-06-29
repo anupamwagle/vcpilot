@@ -205,7 +205,12 @@ services:
       WHATSAPP_DEFAULT_ENGINE: WEBJS
       WAHA_DASHBOARD_USERNAME: admin
       WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:-vcpilot_2026}
-      WHATSAPP_START_SESSION: default
+      # NOTE: do NOT auto-start a session here. Auto-starting "default" makes WAHA
+      # endlessly emit session.status=SCAN_QR_CODE webhooks even when no org uses
+      # WhatsApp, flooding the API logs. Sessions are started on demand from
+      # /admin/whatsapp ("Start Session") when an org actually connects WhatsApp.
+      # To restore the old behaviour set WAHA_START_SESSION via .env instead.
+      WHATSAPP_START_SESSION: ${WAHA_START_SESSION:-}
       WHATSAPP_HOOK_URL: ${WAHA_HOOK_URL:-http://api:8501/webhook/whatsapp}
       WHATSAPP_HOOK_EVENTS: message,session.status
     ports:

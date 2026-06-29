@@ -6,7 +6,7 @@ import enum
 import hashlib
 import os
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Table
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Table, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -95,20 +95,30 @@ class User(Base):
     name            = Column(String(128), nullable=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
     is_active       = Column(Boolean, default=True, nullable=False)
-    
+
     # OTP login support
     otp_code        = Column(String(32), nullable=True)
     otp_expires_at  = Column(DateTime, nullable=True)
-    
+
     # Password reset support
     reset_token         = Column(String(128), nullable=True)
     reset_token_expires = Column(DateTime, nullable=True)
-    
+
     created_at      = Column(DateTime, default=datetime.utcnow)
     updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     organization = relationship("Organization", back_populates="users")
     roles        = relationship("Role", secondary=user_roles, back_populates="users")
+
+    # Multi-org: a user can belong to several organizations and switch between them.
+    # `organization_id` above is retained as the user's "home" org (first/default
+    # membership) for backward compatibility with code that reads it directly.
+    memberships  = relationship(
+        "OrganizationMembership",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        foreign_keys="OrganizationMembership.user_id",
+    )
 
     def has_permission(self, perm_name: str) -> bool:
         """Check if user has a permission through any of their roles."""
@@ -118,5 +128,49 @@ class User(Base):
                     return True
         return False
 
+    @property
+    def organization_ids(self) -> list[int]:
+        """All organization ids this user is a member of (de-duplicated)."""
+        ids = {m.organization_id for m in self.memberships if m.organization_id is not None}
+        if self.organization_id is not None:
+            ids.add(self.organization_id)  # home org is always accessible
+        return sorted(ids)
+
+    def is_member_of(self, organization_id: int) -> bool:
+        """True if the user belongs to (or is homed at) the given organization."""
+        if organization_id is None:
+            return False
+        if organization_id == self.organization_id:
+            return True
+        return any(m.organization_id == organization_id for m in self.memberships)
+
     def __repr__(self):
         return f"<User {self.email}>"
+
+
+class OrganizationMembership(Base):
+    """
+    Many-to-many link between a user and an organization. Lets one user belong to
+    several organizations and switch the active one. Optionally records the role the
+    user holds *within* that organization (per-org role; global `user_roles` still
+    drives permission checks for now).
+    """
+    __tablename__ = "organization_memberships"
+
+    id              = Column(Integer, primary_key=True)
+    user_id         = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
+    role_id         = Column(Integer, ForeignKey("roles.id", ondelete="SET NULL"), nullable=True)
+    is_default      = Column(Boolean, default=False, nullable=False)  # the user's home org
+    created_at      = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "organization_id", name="uq_user_org_membership"),
+    )
+
+    user         = relationship("User", back_populates="memberships", foreign_keys=[user_id])
+    organization = relationship("Organization")
+    role         = relationship("Role")
+
+    def __repr__(self):
+        return f"<OrganizationMembership user={self.user_id} org={self.organization_id}>"

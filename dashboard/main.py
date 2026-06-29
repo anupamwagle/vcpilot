@@ -13,6 +13,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, or_
+from sqlalchemy.exc import IntegrityError
 from loguru import logger
 
 app = FastAPI(title="AstraTrade", docs_url=None, redoc_url=None)
@@ -629,10 +630,18 @@ def _global(request: Request, db: Session) -> dict:
         ).count()
 
     all_orgs = []
+    user_orgs = []
     user_role = request.session.get("user_role")
     if user_role == "superadmin":
         from app.models.account import Organization
         all_orgs = db.query(Organization).filter(Organization.is_active == True).order_by(Organization.name).all()
+    elif request.session.get("user_id"):
+        # Multi-org: orgs this regular user may switch between (empty/one => no switcher).
+        from app.services.membership import switchable_orgs
+        try:
+            user_orgs = switchable_orgs(db, request.session.get("user_id"))
+        except Exception:
+            user_orgs = []
 
     # User display info for sidebar footer
     user_email = request.session.get("email", "")
@@ -682,6 +691,7 @@ def _global(request: Request, db: Session) -> dict:
         "user_email": user_email,
         "org_name": request.session.get("organization_name", ""),
         "all_orgs": all_orgs,
+        "user_orgs": user_orgs,
         "current_org_id": org_id,
         "ibkr_simulate": cfg("ibkr_simulate", "false").lower() == "true",
         "mock_time_enabled": mock_time_on,
@@ -929,6 +939,56 @@ async def superadmin_switch_org(request: Request, organization_id: int = Form(..
             user_id=request.session.get("user_id"),
             organization_id=org.id,
             message=f"Super Admin switched active organization context to {org.name}"
+        ))
+        db.commit()
+
+    referer = request.headers.get("referer", "/")
+    return RedirectResponse(referer, 303)
+
+
+@app.post("/switch-org")
+async def switch_org(request: Request, organization_id: int = Form(...), db: Session = Depends(get_db)):
+    """
+    Regular-user org switcher (multi-org). Sets the active organization in the
+    session, but ONLY if the logged-in user is actually a member of the target org.
+    Super admins use /superadmin/switch-org (which can switch to ANY org).
+    """
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+
+    # Super admins have their own switcher with full access.
+    if request.session.get("user_role") == "superadmin":
+        return await superadmin_switch_org(request, organization_id, db)
+
+    user_id = request.session.get("user_id")
+    if not user_id:
+        return RedirectResponse("/login", 302)
+
+    from app.models.auth import User
+    from app.models.account import Organization
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or not user.is_member_of(organization_id):
+        # Not a member — refuse and leave the active org unchanged.
+        logger.warning(
+            f"User {request.session.get('email')} tried to switch to org {organization_id} "
+            f"they are not a member of — denied"
+        )
+        referer = request.headers.get("referer", "/")
+        sep = "&" if "?" in referer else "?"
+        return RedirectResponse(f"{referer}{sep}switch_error=not_member", 303)
+
+    org = db.query(Organization).filter(Organization.id == organization_id).first()
+    if org and org.is_active:
+        request.session["organization_id"] = org.id
+        request.session["organization_name"] = org.name
+        from app.models.audit import AuditLog, AuditAction
+        db.add(AuditLog(
+            action=AuditAction.CONFIG_CHANGED,
+            actor=request.session.get("email", ""),
+            user_id=user_id,
+            organization_id=org.id,
+            message=f"User switched active organization to {org.name}",
         ))
         db.commit()
 
@@ -6157,10 +6217,12 @@ async def webhook_whatsapp(request: Request, db: Session = Depends(get_db)):
 
     logger.debug(f"WAHA webhook: event={event}, session={session_name}, org_id={org_id}")
 
-    # Session status notification — just log it
+    # Session status notification — log at DEBUG only. WAHA emits these continuously
+    # (e.g. SCAN_QR_CODE while a session waits to be linked); logging at INFO floods
+    # the API logs, so keep it quiet unless actively debugging.
     if event == "session.status":
         status = body.get("payload", {}).get("status", "")
-        logger.info(f"WAHA session status for {session_name} → {status}")
+        logger.debug(f"WAHA session status for {session_name} → {status}")
         return JSONResponse({"ok": True})
 
     if event not in ("message", "message.any"):
@@ -6615,124 +6677,164 @@ async def superadmin_organizations_create(
     ctx.update({"organizations": organizations})
 
     if existing_org:
-        ctx.update({"error": f"Organisation '{name}' already exists"})
+        ctx.update({"error": f"Organisation '{name}' already exists. Choose a different organisation name."})
         return templates.TemplateResponse("superadmin/organizations.html", ctx, status_code=400)
-    if existing_user:
-        ctx.update({"error": f"User with email '{admin_email}' already exists"})
+    # NOTE: an existing user is NOT an error under the multi-org model — the existing
+    # account is simply added as a member/admin of the new organisation (see step 3).
+
+    # Validate tier value before touching the DB so a bad enum doesn't 500.
+    if tier not in OrganizationTier.__members__:
+        ctx.update({"error": f"Invalid service tier '{tier}'. Choose Bronze, Silver or Gold."})
         return templates.TemplateResponse("superadmin/organizations.html", ctx, status_code=400)
 
-    # 1. Create Organization
-    org = Organization(name=name.strip(), tier=OrganizationTier[tier], is_active=True)
-    db.add(org)
-    db.flush()
-
-    # 2. Assign Default Account for Org
-    # Find AccountTier (we fallback to first tier, e.g. ADMIN or starter if present)
-    acc_tier = db.query(AccountTier).first()
-    if not acc_tier:
-        # Fallback create a dummy account tier if database has none seeded
-        from app.models.account import TierLevel
-        acc_tier = AccountTier(level=TierLevel.ADMIN, label="Administrator", max_positions=10)
-        db.add(acc_tier)
+    try:
+        # 1. Create Organization
+        org = Organization(name=name.strip(), tier=OrganizationTier[tier], is_active=True)
+        db.add(org)
         db.flush()
 
-    account = Account(
-        name=f"{name.strip()} Primary Account",
-        organization_id=org.id,
-        tier_id=acc_tier.id,
-        capital_aud=5000.0,
-        is_active=True,
-        is_paper=True
-    )
-    db.add(account)
+        # 2. Assign Default Account for Org
+        # Find AccountTier (we fallback to first tier, e.g. ADMIN or starter if present)
+        acc_tier = db.query(AccountTier).first()
+        if not acc_tier:
+            # Fallback create a dummy account tier if database has none seeded
+            from app.models.account import TierLevel
+            acc_tier = AccountTier(level=TierLevel.ADMIN, label="Administrator", max_positions=10)
+            db.add(acc_tier)
+            db.flush()
 
-    # 3. Create Org Admin User
-    import secrets
-    from datetime import datetime, timedelta
-    dummy_pass = secrets.token_hex(16)
-    hashed_pwd = hash_password(dummy_pass)
-    token = secrets.token_urlsafe(32)
-    user = User(
-        email=admin_email.strip().lower(),
-        password_hash=hashed_pwd,
-        name=admin_name.strip(),
-        organization_id=org.id,
-        is_active=True,
-        reset_token=token,
-        reset_token_expires=datetime.utcnow() + timedelta(hours=24)
-    )
-    db.add(user)
-    db.flush()
-
-    # Assign Organisation Admin Role
-    admin_role = db.query(Role).filter(Role.name == "Organisation Admin").first()
-    if admin_role:
-        user.roles.append(admin_role)
-
-    # 4. Seed Organization System Configurations
-    # WAHA Core (free) only supports one "default" session shared by all orgs.
-    # The webhook routes messages to the correct org by matching the sender phone number
-    # against each org's whatsapp_admin_number setting.
-    # For per-org sessions, use WAHA Plus (paid): devlikeapro/waha-plus:latest
-    configs_to_seed = [
-        ("trading_paused", "false", ConfigValueType.BOOLEAN, "Trading Paused", "Toggles automated trade placement"),
-        ("whatsapp_enabled", "true", ConfigValueType.BOOLEAN, "WhatsApp Alerts", "Enables real-time notifications"),
-        ("whatsapp_admin_number", "", ConfigValueType.STRING, "WhatsApp Admin Number", "Number to send alerts and receive commands JID format"),
-        ("whatsapp_api_key", settings.waha_api_key, ConfigValueType.STRING, "WhatsApp API Key", "API key for the WhatsApp (WAHA) service", True),
-        ("whatsapp_session_name", "default", ConfigValueType.STRING, "WhatsApp Session Name", "WAHA session name (always 'default' for WAHA Core; use WAHA Plus for per-org sessions)"),
-        ("notification_channel", "telegram", ConfigValueType.STRING, "Notification Channel", "Active communication channel ('whatsapp' or 'telegram')"),
-        ("telegram_enabled", "true", ConfigValueType.BOOLEAN, "Telegram Alerts Enabled", "Enable or disable Telegram notifications"),
-        ("telegram_bot_token", "", ConfigValueType.STRING, "Telegram Bot Token", "The Telegram Bot Token from @BotFather", True),
-        ("telegram_chat_id", "", ConfigValueType.STRING, "Telegram Chat ID", "The Telegram Chat ID to send alerts to"),
-        ("ibkr_account", "", ConfigValueType.STRING, "IBKR Account ID", "Interactive Brokers account number"),
-        ("fmp_api_key", "", ConfigValueType.STRING, "FMP API Key", "Financial Modeling Prep API key", True),
-        ("working_capital_aud", "5000.0", ConfigValueType.FLOAT, "Working Capital (AUD)", "Working capital used for sizing and risk calculations"),
-    ]
-    for cfg_item in configs_to_seed:
-        key, val, vtype, label, desc = cfg_item[:5]
-        is_sec = cfg_item[5] if len(cfg_item) > 5 else False
-        db.add(SystemConfig(
-            key=key, value=val, value_type=vtype, label=label,
-            description=desc, is_secret=is_sec, organization_id=org.id,
-            group="broker" if "ibkr" in key else ("whatsapp" if ("whatsapp" in key or "telegram" in key or "notification" in key) else "general")
-        ))
-
-    # 5. Clone default templates to RuleConfig for the new organization
-    from app.models.config import RuleConfig
-    rule_templates = db.query(RuleConfig).filter(RuleConfig.organization_id == None).all()
-    for t in rule_templates:
-        db.add(RuleConfig(
-            rule_id=t.rule_id,
+        account = Account(
+            name=f"{name.strip()} Primary Account",
             organization_id=org.id,
-            category=t.category,
-            label=t.label,
-            description=t.description,
-            minervini_ref=t.minervini_ref,
-            enabled_globally=t.enabled_globally,
-            threshold=t.threshold,
-            threshold_label=t.threshold_label,
-            threshold_min=t.threshold_min,
-            threshold_max=t.threshold_max,
-            tier_overrides=t.tier_overrides.copy() if t.tier_overrides else {},
-            is_mandatory=t.is_mandatory,
-            sort_order=t.sort_order,
-            updated_by="superadmin"
+            tier_id=acc_tier.id,
+            capital_aud=5000.0,
+            is_active=True,
+            is_paper=True
+        )
+        db.add(account)
+
+        # 3. Create (or reuse) the Org Admin User
+        # Multi-org: if the admin email already belongs to an account, we attach that
+        # existing account to the new org as a member instead of failing. A brand-new
+        # email creates a new user + a password-setup token (welcome email).
+        import secrets
+        from datetime import datetime, timedelta
+        from app.services.membership import add_user_to_org
+
+        admin_role = db.query(Role).filter(Role.name == "Organisation Admin").first()
+
+        if existing_user:
+            user = existing_user
+            token = None  # existing accounts already have a password — no setup link
+            is_new_user = False
+            # New org becomes a membership; keep the user's current home org.
+            add_user_to_org(db, user, org.id, role=admin_role, is_default=False)
+        else:
+            dummy_pass = secrets.token_hex(16)
+            hashed_pwd = hash_password(dummy_pass)
+            token = secrets.token_urlsafe(32)
+            is_new_user = True
+            user = User(
+                email=admin_email.strip().lower(),
+                password_hash=hashed_pwd,
+                name=admin_name.strip(),
+                organization_id=org.id,
+                is_active=True,
+                reset_token=token,
+                reset_token_expires=datetime.utcnow() + timedelta(hours=24)
+            )
+            db.add(user)
+            db.flush()
+            # First org is the user's home org.
+            add_user_to_org(db, user, org.id, role=admin_role, is_default=True)
+
+        # Assign Organisation Admin Role globally (permission checks are global for now)
+        if admin_role and admin_role not in user.roles:
+            user.roles.append(admin_role)
+
+        # 4. Seed Organization System Configurations
+        # WAHA Core (free) only supports one "default" session shared by all orgs.
+        # The webhook routes messages to the correct org by matching the sender phone number
+        # against each org's whatsapp_admin_number setting.
+        # For per-org sessions, use WAHA Plus (paid): devlikeapro/waha-plus:latest
+        configs_to_seed = [
+            ("trading_paused", "false", ConfigValueType.BOOLEAN, "Trading Paused", "Toggles automated trade placement"),
+            ("whatsapp_enabled", "true", ConfigValueType.BOOLEAN, "WhatsApp Alerts", "Enables real-time notifications"),
+            ("whatsapp_admin_number", "", ConfigValueType.STRING, "WhatsApp Admin Number", "Number to send alerts and receive commands JID format"),
+            ("whatsapp_api_key", settings.waha_api_key, ConfigValueType.STRING, "WhatsApp API Key", "API key for the WhatsApp (WAHA) service", True),
+            ("whatsapp_session_name", "default", ConfigValueType.STRING, "WhatsApp Session Name", "WAHA session name (always 'default' for WAHA Core; use WAHA Plus for per-org sessions)"),
+            ("notification_channel", "telegram", ConfigValueType.STRING, "Notification Channel", "Active communication channel ('whatsapp' or 'telegram')"),
+            ("telegram_enabled", "true", ConfigValueType.BOOLEAN, "Telegram Alerts Enabled", "Enable or disable Telegram notifications"),
+            ("telegram_bot_token", "", ConfigValueType.STRING, "Telegram Bot Token", "The Telegram Bot Token from @BotFather", True),
+            ("telegram_chat_id", "", ConfigValueType.STRING, "Telegram Chat ID", "The Telegram Chat ID to send alerts to"),
+            ("ibkr_account", "", ConfigValueType.STRING, "IBKR Account ID", "Interactive Brokers account number"),
+            ("fmp_api_key", "", ConfigValueType.STRING, "FMP API Key", "Financial Modeling Prep API key", True),
+            ("working_capital_aud", "5000.0", ConfigValueType.FLOAT, "Working Capital (AUD)", "Working capital used for sizing and risk calculations"),
+        ]
+        for cfg_item in configs_to_seed:
+            key, val, vtype, label, desc = cfg_item[:5]
+            is_sec = cfg_item[5] if len(cfg_item) > 5 else False
+            db.add(SystemConfig(
+                key=key, value=val, value_type=vtype, label=label,
+                description=desc, is_secret=is_sec, organization_id=org.id,
+                group="broker" if "ibkr" in key else ("whatsapp" if ("whatsapp" in key or "telegram" in key or "notification" in key) else "general")
+            ))
+
+        # 5. Clone default templates to RuleConfig for the new organization
+        from app.models.config import RuleConfig
+        rule_templates = db.query(RuleConfig).filter(RuleConfig.organization_id == None).all()
+        for t in rule_templates:
+            db.add(RuleConfig(
+                rule_id=t.rule_id,
+                organization_id=org.id,
+                category=t.category,
+                label=t.label,
+                description=t.description,
+                minervini_ref=t.minervini_ref,
+                enabled_globally=t.enabled_globally,
+                threshold=t.threshold,
+                threshold_label=t.threshold_label,
+                threshold_min=t.threshold_min,
+                threshold_max=t.threshold_max,
+                tier_overrides=t.tier_overrides.copy() if t.tier_overrides else {},
+                is_mandatory=t.is_mandatory,
+                sort_order=t.sort_order,
+                updated_by="superadmin"
+            ))
+
+        from app.models.audit import AuditLog, AuditAction
+        db.add(AuditLog(
+            action=AuditAction.CONFIG_CHANGED,
+            actor=request.session.get("email", "superadmin"),
+            user_id=request.session.get("user_id"),
+            organization_id=org.id,
+            message=f"Super Admin created organization {org.name} (Tier: {tier})"
         ))
+        db.commit()
+    except IntegrityError:
+        # Race / DB-level uniqueness violation (e.g. org name or email created concurrently).
+        db.rollback()
+        ctx.update({"error": f"Could not create '{name}' — the organisation name or admin email is already in use."})
+        return templates.TemplateResponse("superadmin/organizations.html", ctx, status_code=400)
+    except Exception as exc:
+        db.rollback()
+        logger.error(f"Org creation failed for '{name}': {exc}")
+        ctx.update({"error": f"Could not create organisation: {exc}"})
+        return templates.TemplateResponse("superadmin/organizations.html", ctx, status_code=400)
 
-    from app.models.audit import AuditLog, AuditAction
-    db.add(AuditLog(
-        action=AuditAction.CONFIG_CHANGED,
-        actor=request.session.get("email", "superadmin"),
-        user_id=request.session.get("user_id"),
-        organization_id=org.id,
-        message=f"Super Admin created organization {org.name} (Tier: {tier})"
-    ))
-    db.commit()
-
-    # Welcome email sending flow for Organization Admin
-    from app.utils.email import send_email
     import urllib.parse
-    
+    encoded_email = urllib.parse.quote(user.email)
+
+    # Existing accounts are simply added to the new org as admin — no password setup
+    # email (they already have credentials). Inform the super admin instead.
+    if not is_new_user:
+        return RedirectResponse(
+            f"/superadmin/organizations?saved=member_added&email={encoded_email}", 302
+        )
+
+    # Welcome email sending flow for a brand-new Organization Admin
+    from app.utils.email import send_email
+
     host = request.headers.get("host", "localhost:8501")
     scheme = "https" if request.url.scheme == "https" else "http"
     reset_link = f"{scheme}://{host}/reset-password?token={token}"
@@ -6751,7 +6853,6 @@ async def superadmin_organizations_create(
     )
     
     email_sent = send_email(user.email, subject, html_content)
-    encoded_email = urllib.parse.quote(user.email)
     if email_sent:
         return RedirectResponse(f"/superadmin/organizations?saved=welcome_email&email={encoded_email}", 302)
     else:
@@ -7223,21 +7324,30 @@ async def superadmin_users_create(
 
     from app.models.auth import User, Role, hash_password
     from app.models.account import Organization
-    import secrets
+    from app.services.membership import add_user_to_org
+    import secrets, urllib.parse
+    from app.models.audit import AuditLog, AuditAction
 
     email_clean = email.strip().lower()
+    role = db.query(Role).filter(Role.id == role_id).first()
     existing_user = db.query(User).filter(User.email == email_clean).first()
+
+    # Multi-org: if the user already exists, add them to the chosen org as a member
+    # instead of failing. A brand-new email creates the account + password-setup link.
     if existing_user:
-        ctx = _global(request, db)
-        users = db.query(User).order_by(User.email).all()
-        organizations = db.query(Organization).order_by(Organization.name).all()
-        roles = db.query(Role).order_by(Role.name).all()
-        ctx.update({
-            "users": users, "organizations": organizations, "roles": roles,
-            "error": f"User with email '{email}' already exists",
-            "search": "", "selected_org_id": "",
-        })
-        return templates.TemplateResponse("superadmin/users.html", ctx, status_code=400)
+        add_user_to_org(db, existing_user, organization_id, role=role, is_default=False)
+        if role and role not in existing_user.roles:
+            existing_user.roles.append(role)
+        db.add(AuditLog(
+            action=AuditAction.CONFIG_CHANGED,
+            actor=request.session.get("email", "superadmin"),
+            user_id=request.session.get("user_id"),
+            organization_id=organization_id,
+            message=f"Super Admin added existing user {existing_user.email} to organization {organization_id}",
+        ))
+        db.commit()
+        encoded_email = urllib.parse.quote(existing_user.email)
+        return RedirectResponse(f"/superadmin/users?saved=member_added&email={encoded_email}", 302)
 
     dummy_pass = secrets.token_hex(16)
     hashed_pwd = hash_password(dummy_pass)
@@ -7252,10 +7362,9 @@ async def superadmin_users_create(
     db.add(user)
     db.flush()
 
-    role = db.query(Role).filter(Role.id == role_id).first()
     if role:
         user.roles.append(role)
-    from app.models.audit import AuditLog, AuditAction
+    add_user_to_org(db, user, organization_id, role=role, is_default=True)
     db.add(AuditLog(
         action=AuditAction.CONFIG_CHANGED,
         actor=request.session.get("email", "superadmin"),
@@ -7264,7 +7373,6 @@ async def superadmin_users_create(
     ))
     db.commit()
 
-    import urllib.parse
     encoded_email = urllib.parse.quote(user.email)
 
     if send_welcome == "1":
@@ -8570,21 +8678,30 @@ async def superadmin_users_create(
 
     from app.models.auth import User, Role, hash_password
     from app.models.account import Organization
-    import secrets
+    from app.services.membership import add_user_to_org
+    import secrets, urllib.parse
+    from app.models.audit import AuditLog, AuditAction
 
     email_clean = email.strip().lower()
+    role = db.query(Role).filter(Role.id == role_id).first()
     existing_user = db.query(User).filter(User.email == email_clean).first()
+
+    # Multi-org: if the user already exists, add them to the chosen org as a member
+    # instead of failing. A brand-new email creates the account + password-setup link.
     if existing_user:
-        ctx = _global(request, db)
-        users = db.query(User).order_by(User.email).all()
-        organizations = db.query(Organization).order_by(Organization.name).all()
-        roles = db.query(Role).order_by(Role.name).all()
-        ctx.update({
-            "users": users, "organizations": organizations, "roles": roles,
-            "error": f"User with email '{email}' already exists",
-            "search": "", "selected_org_id": "",
-        })
-        return templates.TemplateResponse("superadmin/users.html", ctx, status_code=400)
+        add_user_to_org(db, existing_user, organization_id, role=role, is_default=False)
+        if role and role not in existing_user.roles:
+            existing_user.roles.append(role)
+        db.add(AuditLog(
+            action=AuditAction.CONFIG_CHANGED,
+            actor=request.session.get("email", "superadmin"),
+            user_id=request.session.get("user_id"),
+            organization_id=organization_id,
+            message=f"Super Admin added existing user {existing_user.email} to organization {organization_id}",
+        ))
+        db.commit()
+        encoded_email = urllib.parse.quote(existing_user.email)
+        return RedirectResponse(f"/superadmin/users?saved=member_added&email={encoded_email}", 302)
 
     dummy_pass = secrets.token_hex(16)
     hashed_pwd = hash_password(dummy_pass)
@@ -8599,10 +8716,9 @@ async def superadmin_users_create(
     db.add(user)
     db.flush()
 
-    role = db.query(Role).filter(Role.id == role_id).first()
     if role:
         user.roles.append(role)
-    from app.models.audit import AuditLog, AuditAction
+    add_user_to_org(db, user, organization_id, role=role, is_default=True)
     db.add(AuditLog(
         action=AuditAction.CONFIG_CHANGED,
         actor=request.session.get("email", "superadmin"),
@@ -8611,7 +8727,6 @@ async def superadmin_users_create(
     ))
     db.commit()
 
-    import urllib.parse
     encoded_email = urllib.parse.quote(user.email)
 
     if send_welcome == "1":

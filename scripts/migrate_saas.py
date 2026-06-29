@@ -139,6 +139,31 @@ def migrate():
                 role_id INTEGER REFERENCES roles(id) ON DELETE CASCADE,
                 PRIMARY KEY (user_id, role_id)
             );
+            CREATE TABLE IF NOT EXISTS organization_memberships (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                role_id INTEGER REFERENCES roles(id) ON DELETE SET NULL,
+                is_default BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT TIMEZONE('utc', NOW()),
+                CONSTRAINT uq_user_org_membership UNIQUE (user_id, organization_id)
+            );
+            CREATE INDEX IF NOT EXISTS ix_org_memberships_user ON organization_memberships (user_id);
+            CREATE INDEX IF NOT EXISTS ix_org_memberships_org ON organization_memberships (organization_id);
+        """))
+        conn.commit()
+
+        # Multi-org backfill: give every existing single-org user a default membership
+        # for their current home org so they immediately appear in the new model.
+        conn.execute(text("""
+            INSERT INTO organization_memberships (user_id, organization_id, is_default)
+            SELECT u.id, u.organization_id, TRUE
+            FROM users u
+            WHERE u.organization_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM organization_memberships m
+                  WHERE m.user_id = u.id AND m.organization_id = u.organization_id
+              );
         """))
         conn.commit()
 
