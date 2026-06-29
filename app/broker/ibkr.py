@@ -273,7 +273,11 @@ class IBKRBroker:
 
         try:
             contract = self._build_contract(ticker, exchange_key)
-            self._ib.qualifyContracts(contract)
+            qualified = self._ib.qualifyContracts(contract)
+            if not qualified or not getattr(contract, "conId", 0):
+                msg = f"contract not qualified for {ticker} on {exchange_key} (bad symbol / no permission)"
+                logger.error(f"Bracket order failed: {msg}")
+                return {"status": "error", "error": msg, "ticker": ticker}
 
             bracket = self._ib.bracketOrder(
                 action,
@@ -283,20 +287,42 @@ class IBKRBroker:
                 stopLossPrice=round(stop_price, 3),
             )
 
+            # IMPORTANT: keep ib_insync's transmit flags (parent=False,
+            # takeProfit=False, stopLoss=True) so the whole bracket transmits
+            # ATOMICALLY when the last leg is placed. Forcing transmit=True on all
+            # legs submits the parent naked first and can leave the bracket in a
+            # broken/rejected state. Only set orderRef + account here.
             for order in bracket:
                 order.orderRef = order_ref
-                order.transmit = True
                 if self.account:
                     order.account = self.account  # Routes to correct sub-account under FA
 
             trades = [self._ib.placeOrder(contract, o) for o in bracket]
-            self._ib.sleep(1)  # Allow fill confirmation
+            self._ib.sleep(2.5)  # let order status settle BEFORE we disconnect
 
+            parent = trades[0]
+            pstatus = parent.orderStatus.status
+            statuses = [(t.order.orderType, t.orderStatus.status) for t in trades]
             logger.info(
-                f"Bracket submitted: {ticker} {action} {qty} @ {entry_price:.3f} "
-                f"stop={stop_price:.3f} target={target_price:.3f}"
+                f"Bracket {ticker} {action} {qty} @ {entry_price:.3f} "
+                f"stop={stop_price:.3f} target={target_price:.3f} → {statuses}"
             )
 
+            # Surface rejections instead of pretending success.
+            bad = {"Cancelled", "ApiCancelled", "Inactive", "Rejected", "PendingCancel"}
+            if pstatus in bad:
+                reason = ""
+                try:
+                    if parent.log:
+                        reason = parent.log[-1].message or ""
+                except Exception:
+                    pass
+                msg = f"IBKR {pstatus}" + (f": {reason}" if reason else "")
+                logger.error(f"Bracket REJECTED for {ticker}: {msg}")
+                return {"status": "error", "error": msg, "ticker": ticker,
+                        "order_status": pstatus, "raw": [str(t) for t in trades]}
+
+            logger.info(f"Bracket accepted for {ticker}: parent status={pstatus}")
             return {
                 "status": "submitted",
                 "ticker": ticker,
@@ -304,7 +330,8 @@ class IBKRBroker:
                 "entry_price": entry_price,
                 "stop_price": stop_price,
                 "target_price": target_price,
-                "ibkr_parent_id": trades[0].order.orderId if trades else None,
+                "order_status": pstatus,
+                "ibkr_parent_id": parent.order.orderId if parent else None,
                 "raw": [str(t) for t in trades],
             }
 
