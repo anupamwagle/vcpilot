@@ -62,16 +62,20 @@ class IBKRBroker:
                     paper_val = cfg("ibkr_paper_mode")
                     if paper_val is not None:
                         self.paper_mode = paper_val.lower() in ("true", "1", "yes")
-                        # gnzsnz/ib-gateway exposes the API via socat on 4004
-                        # (paper) / 4003 (live) — NOT the gateway's internal
-                        # 4002/4001. Use the socat ports so the handshake
-                        # actually reaches the API. (connect() still falls back
-                        # across these if the configured one fails.)
-                        self.port = 4004 if self.paper_mode else 4003
                 finally:
                     db.close()
             except Exception:
                 pass
+
+        # gnzsnz/ib-gateway exposes the API via socat on 4004 (paper) / 4003
+        # (live). The gateway's internal 4001/4002 are bound to localhost inside
+        # the container and ALWAYS time out from other containers, so normalise
+        # those to the socat ports here — regardless of whether the org set
+        # ibkr_paper_mode explicitly. An explicitly non-standard port (e.g. a
+        # direct TWS on 7497) is left untouched. connect() still falls back
+        # across the socat ports if the first choice fails.
+        if self.port in (None, 4001, 4002):
+            self.port = 4004 if self.paper_mode else 4003
 
 
     def connect(self) -> bool:
@@ -123,10 +127,20 @@ class IBKRBroker:
         # never completes, which presents as a TimeoutError with nothing logged
         # on the gateway. So if the configured port times out, fall back to the
         # socat ports automatically.
-        import random
+        import random, os
         socat_alts = [4004, 4003] if self.paper_mode else [4003, 4004]
         candidate_ports = [self.port] + [p for p in socat_alts if p != self.port]
-        candidate_ids = [self.client_id, random.randint(2000, 9999)]
+        # Try a PROCESS-UNIQUE clientId first so we don't collide with another
+        # container already holding the configured id (e.g. the api container on
+        # clientId=1) — a collision makes the gateway silently ignore us and the
+        # handshake times out. Derive a stable-per-process id from the PID, then
+        # fall back to the configured id and a random one.
+        uniq_id = 1000 + (os.getpid() % 8000)
+        seen, candidate_ids = set(), []
+        for c in (uniq_id, self.client_id, random.randint(2000, 9999)):
+            if c not in seen:
+                seen.add(c)
+                candidate_ids.append(c)
 
         last_exc = None
         for port in candidate_ports:
@@ -137,7 +151,7 @@ class IBKRBroker:
                         host=self.host,
                         port=port,
                         clientId=cid,
-                        timeout=12,
+                        timeout=8,
                         readonly=False,
                     )
                     self._connected = True
