@@ -1893,16 +1893,53 @@ def screen_single_ticker(
         # 2. Fetch price history (2y) — same yfinance call works for all exchanges
         df = get_price_history(ticker, period="2y")
         if df is None or len(df) < 50:
-            logger.warning(f"Insufficient price history for {ticker}")
+            # A USER explicitly asked for this ticker — never silently drop it.
+            # We can't fully screen without ~50+ bars, but we still add it to the
+            # watchlist in a WATCHING "awaiting data" state so it's visible and
+            # gets re-screened automatically on the next data refresh / screen run.
+            bars = 0 if df is None else len(df)
+            logger.warning(f"Insufficient price history for {ticker} ({bars} bars) — adding to watchlist as awaiting-data")
+            note = (notes + " | " if notes else "") + f"⏳ Awaiting price data ({bars} bars) — will re-screen automatically"
             with get_db() as db:
+                wl = db.query(Watchlist).filter(
+                    Watchlist.ticker == ticker,
+                    Watchlist.organization_id == organization_id,
+                    Watchlist.status == WatchlistStatus.WATCHING,
+                ).first()
+                if not wl:
+                    wl = Watchlist(
+                        ticker=ticker,
+                        exchange_key=exchange_key,
+                        asset_type=asset_type,
+                        currency=currency,
+                        organization_id=organization_id,
+                        added_date=today,
+                        status=WatchlistStatus.WATCHING,
+                        added_by="admin_manual",
+                        notes=note,
+                        label_id=label_id,
+                        rule_results=serialize_rule_results({}),
+                    )
+                    db.add(wl)
+                    db.flush()
+                    if not label_id:
+                        _auto_assign_sector_label(ticker, wl, organization_id, db)
+                else:
+                    wl.exchange_key = exchange_key
+                    wl.asset_type = asset_type
+                    wl.currency = currency
+                    wl.notes = note
+                    if label_id is not None:
+                        wl.label_id = label_id
                 db.add(AuditLog(
                     action=AuditAction.SCREENER_TICKER,
                     organization_id=organization_id,
                     ticker=ticker,
-                    message=f"⚪ SKIP manual add — insufficient price data",
-                    detail={"result": "skip_no_data"}
+                    message=f"⏳ WATCHLIST (Manual) — awaiting data, only {bars} price bars available; will re-screen",
+                    detail={"result": "watchlist_awaiting_data", "bars": bars},
                 ))
                 db.commit()
+                logger.info(f"Added {ticker} to watchlist as awaiting-data (Manually added)")
             return
 
         # 3. Populate latest price bar in central DB (shared across orgs)

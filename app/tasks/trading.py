@@ -557,8 +557,15 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                 is_crypto = (signal.asset_type == "CRYPTO" or (signal.exchange_key and signal.exchange_key.startswith("CRYPTO_")))
                 signal_is_paper = crypto_testnet if is_crypto else is_paper
 
-                if signal_is_paper:
-                    # Paper / simulation mode: bypass real broker entirely
+                # Order routing:
+                #   Equity (paper OR live) → IBKR gateway. "Paper" means the
+                #     gateway is logged into a paper account (e.g. DUR…), so these
+                #     are REAL orders on the IBKR paper account, NOT internal
+                #     fakes. IBKRBroker.submit_bracket_order only falls back to an
+                #     internal simulation if it genuinely can't connect.
+                #   Crypto testnet → internal simulation (no live exchange order)
+                #   Crypto live    → ccxt crypto broker
+                if is_crypto and crypto_testnet:
                     result = {
                         "status":         "simulated",
                         "ticker":         signal.ticker,
@@ -578,10 +585,11 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                             entry_price=entry_price,
                             stop_price=float(signal.stop_price),
                             target_price=float(signal.target_price_1 or entry_price * 1.20),
-                            order_ref=f"vcpilot-{signal.id}",
+                            order_ref=f"astratrade-{signal.id}",
                         )
                 else:
-                    # Submit bracket order via IBKR
+                    # Equity — submit a real bracket to the IBKR gateway (which is
+                    # itself in paper or live mode per the org's ibkr_paper_mode).
                     with IBKRBroker(organization_id=org.id) as broker:
                         result = broker.submit_bracket_order(
                             ticker=signal.ticker.replace(".AX", ""),
@@ -591,7 +599,7 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                             stop_price=float(signal.stop_price),
                             target_price=float(signal.target_price_1 or entry_price * 1.20),
                             exchange_key=signal.exchange_key or "ASX",
-                            order_ref=f"vcpilot-{signal.id}",
+                            order_ref=f"astratrade-{signal.id}",
                         )
 
                 # ── Handle broker error — log it and leave signal PENDING ───────

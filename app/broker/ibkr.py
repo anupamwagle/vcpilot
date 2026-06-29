@@ -396,18 +396,34 @@ class IBKRBroker:
             from datetime import datetime as _dt
             contract = self._build_contract(ticker, exchange_key)
             self._ib.qualifyContracts(contract)
+            import math
             # reqMktData with snapshot=True returns a Ticker object immediately
             ticker_data = self._ib.reqMktData(contract, "", True, False)
             self._ib.sleep(2)  # Wait for data to arrive
-            last  = ticker_data.last or ticker_data.close or None
-            bid   = ticker_data.bid  or None
-            ask   = ticker_data.ask  or None
-            vol   = ticker_data.volume or 0
-            if last:
+
+            def _num(x):
+                # IBKR returns float('nan') for unavailable fields (e.g. ASX
+                # outside market hours). NaN is truthy, so `x or 0` keeps it and
+                # int(nan) then raises "cannot convert float NaN to integer".
+                try:
+                    if x is None:
+                        return None
+                    f = float(x)
+                    return None if math.isnan(f) else f
+                except (TypeError, ValueError):
+                    return None
+
+            last = _num(ticker_data.last)
+            if last is None:
+                last = _num(ticker_data.close)
+            bid = _num(ticker_data.bid)
+            ask = _num(ticker_data.ask)
+            vol = _num(ticker_data.volume) or 0.0
+            if last is not None:
                 return {
-                    "last": float(last),
-                    "bid": float(bid) if bid else None,
-                    "ask": float(ask) if ask else None,
+                    "last": last,
+                    "bid": bid,
+                    "ask": ask,
                     "volume": int(vol),
                     "timestamp": _dt.utcnow(),
                 }
