@@ -520,4 +520,24 @@
 <div class="card p-4 mt-6" style="border-color:var(--neg)">
   <p class="text-sm font-bold mb-1" style="color:var(--neg)">⚠ Danger Zone</p>
   <p class="text-xs mb-3" style="color:var(--text-subtle)">
-    Soft-deleting sets the organisation to <strong>inactive</
+    Soft-deleting sets the organisation to <strong>inactive</strong> — it is excluded from all scheduled tasks and hidden from normal views, but its data is retained and can be reactivated at any time.
+  </p>
+  {% if organization.is_active %}
+  <form method="post" action="/superadmin/organizations/{{ organization.id }}/deactivate"
+        onsubmit="return confirm('Deactivate {{ organization.name }}? It will be excluded from all scheduled tasks until reactivated.');">
+    <button type="submit" class="text-xs"
+            style="background:var(--neg);color:#fff;border:none;padding:.4rem .9rem;border-radius:.3rem;font-weight:700;cursor:pointer">
+      Deactivate Organisation
+    </button>
+  </form>
+  {% else %}
+  <form method="post" action="/superadmin/organizations/{{ organization.id }}/reactivate">
+    <button type="submit" class="text-xs"
+            style="background:var(--pos);color:#fff;border:none;padding:.4rem .9rem;border-radius:.3rem;font-weight:700;cursor:pointer">
+      Reactivate Organisation
+    </button>
+  </form>
+  {% endif %}
+</div>
+
+{% endblock %}
