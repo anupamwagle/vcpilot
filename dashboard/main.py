@@ -98,46 +98,84 @@ def _redact_params(params: dict) -> dict:
     return out
 
 
-@app.middleware("http")
-async def activity_logger(request: Request, call_next):
-    method = request.method
-    path = request.url.path
-    capture = not _activity_should_skip(path)
+class ActivityLoggerMiddleware:
+    """
+    Pure-ASGI middleware that records user activity (feature access + changes)
+    into audit_logs. Implemented at the raw ASGI layer — NOT via @app.middleware
+    / BaseHTTPMiddleware — because reading & replaying the request body under
+    BaseHTTPMiddleware corrupts the receive stream ("Unexpected message received:
+    http.request"). Here we buffer the body and replay it cleanly, then defer to
+    the real receive for disconnect events.
+    """
 
-    # Safely read & replay urlencoded form bodies so route handlers still get them.
-    # Resetting request._receive is the canonical BaseHTTPMiddleware body pattern.
-    form_params = {}
-    if capture and method in ("POST", "PUT", "PATCH", "DELETE"):
-        ctype = request.headers.get("content-type", "")
-        if "application/x-www-form-urlencoded" in ctype:
-            try:
-                clen = int(request.headers.get("content-length") or 0)
-            except ValueError:
-                clen = 0
-            if 0 < clen <= 20000:
-                try:
-                    body = await request.body()
+    def __init__(self, app):
+        self.app = app
 
-                    async def _replay():
-                        return {"type": "http.request", "body": body, "more_body": False}
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
 
-                    request._receive = _replay
-                    form_params = {k: v for k, v in _parse_qs(body.decode("utf-8", "ignore")).items()}
-                except Exception:
-                    form_params = {}
+        path = scope.get("path", "")
+        method = scope.get("method", "GET")
+        if _activity_should_skip(path):
+            return await self.app(scope, receive, send)
 
-    response = await call_next(request)
-
-    if capture:
+        headers = {k.decode("latin1").lower(): v.decode("latin1")
+                   for k, v in scope.get("headers", [])}
+        ctype = headers.get("content-type", "")
         try:
-            _record_activity(request, response, method, path, form_params)
+            clen = int(headers.get("content-length") or 0)
+        except ValueError:
+            clen = 0
+
+        captured_body = b""
+        buffer_body = (
+            method in ("POST", "PUT", "PATCH", "DELETE")
+            and "application/x-www-form-urlencoded" in ctype
+            and 0 < clen <= 20000
+        )
+
+        inner_receive = receive
+        if buffer_body:
+            more = True
+            while more:
+                message = await receive()
+                if message["type"] == "http.request":
+                    captured_body += message.get("body", b"")
+                    more = message.get("more_body", False)
+                elif message["type"] == "http.disconnect":
+                    more = False
+
+            _sent = {"done": False}
+
+            async def replay_receive():
+                if not _sent["done"]:
+                    _sent["done"] = True
+                    return {"type": "http.request", "body": captured_body, "more_body": False}
+                return await receive()  # subsequent calls: real disconnect events
+
+            inner_receive = replay_receive
+
+        status_holder = {"code": None}
+
+        async def wrapped_send(message):
+            if message["type"] == "http.response.start":
+                status_holder["code"] = message.get("status")
+            await send(message)
+
+        await self.app(scope, inner_receive, wrapped_send)
+
+        try:
+            form_params = {}
+            if captured_body:
+                form_params = dict(_parse_qs(captured_body.decode("utf-8", "ignore")))
+            _record_activity_scope(scope, headers, status_holder["code"], method, path, form_params)
         except Exception as e:
-            logger.debug(f"activity_logger: record failed: {e}")
-    return response
+            logger.debug(f"activity logger record failed: {e}")
 
 
-def _record_activity(request: Request, response, method: str, path: str, form_params: dict):
-    sess = request.session
+def _record_activity_scope(scope, headers, status, method: str, path: str, form_params: dict):
+    sess = scope.get("session") or {}
     if not sess.get("authenticated"):
         return  # only log authenticated users
 
@@ -145,23 +183,23 @@ def _record_activity(request: Request, response, method: str, path: str, form_pa
     from app.models.audit import AuditLog, AuditAction
 
     # Source IP — honour reverse-proxy headers (Cloudflare / X-Forwarded-For).
-    ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-          or (request.client.host if request.client else None))
+    ip = headers.get("x-forwarded-for", "").split(",")[0].strip()
+    if not ip:
+        client = scope.get("client")
+        ip = client[0] if client else None
 
     is_change = method in ("POST", "PUT", "PATCH", "DELETE")
     feature = _activity_feature_for(path)
+
     params = {}
-    if request.query_params:
-        params.update(_redact_params(dict(request.query_params.multi_items())
-                                     if hasattr(request.query_params, "multi_items")
-                                     else dict(request.query_params)))
+    qs = scope.get("query_string", b"")
+    if qs:
+        params.update(_redact_params(dict(_parse_qs(qs.decode("utf-8", "ignore")))))
     if form_params:
         params.update(_redact_params(form_params))
 
-    status = getattr(response, "status_code", None)
     param_summary = ", ".join(f"{k}={v}" for k, v in list(params.items())[:8])
-    verb = method
-    msg = f"{verb} {path}" + (f" — {param_summary}" if param_summary else "")
+    msg = f"{method} {path}" + (f" — {param_summary}" if param_summary else "")
 
     db = SessionLocal()
     try:
@@ -182,6 +220,11 @@ def _record_activity(request: Request, response, method: str, path: str, form_pa
         logger.debug(f"_record_activity write failed: {e}")
     finally:
         db.close()
+
+
+# Register as the OUTERMOST middleware so request.session (set by SessionMiddleware
+# during the inner call) is populated by the time we log, post-response.
+app.add_middleware(ActivityLoggerMiddleware)
 
 
 # ---------------------------------------------------------------------------
