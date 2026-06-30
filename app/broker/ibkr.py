@@ -291,9 +291,16 @@ class IBKRBroker:
             # takeProfit=False, stopLoss=True) so the whole bracket transmits
             # ATOMICALLY when the last leg is placed. Forcing transmit=True on all
             # legs submits the parent naked first and can leave the bracket in a
-            # broken/rejected state. Only set orderRef + account here.
+            # broken/rejected state.
+            #
+            # TIF: ib_insync's bracket children default to GTC, but many IBKR
+            # accounts have an order preset that forces DAY — that TIF conflict
+            # makes the gateway CANCEL the legs (Error 10349). Set every leg to
+            # DAY explicitly so it matches the preset and isn't cancelled. (For
+            # GTC you must change the gateway's order preset, then set it here.)
             for order in bracket:
                 order.orderRef = order_ref
+                order.tif = "DAY"
                 if self.account:
                     order.account = self.account  # Routes to correct sub-account under FA
 
