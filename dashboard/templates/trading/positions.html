@@ -158,6 +158,67 @@ details.why-exit .why-det{display:block;font-size:.7rem;line-height:1.45;color:v
 {% set extra_params = "" %}
 {% include "components/exchange_tabs.html" %}
 
+<!-- IBKR Open Orders (live working orders on the broker, not yet filled) -->
+<div class="card overflow-hidden mb-6">
+  <div class="section-head" style="flex-wrap:wrap;gap:.5rem">
+    <div>
+      <p class="section-title">IBKR Open Orders</p>
+      <p class="text-xs" style="color:var(--text-subtle)">Live working orders on the broker (not yet filled). When an order fills it moves to Open Positions below.</p>
+    </div>
+    <button type="button" onclick="loadOpenOrders()" class="btn-admin text-xs" style="background:var(--surface-alt)">↻ Refresh</button>
+  </div>
+  <div id="open-orders-body" class="p-4 text-xs" style="color:var(--text-subtle)">Loading broker orders…</div>
+</div>
+
+<script>
+async function loadOpenOrders(){
+  const el = document.getElementById('open-orders-body');
+  if(!el) return;
+  try{
+    const r = await fetch('/positions/open-orders', {headers:{'Accept':'application/json'}});
+    const d = await r.json();
+    if(!d.connected){
+      el.innerHTML = '<span style="color:var(--warn)">⚠ IBKR gateway not connected'
+        + (d.error ? (' — ' + d.error) : '') + '. Working orders cannot be shown right now.</span>';
+      return;
+    }
+    if(!d.orders || !d.orders.length){
+      el.innerHTML = '<span style="color:var(--text-subtle)">No working orders on '
+        + (d.account || 'the account') + '. (Filled orders appear under Open Positions.)</span>';
+      return;
+    }
+    const rows = d.orders.map(function(o){
+      const px = (o.order_type === 'STP')
+        ? ('stop ' + (o.stop_price != null ? o.stop_price : ''))
+        : (o.limit_price != null ? ('@ ' + o.limit_price) : '');
+      const s = (o.status || '');
+      const col = s.toLowerCase().indexOf('cancel') > -1 ? 'var(--neg)'
+                : (s === 'Filled' ? 'var(--pos)' : 'var(--text)');
+      return '<tr class="tbl-row border-b last:border-0" style="border-color:var(--border)">'
+        + '<td class="p-2 font-mono">' + o.ticker + '</td>'
+        + '<td class="p-2">' + o.action + '</td>'
+        + '<td class="p-2 text-right">' + o.qty + '</td>'
+        + '<td class="p-2">' + o.order_type + ' ' + px + '</td>'
+        + '<td class="p-2">' + (o.tif || '') + '</td>'
+        + '<td class="p-2" style="color:' + col + '">' + s
+          + (o.remaining ? (' (' + o.remaining + ' left)') : '') + '</td>'
+        + '</tr>';
+    }).join('');
+    el.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-left text-xs">'
+      + '<thead><tr style="background:var(--surface-alt)">'
+      + '<th class="p-2">Ticker</th><th class="p-2">Side</th><th class="p-2 text-right">Qty</th>'
+      + '<th class="p-2">Type</th><th class="p-2">TIF</th><th class="p-2">Status</th>'
+      + '</tr></thead><tbody>' + rows + '</tbody></table></div>'
+      + '<p class="text-xs mt-2" style="color:var(--text-subtle)">Account ' + (d.account || '—')
+      + ' · ' + d.orders.length + ' working order(s)</p>';
+  }catch(e){
+    el.innerHTML = '<span style="color:var(--neg)">Failed to load broker orders.</span>';
+  }
+}
+loadOpenOrders();
+setInterval(loadOpenOrders, 20000);
+</script>
+
 <!-- Open Positions -->
 <div class="card overflow-hidden mb-6">
   <div class="section-head" style="flex-wrap:wrap;gap:.5rem">

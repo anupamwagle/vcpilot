@@ -1684,6 +1684,44 @@ async def positions(request: Request, db: Session = Depends(get_db),
     return templates.TemplateResponse("trading/positions.html", ctx)
 
 
+@app.get("/positions/open-orders")
+async def positions_open_orders(request: Request):
+    """Live IBKR working/open orders for the org's account, as JSON.
+
+    Polled by the Open Orders panel on the Positions page. The IBKR call is
+    synchronous ib_insync, which can't run inside the API's event loop, so we
+    run it in a worker thread (it gets its own loop via IBKRBroker.connect()).
+    """
+    import asyncio
+    from fastapi.responses import JSONResponse
+    if not _auth(request):
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    org_id = request.session.get("organization_id")
+
+    def _fetch():
+        from app.broker.ibkr import IBKRBroker
+        try:
+            with IBKRBroker(organization_id=org_id) as b:
+                if not b.is_connected:
+                    return {"connected": False, "account": b.account, "orders": []}
+                orders = b.get_open_orders()
+                acct = (b.account or "").strip()
+                # Scope to this org's account when the gateway exposes multiple.
+                if acct:
+                    orders = [o for o in orders if not o.get("account") or o.get("account") == acct]
+                return {"connected": True, "account": acct, "orders": orders}
+        except Exception as e:
+            return {"connected": False, "error": str(e)[:200], "orders": []}
+
+    try:
+        data = await asyncio.to_thread(_fetch)
+    except Exception as e:
+        from loguru import logger
+        logger.debug(f"open-orders fetch failed: {e}")
+        data = {"connected": False, "error": str(e)[:200], "orders": []}
+    return JSONResponse(data)
+
+
 def _enrich_rule_results(ticker: str, rule_results_dict: dict, db_session, target_date=None, overrides=None, _bar_data: dict | None = None) -> list[dict]:
     """
     Enrich rule results with actual values from the price bar on the given date (or latest).

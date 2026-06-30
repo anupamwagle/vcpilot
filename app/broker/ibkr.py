@@ -401,21 +401,44 @@ class IBKRBroker:
             return []
 
     def get_open_orders(self) -> list[dict]:
-        """Fetch open orders on IBKR."""
+        """Fetch ALL open/working orders on the account.
+
+        Uses reqAllOpenOrders() so orders placed by ANY client id (and via TWS)
+        are returned — openTrades() alone only sees the current connection's
+        client id, which would miss orders placed by other workers.
+        """
         if not self.is_connected:
             return []
         try:
+            try:
+                self._ib.reqAllOpenOrders()
+                self._ib.sleep(1.5)
+            except Exception:
+                pass
             trades = self._ib.openTrades()
-            return [
-                {
-                    "ibkr_order_id": t.order.orderId,
-                    "ticker": t.contract.symbol,
-                    "action": t.order.action,
-                    "qty": t.order.totalQuantity,
-                    "status": t.orderStatus.status,
-                }
-                for t in trades
-            ]
+            out = []
+            for t in trades:
+                o, st = t.order, t.orderStatus
+                lmt = getattr(o, "lmtPrice", 0) or 0
+                aux = getattr(o, "auxPrice", 0) or 0
+                out.append({
+                    "ibkr_order_id": o.orderId,
+                    "perm_id":       getattr(o, "permId", None),
+                    "ticker":        t.contract.symbol,
+                    "exchange":      getattr(t.contract, "primaryExchange", "") or getattr(t.contract, "exchange", ""),
+                    "currency":      getattr(t.contract, "currency", ""),
+                    "action":        o.action,
+                    "qty":           float(o.totalQuantity or 0),
+                    "order_type":    o.orderType,
+                    "limit_price":   float(lmt) if lmt else None,
+                    "stop_price":    float(aux) if aux else None,
+                    "tif":           getattr(o, "tif", "") or "",
+                    "status":        st.status,
+                    "filled":        float(st.filled or 0),
+                    "remaining":     float(st.remaining or 0),
+                    "order_ref":     getattr(o, "orderRef", "") or "",
+                })
+            return out
         except Exception as e:
             logger.error(f"Orders fetch failed: {e}")
             return []
