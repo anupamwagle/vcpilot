@@ -244,10 +244,13 @@ class IBKRBroker:
         # Strip any yfinance suffix
         symbol = ticker.replace(".AX", "").replace("-USD", "").upper()
 
+        # Use SMART routing (not direct exchange routing). Direct-routing to
+        # "ASX" trips IBKR's API precaution (Error 10311) which DISCARDS the
+        # order. SMART + primaryExchange gives best execution and avoids it.
         if exchange_key == "ASX":
-            return Stock(symbol, "ASX", "AUD")
+            return Stock(symbol, "SMART", "AUD", primaryExchange="ASX")
         elif exchange_key in ("NYSE", "NASDAQ"):
-            return Stock(symbol, "SMART", "USD")
+            return Stock(symbol, "SMART", "USD", primaryExchange=exchange_key)
         else:
             logger.warning(f"Unknown exchange_key '{exchange_key}' for IBKR — using SMART/USD")
             return Stock(symbol, "SMART", "USD")
