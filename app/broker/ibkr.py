@@ -405,29 +405,14 @@ class IBKRBroker:
         are returned — openTrades() alone only sees the current connection's
         client id, which would miss orders placed by other workers.
 
-        Waits for the openOrderEnd event (with a 4-second timeout) instead of
-        a blind sleep so we don't return before the gateway has pushed all orders.
+        sleep() pumps the ib_insync event loop so all inbound openOrder messages
+        from the gateway are processed before openTrades() is called.
         """
         if not self.is_connected:
             return []
         try:
-            # Subscribe to openOrderEnd to know when the gateway is done sending.
-            _done = []
-            def _on_end():
-                _done.append(True)
-            self._ib.openOrderEndEvent += _on_end
-            try:
-                self._ib.reqAllOpenOrders()
-                # Wait up to 4 seconds for the gateway to finish pushing orders.
-                waited = 0.0
-                while not _done and waited < 4.0:
-                    self._ib.sleep(0.2)
-                    waited += 0.2
-                if not _done:
-                    logger.debug("get_open_orders: openOrderEnd not received within 4s — using cached trades")
-            finally:
-                self._ib.openOrderEndEvent -= _on_end
-
+            self._ib.reqAllOpenOrders()
+            self._ib.sleep(3)   # pump loop; gateway sends openOrder* then openOrderEnd
             trades = self._ib.openTrades()
             out = []
             for t in trades:
@@ -455,6 +440,7 @@ class IBKRBroker:
         except Exception as e:
             logger.error(f"Orders fetch failed: {e}")
             return []
+
 
 
     def get_market_snapshot(self, ticker: str, exchange_key: str = "ASX") -> Optional[dict]:
