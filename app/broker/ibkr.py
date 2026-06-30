@@ -404,15 +404,30 @@ class IBKRBroker:
         Uses reqAllOpenOrders() so orders placed by ANY client id (and via TWS)
         are returned — openTrades() alone only sees the current connection's
         client id, which would miss orders placed by other workers.
+
+        Waits for the openOrderEnd event (with a 4-second timeout) instead of
+        a blind sleep so we don't return before the gateway has pushed all orders.
         """
         if not self.is_connected:
             return []
         try:
+            # Subscribe to openOrderEnd to know when the gateway is done sending.
+            _done = []
+            def _on_end():
+                _done.append(True)
+            self._ib.openOrderEndEvent += _on_end
             try:
                 self._ib.reqAllOpenOrders()
-                self._ib.sleep(1.5)
-            except Exception:
-                pass
+                # Wait up to 4 seconds for the gateway to finish pushing orders.
+                waited = 0.0
+                while not _done and waited < 4.0:
+                    self._ib.sleep(0.2)
+                    waited += 0.2
+                if not _done:
+                    logger.debug("get_open_orders: openOrderEnd not received within 4s — using cached trades")
+            finally:
+                self._ib.openOrderEndEvent -= _on_end
+
             trades = self._ib.openTrades()
             out = []
             for t in trades:
@@ -440,6 +455,7 @@ class IBKRBroker:
         except Exception as e:
             logger.error(f"Orders fetch failed: {e}")
             return []
+
 
     def get_market_snapshot(self, ticker: str, exchange_key: str = "ASX") -> Optional[dict]:
         """
