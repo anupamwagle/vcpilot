@@ -163,7 +163,7 @@ details.why-exit .why-det{display:block;font-size:.7rem;line-height:1.45;color:v
   <div class="section-head" style="flex-wrap:wrap;gap:.5rem">
     <div>
       <p class="section-title">IBKR Open Orders</p>
-      <p class="text-xs" style="color:var(--text-subtle)">Live working orders on the broker (not yet filled). When an order fills it moves to Open Positions below.</p>
+      <p class="text-xs" style="color:var(--text-subtle)">Live working orders on the broker (includes unfilled entry orders, active stop losses, and take profits).</p>
     </div>
     <button type="button" onclick="loadOpenOrders()" class="btn-admin text-xs" style="background:var(--surface-alt)">↻ Refresh</button>
   </div>
@@ -194,6 +194,9 @@ async function loadOpenOrders(){
       const s = (o.status || '');
       const col = s.toLowerCase().indexOf('cancel') > -1 ? 'var(--neg)'
                 : (s === 'Filled' ? 'var(--pos)' : 'var(--text)');
+      
+      const cancelBtn = `<button onclick="cancelOpenOrder(${o.ibkr_order_id})" title="Cancel this order" class="ml-2 hover:bg-white/10 rounded px-1 transition-colors" style="color:var(--neg)">✕</button>`;
+
       return '<tr class="tbl-row border-b last:border-0" style="border-color:var(--border)">'
         + '<td class="p-2 font-mono">' + o.ticker + '</td>'
         + '<td class="p-2">' + o.action + '</td>'
@@ -201,7 +204,9 @@ async function loadOpenOrders(){
         + '<td class="p-2">' + o.order_type + ' ' + px + '</td>'
         + '<td class="p-2">' + (o.tif || '') + '</td>'
         + '<td class="p-2" style="color:' + col + '">' + s
-          + (o.remaining ? (' (' + o.remaining + ' left)') : '') + '</td>'
+          + (o.remaining ? (' (' + o.remaining + ' left)') : '') 
+          + (s !== 'Filled' && s.indexOf('Cancel') === -1 ? cancelBtn : '')
+          + '</td>'
         + '</tr>';
     }).join('');
     el.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-left text-xs">'
@@ -215,8 +220,30 @@ async function loadOpenOrders(){
     el.innerHTML = '<span style="color:var(--neg)">Failed to load broker orders.</span>';
   }
 }
+}
 loadOpenOrders();
 setInterval(loadOpenOrders, 20000);
+
+async function cancelOpenOrder(orderId) {
+  if (!confirm("Are you sure you want to cancel this order on IBKR?")) return;
+  try {
+    const res = await fetch(`/positions/open-orders/${orderId}/cancel`, {
+      method: "POST",
+      headers: { "Accept": "application/json" }
+    });
+    const d = await res.json();
+    if (res.ok && d.status === "success") {
+      // Reload the UI immediately to reflect the change
+      loadOpenOrders();
+      // If there's a loadPositions func, reload positions too in case we deleted a phantom position
+      if (typeof window.location.reload === "function") window.location.reload();
+    } else {
+      alert("Failed to cancel: " + (d.error || "Unknown error"));
+    }
+  } catch (err) {
+    alert("Request failed: " + err);
+  }
+}
 </script>
 
 <!-- Open Positions -->

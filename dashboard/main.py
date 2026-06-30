@@ -1731,6 +1731,73 @@ async def positions_open_orders(request: Request):
     return JSONResponse(data)
 
 
+@app.post("/positions/open-orders/{ibkr_order_id}/cancel")
+async def cancel_open_order(ibkr_order_id: int, request: Request, db: Session = Depends(get_db)):
+    """Cancel an active order on IBKR and sync DB if it was an entry order."""
+    import asyncio
+    from fastapi.responses import JSONResponse
+    if not _auth(request):
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    
+    org_id = request.session.get("organization_id")
+    
+    def _do_cancel():
+        # Setup event loop for ib_insync worker thread
+        import asyncio as _asyncio
+        try:
+            _asyncio.get_running_loop()
+        except RuntimeError:
+            _asyncio.set_event_loop(_asyncio.new_event_loop())
+
+        from app.broker.ibkr import IBKRBroker
+        with IBKRBroker(organization_id=org_id) as b:
+            if not b.is_connected:
+                return False, "Not connected to IBKR"
+            success = b.cancel_order(ibkr_order_id)
+            if success:
+                # Pump event loop so gateway processes cancellation
+                b._ib.sleep(1)
+            return success, ""
+            
+    try:
+        success, error = await asyncio.to_thread(_do_cancel)
+        if not success:
+            return JSONResponse({"error": error or "Could not cancel order on broker"}, status_code=400)
+            
+        # Sync DB: If this was the parent entry order, wipe the Phantom Position
+        from app.models.trade import Order, OrderStatus, Position
+        from app.models.signal import Signal, SignalStatus
+        order = db.query(Order).filter(Order.ibkr_order_id == ibkr_order_id, Order.organization_id == org_id).first()
+        if order and order.status == OrderStatus.SUBMITTED:
+            order.status = OrderStatus.CANCELLED
+            
+            # Find and delete the linked phantom position
+            pos = db.query(Position).filter(
+                Position.ticker == order.ticker,
+                Position.organization_id == org_id,
+                Position.status == "OPEN"
+            ).first()
+            if pos:
+                db.delete(pos)
+                
+            # Revert the signal back to PENDING
+            sig = db.query(Signal).filter(
+                Signal.ticker == order.ticker,
+                Signal.organization_id == org_id,
+                Signal.status == SignalStatus.TRIGGERED
+            ).order_by(Signal.id.desc()).first()
+            if sig:
+                sig.status = SignalStatus.PENDING
+                
+            db.commit()
+            
+        return JSONResponse({"status": "success"})
+    except Exception as e:
+        from loguru import logger
+        logger.error(f"Failed to cancel order {ibkr_order_id}: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 def _enrich_rule_results(ticker: str, rule_results_dict: dict, db_session, target_date=None, overrides=None, _bar_data: dict | None = None) -> list[dict]:
     """
     Enrich rule results with actual values from the price bar on the given date (or latest).
