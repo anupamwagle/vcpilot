@@ -96,23 +96,21 @@ class IBKRBroker:
             self.last_error = f"in {remaining}s connection cooldown after a recent failure"
             return False
 
-        # Celery prefork workers inherit a (often closed/stale) asyncio event
-        # loop from the parent process. ib_insync drives the API handshake on
-        # that loop, so a broken loop means the inbound bytes are never pumped
-        # and connect() hangs until TimeoutError — with nothing logged on the
-        # gateway side. When we're NOT already inside a running loop (i.e. the
-        # Celery worker, not uvicorn), install a fresh loop for this connection.
+        # ib_insync drives the API handshake on an asyncio event loop. When
+        # called from a thread (asyncio.to_thread / Celery prefork worker),
+        # there is no running loop in that thread. Python 3.10+ raises
+        # RuntimeError from get_event_loop() in non-main threads when no loop
+        # is set, so we must always install a fresh one in that case.
         import asyncio
         try:
-            asyncio.get_running_loop()  # raises if no loop is running (worker case)
+            asyncio.get_running_loop()  # succeeds only inside async context
         except RuntimeError:
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_closed():
-                    raise RuntimeError
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+            # No running loop in this thread — install a fresh one.
+            # Don't call get_event_loop() here: on Python 3.10+ it raises
+            # "There is no current event loop in thread 'asyncio_0'" for
+            # non-main threads, which is exactly the error we're seeing.
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
         try:
             from ib_insync import util
