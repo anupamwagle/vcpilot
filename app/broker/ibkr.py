@@ -460,7 +460,7 @@ class IBKRBroker:
             return []
         try:
             self._ib.reqAllOpenOrders()
-            self._ib.sleep(3)   # pump loop; gateway sends openOrder* then openOrderEnd
+            self._ib.sleep(0.5)   # pump loop; gateway sends openOrder* then openOrderEnd
             trades = self._ib.openTrades()
             out = []
             for t in trades:

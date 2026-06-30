@@ -279,11 +279,42 @@ def check_breakout(
     # -------------------------------------------------------------------------
     rule_id = "vcp_breakout_volume"
     if engine.is_enabled(rule_id):
+        projected_vol = today_vol
+        try:
+            from datetime import datetime
+            import pytz
+            
+            is_crypto = ticker.endswith("-USD") or ticker.endswith("-USDT") or ticker.endswith("-AUD")
+            if not is_crypto:
+                if ticker.endswith(".AX"):
+                    tz = pytz.timezone("Australia/Sydney")
+                    open_h, open_m = 10, 0
+                    close_h, close_m = 16, 12
+                else:
+                    tz = pytz.timezone("America/New_York")
+                    open_h, open_m = 9, 30
+                    close_h, close_m = 16, 0
+
+                now = datetime.now(tz)
+                open_mins = open_h * 60 + open_m
+                close_mins = close_h * 60 + close_m
+                current_mins = now.hour * 60 + now.minute
+                
+                if open_mins < current_mins < close_mins:
+                    elapsed_mins = current_mins - open_mins
+                    total_mins = close_mins - open_mins
+                    # linearly project volume for the remainder of the day
+                    projected_vol = today_vol * (total_mins / max(1, elapsed_mins))
+        except Exception:
+            pass
+
         threshold = float(engine.threshold(rule_id) or 150.0)
-        vol_ratio = (today_vol / avg_vol_50 * 100) if avg_vol_50 > 0 else 0
+        vol_ratio = (projected_vol / avg_vol_50 * 100) if avg_vol_50 > 0 else 0
         passed = vol_ratio >= threshold
+        
+        lbl = "Projected Vol" if projected_vol > today_vol else "Volume"
         rule_results[rule_id] = RuleResult(rule_id, passed, round(vol_ratio, 1), threshold,
-            f"Volume {vol_ratio:.0f}% of avg (min {threshold}%)")
+            f"{lbl} {vol_ratio:.0f}% of avg (min {threshold}%)")
 
     return rule_results
 

@@ -220,7 +220,6 @@ async function loadOpenOrders(){
     el.innerHTML = '<span style="color:var(--neg)">Failed to load broker orders.</span>';
   }
 }
-}
 loadOpenOrders();
 setInterval(loadOpenOrders, 20000);
 
