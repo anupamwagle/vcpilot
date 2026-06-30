@@ -5553,7 +5553,7 @@ async def admin_tasks(request: Request, db: Session = Depends(get_db)):
         "last_log_id":     last_id,
         "stock_count":     db.query(func.count(Stock.id)).scalar() or 0,
         "price_bar_count": db.query(func.count(PriceBar.id)).scalar() or 0,
-        "signal_count":    db.query(func.count(Signal.id)).filter(Signal.signal_date == get_current_date(), Signal.organization_id == org_id).scalar() or 0,
+        "signal_count_today":    db.query(func.count(Signal.id)).filter(Signal.signal_date == get_current_date(), Signal.organization_id == org_id).scalar() or 0,
         "watchlist_count": db.query(func.count(Watchlist.id)).filter(Watchlist.status == WatchlistStatus.WATCHING, Watchlist.organization_id == org_id).scalar() or 0,
         "exchange_filters": _get_exchange_filters(org_id, db),
     })
