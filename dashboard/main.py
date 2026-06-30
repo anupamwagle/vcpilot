@@ -1054,13 +1054,14 @@ async def home(
     pos_q = db.query(Position).filter(Position.status == TradeStatus.OPEN, Position.organization_id == org_id)
     positions = pos_q.all()
 
-    # Signals (Show today's signals OR active pending signals)
+    # Signals (Show today's signals OR active pending signals, excluding triggered)
     from sqlalchemy import or_
     sig_q = db.query(Signal).filter(
         or_(
             Signal.signal_date == get_current_date(),
             Signal.status == SignalStatus.PENDING
         ),
+        Signal.status != SignalStatus.TRIGGERED,
         Signal.organization_id == org_id
     )
     signals = sig_q.all()
