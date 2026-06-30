@@ -253,6 +253,25 @@ class IBKRBroker:
             logger.warning(f"Unknown exchange_key '{exchange_key}' for IBKR — using SMART/USD")
             return Stock(symbol, "SMART", "USD")
 
+    def _round_to_tick(self, price: float, exchange_key: str) -> float:
+        """
+        Round a price to the exchange's minimum price variation (tick size)
+        to prevent IBKR API Error 110.
+        """
+        if exchange_key == "ASX":
+            if price < 0.10:
+                tick = 0.001
+            elif price < 2.00:
+                tick = 0.005
+            else:
+                tick = 0.01
+        else: # US stocks (NYSE/NASDAQ/etc)
+            if price < 1.00:
+                tick = 0.0001
+            else:
+                tick = 0.01
+        return round(round(price / tick) * tick, 4)
+
     def submit_bracket_order(
         self,
         ticker: str,             # yfinance format: "BHP.AX", "AAPL"
@@ -280,12 +299,16 @@ class IBKRBroker:
                 logger.error(f"Bracket order failed: {msg}")
                 return {"status": "error", "error": msg, "ticker": ticker}
 
+            e_price = self._round_to_tick(entry_price, exchange_key)
+            t_price = self._round_to_tick(target_price, exchange_key)
+            s_price = self._round_to_tick(stop_price, exchange_key)
+
             bracket = self._ib.bracketOrder(
                 action,
                 qty,
-                limitPrice=round(entry_price, 3),
-                takeProfitPrice=round(target_price, 3),
-                stopLossPrice=round(stop_price, 3),
+                limitPrice=e_price,
+                takeProfitPrice=t_price,
+                stopLossPrice=s_price,
             )
 
             # IMPORTANT: keep ib_insync's transmit flags (parent=False,
@@ -321,8 +344,8 @@ class IBKRBroker:
             pstatus = parent.orderStatus.status
             statuses = [(t.order.orderType, t.orderStatus.status) for t in trades]
             logger.info(
-                f"Bracket {ticker} {action} {qty} @ {entry_price:.3f} "
-                f"stop={stop_price:.3f} target={target_price:.3f} → {statuses} "
+                f"Bracket {ticker} {action} {qty} @ {e_price:.3f} "
+                f"stop={s_price:.3f} target={t_price:.3f} → {statuses} "
                 f"(waited {waited:.1f}s for stable status)"
             )
 
