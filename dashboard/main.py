@@ -1699,8 +1699,17 @@ async def positions_open_orders(request: Request):
     org_id = request.session.get("organization_id")
 
     def _fetch():
-        from app.broker.ibkr import IBKRBroker
+        # asyncio.to_thread() worker threads have no event loop on Python 3.10+.
+        # ib_insync needs one for the API handshake, so we install a fresh loop
+        # before anything else touches asyncio (including ib_insync imports).
+        import asyncio as _asyncio
         try:
+            _asyncio.get_running_loop()
+        except RuntimeError:
+            _asyncio.set_event_loop(_asyncio.new_event_loop())
+
+        try:
+            from app.broker.ibkr import IBKRBroker
             with IBKRBroker(organization_id=org_id) as b:
                 if not b.is_connected:
                     return {"connected": False, "account": b.account, "orders": []}
