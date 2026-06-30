@@ -233,6 +233,7 @@ services:
       TRADING_MODE: ${IBKR_PAPER_MODE:-paper}
       TWS_SETTINGS_PATH: /home/ibgateway/Jts
       READ_ONLY_API: "no"
+      BYPASS_WARNING: "yes"
       VNC_SERVER_PASSWORD: changeme
     ports:
       - "4001:4001"
