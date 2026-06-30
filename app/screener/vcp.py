@@ -208,6 +208,45 @@ def detect_vcp(
     return vcp, rule_results
 
 
+def resolve_watchlist_geometry(vcp_result, *, close=0.0, high_52w=0.0, atr_14=0.0) -> dict:
+    """
+    Single source of truth for a watchlist item's displayed VCP geometry
+    (pivot / stop / target / contractions / base weeks).
+
+    When `detect_vcp` produced a real pivot we use it directly; otherwise we apply
+    the same fallback the dashboard historically computed inline: pivot = 52-week
+    high (or last close), stop = pivot − 2·ATR (or −8%), target = pivot · 1.20.
+
+    Pure function — no DB / network — so it can run in the screener (to persist the
+    result on the Watchlist row) and in the dashboard (lazy fallback) identically.
+    Returns a dict with the 5 geometry keys (values may be None when no price data).
+    """
+    pivot = float(vcp_result.pivot_price) if (vcp_result and vcp_result.pivot_price) else 0.0
+    stop = float(vcp_result.stop_price) if (vcp_result and vcp_result.stop_price) else 0.0
+    contractions = int(vcp_result.contraction_count) if vcp_result else 0
+    base_weeks = int(vcp_result.base_weeks) if vcp_result else 0
+
+    if not pivot:
+        high_52w = float(high_52w or 0)
+        close = float(close or 0)
+        pivot = high_52w if high_52w > 0 else close
+        atr = float(atr_14 or 0)
+        stop = (pivot - 2 * atr) if atr > 0 else pivot * 0.92
+        if stop <= 0 or stop >= pivot:
+            stop = pivot * 0.92
+        contractions = 0
+        base_weeks = 0
+
+    target = pivot * 1.20 if pivot else None
+    return {
+        "pivot_price": pivot or None,
+        "stop_price": stop or None,
+        "target_price": target,
+        "vcp_contractions": contractions,
+        "vcp_base_weeks": base_weeks,
+    }
+
+
 def check_breakout(
     ticker: str,
     df: pd.DataFrame,

@@ -1037,7 +1037,7 @@ def run_daily_screen(self, exchange_key: str = "ASX"):
                     vcp_result, vcp_rules = detect_vcp(ticker, df, ticker_engine, avg_vol)
                     if not vcp_result.detected:
                         with get_db() as db:
-                            _upsert_watchlist(ticker, {**trend_results, **fund_results, **vcp_rules}, db, organization_id=org.id)
+                            _upsert_watchlist(ticker, {**trend_results, **fund_results, **vcp_rules}, db, organization_id=org.id, vcp_result=vcp_result)
                         watchlist_added += 1
                         continue
 
@@ -1534,7 +1534,7 @@ def _run_screen_force(self, organization_id: int = None, exchange_key: str = "AS
                                 # Trend + fundamentals pass but no VCP / crypto gate → watchlist
                                 reason = f"VCP not detected ({vcp_result.contraction_count or 0} contractions)" if not vcp_result.detected else f"Crypto rules failed ({crypto_passed}/{crypto_total})"
                                 with get_db() as db:
-                                    _upsert_watchlist(ticker, {**trend_results, **fund_results, **vcp_rules, **crypto_rule_results}, db, organization_id=org.id)
+                                    _upsert_watchlist(ticker, {**trend_results, **fund_results, **vcp_rules, **crypto_rule_results}, db, organization_id=org.id, vcp_result=vcp_result)
                                     db.add(AuditLog(
                                         action=AuditAction.SCREENER_TICKER,
                                         organization_id=org.id,
@@ -1754,8 +1754,43 @@ def _auto_assign_sector_label(ticker: str, wl_item, organization_id: int, db, fo
         wl_item.label_id = label_id
 
 
-def _upsert_watchlist(ticker: str, rule_results: dict, db, organization_id: int):
-    """Add or update a stock on the watchlist."""
+def _watchlist_geometry_fields(ticker: str, vcp_result, db) -> dict:
+    """
+    Resolve persisted VCP geometry for a watchlist row from `vcp_result` plus the
+    latest PriceBar (for the fallback pivot/stop and the freshness date). Returns a
+    dict of column values ready to splat onto a Watchlist row, or {} when there is
+    no price data / no vcp_result to persist.
+    """
+    if vcp_result is None:
+        return {}
+    from app.models.market import PriceBar
+    from app.screener.vcp import resolve_watchlist_geometry
+
+    bar = (
+        db.query(PriceBar)
+        .filter(PriceBar.ticker == ticker)
+        .order_by(PriceBar.date.desc())
+        .first()
+    )
+    if not bar:
+        return {}
+    geo = resolve_watchlist_geometry(
+        vcp_result,
+        close=float(bar.close or 0),
+        high_52w=float(bar.high_52w or 0),
+        atr_14=float(bar.atr_14 or 0),
+    )
+    geo["vcp_computed_date"] = bar.date
+    return geo
+
+
+def _upsert_watchlist(ticker: str, rule_results: dict, db, organization_id: int, vcp_result=None):
+    """Add or update a stock on the watchlist.
+
+    When `vcp_result` is supplied (the screener already ran detect_vcp for this
+    ticker), the resolved VCP geometry is persisted on the row so the dashboard can
+    render pivot/stop/target without recomputing.
+    """
     from app.models.signal import Watchlist, WatchlistStatus
     from app.models.market import Stock
 
@@ -1764,6 +1799,8 @@ def _upsert_watchlist(ticker: str, rule_results: dict, db, organization_id: int)
     exchange_key = stock.exchange_key if stock else "ASX"
     asset_type = stock.asset_type if stock else "EQUITY"
     currency = stock.currency if stock else "AUD"
+
+    geo = _watchlist_geometry_fields(ticker, vcp_result, db)
 
     existing = db.query(Watchlist).filter(
         Watchlist.ticker == ticker,
@@ -1779,6 +1816,7 @@ def _upsert_watchlist(ticker: str, rule_results: dict, db, organization_id: int)
             organization_id=organization_id,
             rule_results=serialize_rule_results(rule_results),
             added_by="screener",
+            **geo,
         )
         db.add(new_item)
         db.flush()  # so new_item.id is populated
@@ -1789,6 +1827,8 @@ def _upsert_watchlist(ticker: str, rule_results: dict, db, organization_id: int)
         existing.exchange_key = exchange_key
         existing.asset_type = asset_type
         existing.currency = currency
+        for _k, _v in geo.items():
+            setattr(existing, _k, _v)
         # Assign sector label if not already set
         _auto_assign_sector_label(ticker, existing, organization_id, db)
 

@@ -393,6 +393,24 @@ def migrate():
             """))
             conn.commit()
 
+        # Add precomputed VCP-geometry columns to watchlist (performance) if missing
+        for _wl_col, _wl_type in [
+            ("pivot_price", "NUMERIC(12, 4)"),
+            ("stop_price", "NUMERIC(12, 4)"),
+            ("target_price", "NUMERIC(12, 4)"),
+            ("vcp_contractions", "INTEGER"),
+            ("vcp_base_weeks", "INTEGER"),
+            ("vcp_computed_date", "DATE"),
+        ]:
+            _exists = conn.execute(text(f"""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'watchlist' AND column_name = '{_wl_col}';
+            """)).fetchone()
+            if not _exists:
+                logger.info(f"Adding '{_wl_col}' column to 'watchlist'...")
+                conn.execute(text(f"ALTER TABLE watchlist ADD COLUMN {_wl_col} {_wl_type};"))
+                conn.commit()
+
         # Add rule_overrides column to signals if missing
         sig_ovr_col = conn.execute(text("""
             SELECT column_name FROM information_schema.columns

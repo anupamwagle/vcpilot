@@ -2709,24 +2709,30 @@ async def signal_toggle_rule(
 
 def _enrich_watchlist_vcp_and_sizing(items: list[dict], db, org_id: int):
     """
-    Enriches a list of watchlist items with pivot price, stop loss, target, contractions,
-    base weeks, suggested size, and risk in AUD. Runs in-memory VCP detection and
-    sizing using PriceBar records.
+    Fills each watchlist item dict with pivot/stop/target/contractions/weeks/size/risk.
+
+    Fast path: most rows already carry VCP geometry persisted by the screener
+    (keyed by the last bar date). When that geometry is fresh — its `computed_date`
+    matches the latest price bar — it is used directly: no price history is loaded
+    and detect_vcp is NOT run; only the cheap position sizing is computed live.
+    Rows with missing/stale geometry are computed once here, cached in Redis
+    (key = ticker + bar_date) and written back to the row so the next load is fast
+    too. RuleEngine is built once per asset_type instead of once per row.
+
+    Each item may carry these internal keys (set by the watchlist route):
+      _wl_id, _persisted {pivot,stop,target,contractions,weeks,computed_date},
+      _latest_bar_date. They are stripped from the dict before returning.
     """
-    from app.models.market import PriceBar
     from app.models.account import Organization, Account
     from app.models.config import SystemConfig
     from app.screener.rules import RuleEngine
-    from app.screener.vcp import detect_vcp
     from app.risk.manager import calculate_position_size
-    import pandas as pd
-    import collections
     from loguru import logger
+    from datetime import timedelta
 
     if not items:
         return
 
-    # Load organization and account parameters
     org = db.query(Organization).filter(Organization.id == org_id).first()
     tier = org.tier.value if org else "GOLD"
 
@@ -2742,115 +2748,155 @@ def _enrich_watchlist_vcp_and_sizing(items: list[dict], db, org_id: int):
     ).first()
     base_currency = currency_cfg.value if currency_cfg else "AUD"
 
-    # Query price history for all tickers in one query
-    tickers = [w["ticker"] for w in items]
-    _all_history = (
-        db.query(PriceBar)
-        .filter(PriceBar.ticker.in_(tickers))
-        .order_by(PriceBar.date.asc())
-        .all()
-    )
-    bars_by_ticker = collections.defaultdict(list)
-    for b in _all_history:
-        bars_by_ticker[b.ticker].append(b)
+    # One RuleEngine per asset_type (was previously rebuilt for every row).
+    _engines: dict = {}
+    def _engine_for(asset_type):
+        e = _engines.get(asset_type)
+        if e is None:
+            e = RuleEngine(organization_id=org_id, tier=tier, asset_type=asset_type)
+            _engines[asset_type] = e
+        return e
 
+    def _currency_for(w):
+        c = w.get("currency")
+        if c:
+            return c
+        ex = w.get("exchange_key", "ASX")
+        return "AUD" if ex in ("ASX", "CRYPTO_INDEPENDENTRESERVE") else "USD"
+
+    # ── Pass 1: resolve geometry from persisted columns or Redis ──────────────
+    _need_compute = []
     for w in items:
-        ticker = w["ticker"]
-        asset_type = w["asset_type"]
-        exchange_key = w["exchange_key"]
-        
-        # Determine native currency
-        currency = w.get("currency")
-        if not currency:
-            if exchange_key == "ASX":
-                currency = "AUD"
-            elif exchange_key == "CRYPTO_INDEPENDENTRESERVE":
-                currency = "AUD"
+        p = w.get("_persisted") or {}
+        latest = w.get("_latest_bar_date")
+        fresh = (
+            p.get("pivot") is not None
+            and p.get("computed_date") is not None
+            and (latest is None or p.get("computed_date") == latest)
+        )
+        if fresh:
+            w["_geo"] = {
+                "pivot": float(p["pivot"]),
+                "stop": float(p["stop"]) if p.get("stop") is not None else None,
+                "target": float(p["target"]) if p.get("target") is not None else None,
+                "contractions": p.get("contractions"),
+                "weeks": p.get("weeks"),
+            }
+        else:
+            cached = cache.get(f"wl_vcp:{w['ticker']}:{latest}") if latest is not None else None
+            if cached:
+                w["_geo"] = cached
             else:
-                currency = "USD"
+                w["_geo"] = None
+                _need_compute.append(w)
 
-        bars_list = bars_by_ticker[ticker]
-        if not bars_list:
-            w.update({
-                "pivot": None,
-                "stop": None,
-                "target": None,
-                "vcp_contractions": None,
-                "vcp_weeks": None,
-                "size": None,
-                "risk_aud": None,
-            })
-            continue
+    # ── Pass 2: compute geometry ONLY for rows that need it ───────────────────
+    if _need_compute:
+        from app.models.market import PriceBar
+        from app.models.signal import Watchlist
+        from app.screener.vcp import detect_vcp, resolve_watchlist_geometry
+        import pandas as pd
+        import collections
+        try:
+            from app.utils.time_helper import get_current_date
+            _floor = get_current_date() - timedelta(days=420)
+        except Exception:
+            from datetime import date as _date
+            _floor = _date.today() - timedelta(days=420)
 
-        # Convert to DataFrame
-        df_data = []
-        for b in bars_list:
-            df_data.append({
-                "high": float(b.high or 0),
-                "low": float(b.low or 0),
-                "close": float(b.close or 0),
-                "volume": int(b.volume or 0),
+        need_tickers = list({w["ticker"] for w in _need_compute})
+        rows = (
+            db.query(PriceBar)
+            .filter(PriceBar.ticker.in_(need_tickers), PriceBar.date >= _floor)
+            .order_by(PriceBar.date.asc())
+            .all()
+        )
+        bars_by_ticker = collections.defaultdict(list)
+        for b in rows:
+            bars_by_ticker[b.ticker].append(b)
+
+        for w in _need_compute:
+            ticker = w["ticker"]
+            bars = bars_by_ticker.get(ticker, [])
+            if not bars:
+                w["_geo"] = None
+                continue
+            df = pd.DataFrame([{
+                "high": float(b.high or 0), "low": float(b.low or 0),
+                "close": float(b.close or 0), "volume": int(b.volume or 0),
                 "avg_vol_50": float(b.avg_vol_50 or 0),
-            })
-        df = pd.DataFrame(df_data)
+            } for b in bars])
+            engine = _engine_for(w["asset_type"])
+            avg_vol = float(df["avg_vol_50"].iloc[-1]) if not df.empty else 0.0
+            try:
+                vcp_result, _ = detect_vcp(ticker, df, engine, avg_vol)
+            except Exception as e:
+                logger.error(f"VCP detect failed for watchlist {ticker}: {e}")
+                vcp_result = None
+            last = bars[-1]
+            cols = resolve_watchlist_geometry(
+                vcp_result, close=float(last.close or 0),
+                high_52w=float(last.high_52w or 0), atr_14=float(last.atr_14 or 0),
+            )
+            geo = {
+                "pivot": cols["pivot_price"], "stop": cols["stop_price"],
+                "target": cols["target_price"], "contractions": cols["vcp_contractions"],
+                "weeks": cols["vcp_base_weeks"],
+            }
+            w["_geo"] = geo
+            cache.set(f"wl_vcp:{ticker}:{last.date}", geo, expire_seconds=86400)
+            _wl_id = w.get("_wl_id")
+            if _wl_id:
+                try:
+                    db.query(Watchlist).filter(Watchlist.id == _wl_id).update({
+                        "pivot_price": cols["pivot_price"], "stop_price": cols["stop_price"],
+                        "target_price": cols["target_price"],
+                        "vcp_contractions": cols["vcp_contractions"],
+                        "vcp_base_weeks": cols["vcp_base_weeks"],
+                        "vcp_computed_date": last.date,
+                    }, synchronize_session=False)
+                except Exception as e:
+                    logger.error(f"Watchlist geometry write-back failed for {ticker}: {e}")
 
-        # Run detect_vcp
-        engine = RuleEngine(organization_id=org_id, tier=tier, asset_type=asset_type)
-        avg_vol = float(df["avg_vol_50"].iloc[-1]) if not df.empty and "avg_vol_50" in df.columns else 0.0
-        vcp_result, _ = detect_vcp(ticker, df, engine, avg_vol)
-
-        pivot_price = vcp_result.pivot_price
-        stop_price = vcp_result.stop_price
-        contraction_count = vcp_result.contraction_count
-        base_weeks = vcp_result.base_weeks
-
-        # Fallback if VCP was not detected or did not calculate pivot/stop
-        if not pivot_price:
-            high_52w = float(bars_list[-1].high_52w or 0)
-            pivot_price = high_52w if high_52w > 0 else float(bars_list[-1].close or 0)
-            
-            atr = float(bars_list[-1].atr_14 or 0)
-            if atr > 0:
-                stop_price = pivot_price - 2 * atr
-            else:
-                stop_price = pivot_price * 0.92
-                
-            if stop_price <= 0 or stop_price >= pivot_price:
-                stop_price = pivot_price * 0.92
-                
-            contraction_count = 0
-            base_weeks = 0
-
-        target_price = pivot_price * 1.20 if pivot_price else None
-
-        # Sizing
-        shares = None
-        risk_aud = None
+    # ── Pass 3: position sizing (cheap; needs no price history) ───────────────
+    for w in items:
+        geo = w.get("_geo")
+        if not geo or not geo.get("pivot"):
+            w.update({"pivot": None, "stop": None, "target": None,
+                      "vcp_contractions": None, "vcp_weeks": None,
+                      "size": None, "risk_aud": None})
+            for _k in ("_persisted", "_latest_bar_date", "_geo", "_wl_id"):
+                w.pop(_k, None)
+            continue
+        pivot_price = geo["pivot"]
+        stop_price = geo.get("stop")
+        shares = risk_aud = None
         if pivot_price and stop_price and pivot_price > stop_price:
             try:
                 sizing = calculate_position_size(
                     capital_aud=capital,
                     entry_price=pivot_price,
                     stop_price=stop_price,
-                    engine=engine,
-                    currency=currency,
+                    engine=_engine_for(w["asset_type"]),
+                    currency=_currency_for(w),
                     base_currency=base_currency,
-                    is_crypto=(asset_type == "CRYPTO"),
+                    is_crypto=(w["asset_type"] == "CRYPTO"),
                 )
                 shares = sizing.shares
                 risk_aud = sizing.risk_aud
             except Exception as e:
-                logger.error(f"Sizing failed for watchlist {ticker}: {e}")
-
+                logger.error(f"Sizing failed for watchlist {w['ticker']}: {e}")
         w.update({
             "pivot": pivot_price,
             "stop": stop_price,
-            "target": target_price,
-            "vcp_contractions": contraction_count,
-            "vcp_weeks": base_weeks,
+            "target": geo.get("target"),
+            "vcp_contractions": geo.get("contractions"),
+            "vcp_weeks": geo.get("weeks"),
             "size": shares,
             "risk_aud": risk_aud,
         })
+        for _k in ("_persisted", "_latest_bar_date", "_geo", "_wl_id"):
+            w.pop(_k, None)
 
 
 @app.get("/watchlist", response_class=HTMLResponse)
@@ -3203,6 +3249,18 @@ async def watchlist_rows(
             "rule_results": _enrich_rule_results(w.ticker, rr, db, _bar_data=_bar_lookup_dict.get(w.ticker)),
             "label": lbl,
             "setup_tier": _wl_tier,
+            "currency": getattr(w, "currency", None),
+            # Internal keys consumed (and stripped) by _enrich_watchlist_vcp_and_sizing.
+            "_wl_id": w.id,
+            "_latest_bar_date": (_bar_lookup[w.ticker].date if w.ticker in _bar_lookup else None),
+            "_persisted": {
+                "pivot": (float(w.pivot_price) if w.pivot_price is not None else None),
+                "stop": (float(w.stop_price) if w.stop_price is not None else None),
+                "target": (float(w.target_price) if w.target_price is not None else None),
+                "contractions": w.vcp_contractions,
+                "weeks": w.vcp_base_weeks,
+                "computed_date": w.vcp_computed_date,
+            },
         })
 
     _enrich_watchlist_vcp_and_sizing(watchlist_data, db, org_id)

@@ -160,6 +160,19 @@ class Watchlist(Base):
     label_id    = Column(Integer, ForeignKey("watchlist_labels.id", ondelete="SET NULL"), nullable=True)
     rule_results= Column(JSON, default=dict)
     removed_date= Column(Date, nullable=True)
+
+    # ── Precomputed VCP geometry (performance) ────────────────────────────────
+    # Filled by the screener (and lazily by the dashboard) so the watchlist page
+    # reads these columns instead of re-running detect_vcp on every load. Freshness
+    # is keyed by `vcp_computed_date` = the date of the last price bar used; if it
+    # matches the latest bar, the cached geometry is reused, otherwise recomputed.
+    pivot_price       = Column(Numeric(12, 4), nullable=True)  # VCP buy point (or 52w-high fallback)
+    stop_price        = Column(Numeric(12, 4), nullable=True)  # initial stop
+    target_price      = Column(Numeric(12, 4), nullable=True)  # pivot * 1.20
+    vcp_contractions  = Column(Integer, nullable=True)
+    vcp_base_weeks    = Column(Integer, nullable=True)
+    vcp_computed_date = Column(Date, nullable=True)            # date of last bar used
+
     created_at  = Column(DateTime, default=datetime.utcnow)
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
