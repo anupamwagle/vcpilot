@@ -306,14 +306,24 @@ class IBKRBroker:
                     order.account = self.account  # Routes to correct sub-account under FA
 
             trades = [self._ib.placeOrder(contract, o) for o in bracket]
-            self._ib.sleep(2.5)  # let order status settle BEFORE we disconnect
 
+            # Wait for the parent to leave PendingSubmit before disconnecting.
+            # Disconnecting while PendingSubmit causes the gateway to silently
+            # cancel the order — it never reaches the exchange.
             parent = trades[0]
+            stable = {"Submitted", "PreSubmitted", "Filled", "Cancelled",
+                      "ApiCancelled", "Inactive", "Rejected", "PendingCancel"}
+            waited = 0.0
+            while parent.orderStatus.status not in stable and waited < 12.0:
+                self._ib.sleep(0.5)
+                waited += 0.5
+
             pstatus = parent.orderStatus.status
             statuses = [(t.order.orderType, t.orderStatus.status) for t in trades]
             logger.info(
                 f"Bracket {ticker} {action} {qty} @ {entry_price:.3f} "
-                f"stop={stop_price:.3f} target={target_price:.3f} → {statuses}"
+                f"stop={stop_price:.3f} target={target_price:.3f} → {statuses} "
+                f"(waited {waited:.1f}s for stable status)"
             )
 
             # Surface rejections instead of pretending success.
@@ -329,6 +339,21 @@ class IBKRBroker:
                 logger.error(f"Bracket REJECTED for {ticker}: {msg}")
                 return {"status": "error", "error": msg, "ticker": ticker,
                         "order_status": pstatus, "raw": [str(t) for t in trades]}
+
+            # Still PendingSubmit after 12s — gateway never acknowledged it.
+            # Cancel and return error so the signal stays PENDING for retry.
+            if pstatus == "PendingSubmit":
+                msg = ("Order stuck in PendingSubmit after 12s — "
+                       "gateway did not acknowledge. Signal will retry.")
+                logger.error(f"Bracket STUCK for {ticker}: {msg}")
+                for t in trades:
+                    try:
+                        self._ib.cancelOrder(t.order)
+                    except Exception:
+                        pass
+                self._ib.sleep(1)
+                return {"status": "error", "error": msg, "ticker": ticker,
+                        "order_status": pstatus}
 
             logger.info(f"Bracket accepted for {ticker}: parent status={pstatus}")
             return {
