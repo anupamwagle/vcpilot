@@ -654,7 +654,7 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                     )
                     db.add(order)
 
-                    if is_simulated or not is_crypto:
+                    if is_simulated:
                         pos = Position(
                             ticker=signal.ticker,
                             exchange_key=signal.exchange_key or "ASX",
@@ -689,7 +689,7 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                         detail=result,
                     ))
 
-                    if is_simulated or not is_crypto:
+                    if is_simulated:
                         db.add(AuditLog(
                             action=AuditAction.POSITION_OPENED,
                             organization_id=org.id,
