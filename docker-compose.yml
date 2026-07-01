@@ -193,6 +193,34 @@ services:
              fi"
 
   # ---------------------------------------------------------------------------
+  # MCP Server — standalone MCP tool-calling surface (/mcp/sse, /mcp/messages)
+  # Additive/opt-in: the dashboard also mounts the same MCP app in-process by
+  # default, so this container is available to independently scale/restart MCP
+  # traffic without touching the dashboard. Cutting traffic over to it requires
+  # a reverse-proxy change — see app/mcp/standalone.py docstring and CLAUDE.md.
+  # OAuth token issuance (/mcp/oauth/token) and the /authorize consent page stay
+  # on the dashboard, since they need its login session.
+  # ---------------------------------------------------------------------------
+  mcp-server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mcp
+    container_name: vcpilot-mcp-server
+    restart: unless-stopped
+    <<: *app-env
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_completed_successfully
+    ports:
+      - "0.0.0.0:${MCP_SERVER_PORT:-8502}:8502"
+    networks:
+      - vcpilot-net
+
+  # ---------------------------------------------------------------------------
   # IBKR — Interactive Brokers Gateway (paper by default)
   # ---------------------------------------------------------------------------
   ibkr:
