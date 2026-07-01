@@ -594,15 +594,48 @@ docker compose --profile trading up ibkr -d
 
 ---
 
-## WhatsApp Setup (WAHA)
+## Telegram Setup for Org Admins
 
-1. Open `/admin/whatsapp` on the AstraTrade dashboard under the active organization.
-2. If the session isn't running, click **Start Session**. This initializes a session named `org_{org_id}` (e.g. `org_1`, `org_2`) scoped to the organization.
-3. Scan the QR code shown on the page using your WhatsApp phone (Linked Devices).
-4. Each organization must configure its own `whatsapp_admin_number` in `/admin/config` (or through the database `SystemConfig` table) in order to send notifications and receive commands.
-5. Once connected, send `HELP` or `STATUS` from the configured admin number to the organization's WhatsApp bot.
+AstraTrade is controlled remotely via Telegram — a bot per deployment, with each organization configuring its own bot token and chat ID(s). Telegram supports **multiple users per organization** out of the box: `telegram_chat_id` accepts a comma-separated list, so each org member can DM the bot from their own account and independently both receive alerts and issue commands (STATUS, POSITIONS, PAUSE, etc. — see `app/agent/commands.py`).
 
-The WAHA webhook routes incoming messages to `http://api:8501/webhook/whatsapp`. The webhook extracts the organization ID from the session name, resolves the organization settings, verifies that the message sender matches that organization's configured admin number, and executes the commands scoped to that organization's data via `AgentCommandHandler`.
+### First-time setup (single user or first user in an org)
+
+1. Open Telegram and message **[@BotFather](https://t.me/BotFather)** → `/newbot` → follow the prompts. BotFather gives you a **bot token** (looks like `123456789:AAH...`).
+2. In AstraTrade, go to `/admin/config` under **Alert & Chat Channels** and set `telegram_bot_token` to that token.
+3. Open a DM with your new bot in Telegram and send it any message (e.g. `/start`) — this is required before Telegram will let you retrieve your chat ID.
+4. Retrieve your chat ID: visit `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` in a browser (replace `<YOUR_TOKEN>`) and look for `"message":{"chat":{"id": ...}}` in the JSON — that number is your chat ID. (Alternatively, forward any message to **[@userinfobot](https://t.me/userinfobot)**, which replies with your ID directly.)
+5. Set `telegram_chat_id` in `/admin/config` to that number.
+6. Go to `/admin/comms` and click **Register Webhook** (requires the AstraTrade instance to be reachable over HTTPS — this is why Cloudflare Tunnel or a reverse proxy with TLS is needed for production).
+7. Click **Test Notify** to confirm delivery, then send `HELP` from Telegram to confirm two-way commands work.
+
+### Adding a second (or third, etc.) user to the same org
+
+This is the case that used to silently break — a second user's messages were dropped because only one exact chat ID was ever checked. It's fixed now:
+
+1. Have the new user open a DM with the same bot and send it any message.
+2. Retrieve their chat ID the same way as step 4 above.
+3. In `/admin/config`, edit `telegram_chat_id` to a **comma-separated list** of every user's chat ID, e.g.:
+   ```
+   111111111,222222222
+   ```
+4. Save. No need to re-register the webhook — it's already pointed at AstraTrade. Both users can now message the bot independently and will both receive every broadcast alert (signals, order fills, exit alerts, daily reports).
+
+Note: command **replies** (e.g. the response to `STATUS`) go only to whichever chat sent the command, not to every configured chat — only broadcast alerts go to everyone.
+
+### Alternative: a shared Telegram group instead of a chat-ID list
+
+If your team prefers one shared thread instead of separate DMs, you can use a Telegram **group** instead:
+
+1. Create a Telegram group and add your bot to it.
+2. Add every org user who should see alerts/commands to the group.
+3. Send any message in the group, then use the same `getUpdates` URL from step 4 above — group chat IDs are negative numbers (e.g. `-100123456789`).
+4. Set `telegram_chat_id` to just that single (negative) group ID — no comma-separated list needed, since the group itself is shared by all members.
+
+This trades individual DMs for one shared thread where everyone sees the same alerts and each other's commands — useful for small trading teams, less private than individual DMs.
+
+### How it works under the hood
+
+The Telegram webhook (`POST /webhook/telegram` in `dashboard/main.py`) receives every incoming message, resolves the organization by checking whether the sender's `chat_id` is a member of any org's comma-separated `telegram_chat_id` list, then dispatches to `AgentCommandHandler` (scoped to that org) and replies only to the sender's chat via `TelegramNotifier.send(response, chat_id=...)`. A polling fallback (`poll_telegram_updates` Celery task, every 10s) uses the same list-membership check and works without HTTPS, for local/dev use. Outbound alerts (signals, fills, exits, daily reports) call `TelegramNotifier.send(message)` with no explicit `chat_id`, which broadcasts to every chat in the list.
 
 ---
 
