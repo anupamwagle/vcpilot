@@ -219,6 +219,7 @@ __marimo__/
 
 # VCPilot specific
 .env
+env.txt
 *.pem
 *.key
 *.p12
