@@ -228,6 +228,67 @@ def _record_activity_scope(scope, headers, status, method: str, path: str, form_
 app.add_middleware(ActivityLoggerMiddleware)
 
 
+# Cache prefixes that SHOULD keep normal browser/CDN caching (versioned assets).
+_CACHEABLE_PREFIXES = ("/static", "/favicon")
+
+
+class NoStoreCacheMiddleware:
+    """
+    Pure-ASGI middleware that marks every authenticated, per-tenant response as
+    non-cacheable (`Cache-Control: no-store` + `Vary: Cookie`).
+
+    WHY: dashboard pages are scoped to the active organization, which lives in the
+    session cookie. Without an explicit cache directive the browser's HTTP cache /
+    back-forward (bfcache) — and any edge cache (Cloudflare tunnel) — may serve the
+    PREVIOUS organization's already-rendered page after the user switches orgs via
+    the dropdown. The server re-scopes correctly, but the user never sees it: the UI
+    "doesn't refresh". It is also a cross-tenant leak risk (one org's page served
+    from cache in another org's context). `no-store` additionally makes the page
+    bfcache-ineligible, so the switch always re-fetches.
+
+    Static, content-addressable assets keep their normal caching.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or any(
+            scope.get("path", "").startswith(p) for p in _CACHEABLE_PREFIXES
+        ):
+            return await self.app(scope, receive, send)
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                headers = [
+                    (k, v)
+                    for (k, v) in message.get("headers", [])
+                    if k.lower() not in (b"cache-control", b"pragma", b"expires")
+                ]
+                headers.append((b"cache-control", b"no-store, no-cache, must-revalidate, private"))
+                headers.append((b"pragma", b"no-cache"))
+                headers.append((b"expires", b"0"))
+                # Ensure any shared cache keys on the session cookie.
+                vary_done = False
+                for i, (k, v) in enumerate(headers):
+                    if k.lower() == b"vary":
+                        if b"cookie" not in v.lower():
+                            headers[i] = (k, v + b", Cookie")
+                        vary_done = True
+                        break
+                if not vary_done:
+                    headers.append((b"vary", b"Cookie"))
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+
+# Added last → OUTERMOST middleware, so the cache headers are applied to the final
+# response regardless of which inner layer produced it.
+app.add_middleware(NoStoreCacheMiddleware)
+
+
 # ---------------------------------------------------------------------------
 # Mobile REST API (JWT-authenticated, consumed by React Native app)
 # ---------------------------------------------------------------------------
