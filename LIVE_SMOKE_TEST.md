@@ -104,7 +104,7 @@ Only after Section 1 passes. Use the **smallest possible** size.
 2. [ ] Admin → Config → set `ibkr_paper_mode = false` (app switches to port 4001).
 3. [ ] Restart the gateway in live mode: set `vcpilot-ibkr` env `TRADING_MODE=live`, recreate the container, complete any 2FA in the gateway VNC.
 4. [ ] Place **1 share** of a liquid name via the dashboard flow (Section 1A), entry as a marketable limit.
-5. [ ] Verify the real fill in IBKR + the Position row + WhatsApp/Telegram alert.
+5. [ ] Verify the real fill in IBKR + the Position row + Telegram alert.
 6. [ ] **Immediately close** the position (Positions → close, `MANUAL`); confirm the Trade + realised P&L.
 7. [ ] Revert: `ibkr_paper_mode = true`, gateway back to `TRADING_MODE=paper`.
 

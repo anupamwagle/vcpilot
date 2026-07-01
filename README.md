@@ -2,7 +2,7 @@
 
 > **Institutional-grade algorithmic trading on ASX stocks — fully automated, locally deployable.**
 
-AstraTrade is a production-grade automated trading system. It screens the ASX universe daily, detects Volatility Contraction Patterns (VCP), manages risk with precision, and executes trades via Interactive Brokers (equities) or MEXC / Independent Reserve (crypto via ccxt) — all controlled remotely via WhatsApp.
+AstraTrade is a production-grade automated trading system. It screens the ASX universe daily, detects Volatility Contraction Patterns (VCP), manages risk with precision, and executes trades via Interactive Brokers (equities) or MEXC / Independent Reserve (crypto via ccxt) — all controlled remotely via Telegram.
 
 ---
 
@@ -22,9 +22,10 @@ AstraTrade is a production-grade automated trading system. It screens the ASX un
 │  │  └── beat (scheduler — AEST aligned)         │   │
 │  └──────────────────────────────────────────────┘   │
 │  ┌──────────────────────┐   ┌──────────────────────┐  │
-│  │  API Service (UI)    │   │  WhatsApp Service    │  │
-│  │  FastAPI + Jinja2    │   │  → WhatsApp Agent    │  │
-│  │  port 8501           │   │  port 3000           │  │
+│  │  Dashboard (UI+API)  │   │  MCP Server          │  │
+│  │  FastAPI + Jinja2    │   │  (independently      │  │
+│  │  → Telegram agent    │   │   deployable, opt-in)│  │
+│  │  port 8501           │   │  port 8502           │  │
 │  └──────────────────────┘   └──────────────────────┘  │
 └─────────────────────────────────────────────────────┘
 ```
@@ -107,10 +108,10 @@ AstraTrade includes a Bloomberg-style live trading terminal at `http://localhost
 
 ---
 
-## WhatsApp Commands
+## Telegram Commands
 
 > [!NOTE]
-> WhatsApp commands are routed to the specific tenant organization context based on the session (`org_{org_id}`) and restricted to the sender matching that organization's configured `whatsapp_admin_number`.
+> Telegram commands are routed to the specific tenant organization by checking whether the sender's chat ID is a member of that organization's configured `telegram_chat_id` list. `telegram_chat_id` supports multiple comma-separated chat IDs — one per org user, or a single shared group chat — so more than one person per org can message the bot and issue commands. See `CLAUDE.md` § "Telegram Setup for Org Admins" for the full setup walkthrough.
 
 | Command | Description |
 |---|---|
@@ -151,7 +152,7 @@ AstraTrade includes a Bloomberg-style live trading terminal at `http://localhost
 | Mon–Fri 5:00pm | Refresh EOD price data (yfinance) |
 | Mon–Fri 5:15pm | Evaluate market regime (BULL/CAUTION/BEAR) |
 | Mon–Fri 5:30pm | Run daily screener (generate signals) |
-| Mon–Fri 6:00pm | Daily WhatsApp report (P&L summary) |
+| Mon–Fri 6:00pm | Daily Telegram report (P&L summary) |
 | Every 5 min (10am–4:12pm Mon–Fri) | Intraday entry breakout checks & defensive exit rules |
 | Every 15 min (market hours Mon–Fri) | Sync stop orders (IBKR) |
 
@@ -190,16 +191,17 @@ AstraTrade includes a Bloomberg-style live trading terminal at `http://localhost
 ```
 vcpilot/
 ├── app/
-│   ├── agent/        # WhatsApp command handler
-│   ├── broker/       # IBKR (ib_insync)
+│   ├── agent/        # Telegram command handler
+│   ├── broker/       # IBKR (ib_insync), crypto (ccxt)
 │   ├── data/         # yfinance fetcher, ASX calendar
+│   ├── mcp/          # MCP server — independently deployable (auth, tools, standalone entrypoint)
 │   ├── models/       # SQLAlchemy models
-│   ├── notifications/# WhatsApp (WAHA)
+│   ├── notifications/# Telegram
 │   ├── risk/         # Position sizing, portfolio heat
 │   ├── screener/     # AstraTrade rules, VCP, exit rules
 │   └── tasks/        # Celery tasks
 ├── dashboard/        # FastAPI + Jinja2 dashboard (4 trading + 4 admin pages)
-├── docker/           # Dockerfiles
+├── docker/           # Dockerfiles (dashboard, workers, MCP server)
 ├── migrations/       # DB schema + TimescaleDB setup
 ├── scripts/          # init_db.py, seed_config.py
 ├── tests/            # pytest regression suite — critical trading paths
@@ -239,9 +241,9 @@ To run AstraTrade in a production environment behind a reverse proxy like Cloudf
    - Point your Cloudflare Tunnel hostname (e.g. `https://vcpilot.yourdomain.com`) directly to the local container or host port `http://localhost:8501`.
    - The web container is automatically configured with `--proxy-headers` and `--forwarded-allow-ips='*'` to correctly translate Cloudflare's `X-Forwarded-Proto` and `X-Forwarded-For` headers. This ensures that session cookies, URL schemas (`https`), and redirect headers work flawlessly without loops.
 
-3. **WhatsApp Webhooks**:
-   - Webhooks from the self-hosted WhatsApp container (`vcpilot-whatsapp` at port `3000`) to the API container (`vcpilot-api` at port `8501`) communicate internally within the Docker bridge network (`vcpilot-net`).
-   - The default `WAHA_HOOK_URL=http://api:8501/webhook/whatsapp` in `.env` is fully container-to-container and doesn't need to be exposed to the public internet, guaranteeing fast and secure webhook delivery.
+3. **Telegram Webhooks**:
+   - Telegram requires the webhook URL (`https://yourdomain.com/webhook/telegram`) to be publicly reachable over HTTPS — register it from `/admin/comms` → "Register Webhook" once your tunnel is live.
+   - If you'd rather not expose a public webhook, the `poll_telegram_updates` Celery task (every 10s) works over plain `getUpdates` polling with no inbound HTTPS required — useful for local/dev setups behind no reverse proxy at all.
 
 ---
 

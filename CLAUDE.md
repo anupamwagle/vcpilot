@@ -6,7 +6,7 @@
 
 ## What This Is
 
-AstraTrade is a multi-market automated stock trading system built on **Mark Minervini's SEPA (Specific Entry Point Analysis)** methodology — specifically the Volatility Contraction Pattern (VCP). It supports ASX equities, US equities (NYSE/NASDAQ), and has a crypto trading foundation. Users build custom watchlists by adding instruments from any supported exchange; AstraTrade fetches price data on-demand, screens against Minervini rules, generates signals, and executes bracket orders through Interactive Brokers (equities) or ccxt (crypto). It is controlled remotely via WhatsApp.
+AstraTrade is a multi-market automated stock trading system built on **Mark Minervini's SEPA (Specific Entry Point Analysis)** methodology — specifically the Volatility Contraction Pattern (VCP). It supports ASX equities, US equities (NYSE/NASDAQ), and has a crypto trading foundation. Users build custom watchlists by adding instruments from any supported exchange; AstraTrade fetches price data on-demand, screens against Minervini rules, generates signals, and executes bracket orders through Interactive Brokers (equities) or ccxt (crypto). It is controlled remotely via Telegram.
 
 **Owner:** admin@astradigital.com.au (Australia — AU-based, not US)  
 **Repo:** github.com/anupamwagle/vcpilot  
@@ -16,25 +16,41 @@ AstraTrade is a multi-market automated stock trading system built on **Mark Mine
 
 ## Architecture
 
+AstraTrade is a modular monorepo: one shared codebase and one Postgres DB, but each layer below is its own docker-compose service with its own restart/scaling lifecycle — independently deployable without a rewrite into true network-separated microservices.
+
 ```
 Docker Compose (9 services):
-  database        TimescaleDB (PostgreSQL 16 + timescaledb extension)
-  redis           Redis 7 — Celery broker + result backend
-  app             Database setup & migration runner — runs init_db + migrate_saas
+  database        TimescaleDB (PostgreSQL 16 + timescaledb extension) — shared data layer
+  redis           Redis 7 — cache + Celery broker/result backend
+  app             Database setup & migration runner — runs init_db + migrate_saas (runs once, exits)
+  dashboard       Frontend + API layer: FastAPI + Jinja2 + Flowbite/Tailwind — port 8501
+  mcp-server      MCP tool-calling surface (/mcp/sse, /mcp/messages) — port 8502
+                  Additive/opt-in: dashboard also mounts the same MCP app in-process by
+                  default. Independently deployable when you want to scale/restart MCP
+                  traffic without touching the dashboard — see app/mcp/standalone.py.
   worker-equities Celery worker for equities (queues: screening_equities, trading_equities, reporting, default)
   worker-crypto   Celery worker for crypto (queues: trading_crypto, screening_crypto)
   beat            Celery Beat — AEST-aligned schedule
-  api             FastAPI + Jinja2 + Flowbite/Tailwind — port 8501
-  whatsapp        WAHA (WhatsApp HTTP API, self-hosted) — port 3000
   ibkr            IBKR Gateway (--profile trading only, not started by default)
 ```
+
+**Layering, independent of the compose topology above:**
+| Layer | Where it lives | Notes |
+|---|---|---|
+| Frontend + API | `dashboard/` | Server-rendered FastAPI+Jinja2 — deliberate design (see Key Design Decisions), not a REST-only backend |
+| MCP server | `app/mcp/` | Auth (`auth.py`), tool definitions (`tools.py`), Starlette app (`server.py`), standalone entrypoint (`standalone.py`) |
+| Shared domain | `app/models/`, `app/screener/`, `app/risk/`, `app/data/`, `app/broker/`, `app/agent/`, `app/notifications/` | Imported by both `dashboard/` and the Celery workers — this is the "core library" of the monorepo |
+| Broker integration | `app/broker/ibkr.py` (ib_insync client), `app/broker/crypto.py` (ccxt client) | Library code called in-process by the equities/crypto workers — not separate network services, since they're just SDK clients around IBKR Gateway / exchange REST APIs |
+| Workers | `app/tasks/` | Celery tasks, split into `worker-equities` and `worker-crypto` containers so each asset class scales/restarts independently |
+| Cache | Redis | Celery broker + result backend + app-level caching (`app/utils/cache.py`) |
+| Database | TimescaleDB/Postgres | Single shared DB across dashboard, workers, and mcp-server — org-scoped via `organization_id`, not per-service schemas |
 
 **Data flow:**
 ```
 yfinance (EOD history) → Celery screen → Minervini rule engine → Watchlist
 Intraday (Broker API / IR API / yfinance) → Signal monitor → Entry trigger
 Position tracked (Trailing Stop / ATR) → Exit rules → Trade closed → Audit logged
-Comms Hub (WhatsApp/Telegram) report
+Telegram report
 ```
 
 ---
@@ -54,7 +70,7 @@ Comms Hub (WhatsApp/Telegram) report
 | Fundamentals | yfinance quarterly_financials | Free, sufficient for Minervini criteria |
 | Supplemental data | FMP free tier (250 calls/day) | Only for shortlisted stocks |
 | Broker API | ib_insync → IBKR Gateway | Developer familiar with IBKR |
-| Notifications | app/notifications/ | WhatsApp/WAHA & Telegram (Two-way) |
+| Notifications | app/notifications/ | Telegram (two-way — alerts + remote commands) |
 | Containers | Docker Compose | Local-first, cloud-deployable |
 
 ---
@@ -67,7 +83,7 @@ vcpilot/
 ├── STATUS.md              ← Current operational status
 ├── README.md              ← User-facing documentation
 ├── .env.example           ← All environment variables documented
-├── docker-compose.yml     ← 8 services, ibkr-gateway on --profile trading
+├── docker-compose.yml     ← 9 services, ibkr-gateway on --profile trading
 ├── requirements.txt       ← Python deps (FastAPI, Celery, yfinance, ib_insync, etc.)
 │
 ├── app/                   ← Core Python application
@@ -105,18 +121,26 @@ vcpilot/
 │   │                         Falls back to _simulate_order() when IBKR not connected
 │   │
 │   ├── notifications/
-│   │   └── whatsapp.py    ← WhatsAppNotifier via WAHA REST API (resolves settings per-tenant)
+│   │   └── telegram.py    ← TelegramNotifier via Telegram Bot API (resolves settings per-tenant,
+│   │                         supports comma-separated multi-user chat_ids)
 │   │
 │   ├── agent/
-│   │   └── commands.py    ← AgentCommandHandler: 13 WhatsApp commands (scoped)
+│   │   └── commands.py    ← AgentCommandHandler: 13 Telegram commands (scoped)
 │   │                         STATUS, POSITIONS, SIGNALS, MARKET, PAUSE, RESUME,
 │   │                         REPORT, SKIP, EXIT, STOP, RULE, CONFIG, HELP
+│   │
+│   ├── mcp/               ← MCP server — independently deployable (see Architecture)
+│   │   ├── auth.py        ← JWT create/decode, MCPContext ContextVar, scope checks
+│   │   ├── tools.py       ← Tool implementations (get_positions, place_order, etc.)
+│   │   ├── server.py      ← create_mcp_app() — auth middleware + FastMCP SSE app
+│   │   └── standalone.py  ← Entrypoint for the standalone mcp-server container
 │   │
 │   └── tasks/
 │       ├── celery_app.py  ← Celery app + Beat schedule (AEST-aligned)
 │       ├── screening.py   ← multi-tenant daily screen looping active organizations
 │       ├── trading.py     ← multi-tenant intraday check loops
-│       └── reporting.py   ← send_daily_report, health_check (heartbeat every 10 min)
+│       └── reporting.py   ← send_daily_report, health_check (heartbeat every 10 min),
+│                             send_notification_message, poll_telegram_updates
 │
 ├── dashboard/             ← FastAPI web app (replaces Streamlit — do NOT use Streamlit here)
 │   ├── main.py            ← All FastAPI routes + global context scoping + Super Admin endpoints
@@ -276,8 +300,8 @@ Dashboard screener buttons (`/action/run-screener`, `/action/force-screen`) both
 `_run_screen_force` bypasses the gate and is the correct target for any manual trigger.  
 Both routes wrap `.delay()` in a `try/except` so a Redis/worker outage doesn't crash the HTTP response — the task will queue when the worker comes online.
 
-### 10. WhatsApp — org-level setup vs .env
-Each org configures its own WhatsApp phone number via `/admin/config` (key: `whatsapp_admin_number`, value: digits-only e.g. `61450325233`). The `whatsapp_api_key` and `whatsapp_session_name` are pre-seeded at org creation from `.env` defaults — org admins do NOT need to touch `.env`. For WAHA Core (single Docker instance) all orgs share session `"default"`. For WAHA Plus, set a unique `whatsapp_session_name` per org.
+### 10. Telegram — org-level setup, multi-user chat_ids
+Each org configures its own Telegram bot via `/admin/config` (keys: `telegram_bot_token`, `telegram_chat_id`). `telegram_chat_id` accepts a **comma-separated list** — one chat per org user (each DMs the bot individually) or a single shared group chat ID. `TelegramNotifier.chat_ids` parses this list; `send()` with no explicit `chat_id` broadcasts to every entry, while command replies (webhook/poller) go only to the sender's chat. Both `webhook_telegram` (`dashboard/main.py`) and `poll_telegram_updates` (`app/tasks/reporting.py`) resolve the org by checking list membership, not exact string equality — see CLAUDE.md's "Telegram Setup for Org Admins" section.
 
 ### 11. Worker heartbeat — global + per-org
 `health_check` writes `last_heartbeat` with `organization_id=NULL` (global, legacy) AND `last_heartbeat` per-org for every active org. `_global()` in `main.py` reads the per-org row first, falls back to global. This means each org's Health page shows the correct worker status independently.
@@ -295,7 +319,7 @@ Global rules (`organization_id IS NULL`) are the master templates. Org rules are
 The sidebar is always a slide-in drawer (never fixed to the left of the viewport). JS function `openSidebar()`/`closeSidebar()` handles transform, overlay visibility, and body scroll-lock. On ≥1024px, `checkBreakpoint()` auto-opens the drawer and sets `margin-left: 16rem` on `#main-content`. On mobile, the drawer starts closed. All nav links call `closeSidebar()` on click. The overlay div `#sidebar-overlay` catches outside taps. Do NOT use `lg:ml-64` Tailwind class for main content margin — the JS controls this dynamically.
 
 ### 13. Position exit — Minervini SEPA
-`POST /positions/{pos_id}/close` accepts `exit_reason` (ExitReason enum key) and optional `exit_price`. The positions page renders an inline close form per row with all Minervini exit reasons grouped as Defensive / Offensive. Confirming: marks Position CLOSED, creates Trade record, writes audit, sends WhatsApp exit alert.
+`POST /positions/{pos_id}/close` accepts `exit_reason` (ExitReason enum key) and optional `exit_price`. The positions page renders an inline close form per row with all Minervini exit reasons grouped as Defensive / Offensive. Confirming: marks Position CLOSED, creates Trade record, writes audit, sends Telegram exit alert.
 Exit reasons: `STOP_LOSS`, `TRAILING_STOP`, `TIME_STOP`, `EARNINGS_AVOID`, `MARKET_REGIME`, `PROFIT_TARGET_1`, `PROFIT_TARGET_2`, `CLIMAX_TOP`, `THREE_WEEKS_TIGHT`, `MANUAL`.
 
 ### 14. Old Streamlit files still exist
@@ -305,7 +329,7 @@ Exit reasons: `STOP_LOSS`, `TRAILING_STOP`, `TIME_STOP`, `EARNINGS_AVOID`, `MARK
 `WatchlistLabel` model in `app/models/signal.py` — one row per user-defined label per org. Columns: `id`, `organization_id`, `name`, `color` (hex), `is_default`, `sort_order`. Migration adds `watchlist_labels` table and `label_id` FK on `watchlist`. Default labels seeded per org via `migrate_saas.py`: Favourites (amber `#f59e0b`, is_default=True), High Priority (red), VCP Forming (blue), Under Review (violet). Routes: `GET /watchlist?label={id}` filters by label; `POST /watchlist/labels/create` creates a label; `POST /watchlist/{id}/set-label` assigns a label to a stock. `screen_single_ticker` accepts `label_id` so manual adds land in the right group. `LABEL_COLOUR_PALETTE` in `signal.py` lists the 8 preset hex colours shown in the colour picker.
 
 ### 19. Per-org timezone (org_timezone)
-`org_timezone` is a `SystemConfig` key seeded per org with value `Australia/Sydney`. Appears in `/admin/config` under General. Used for timestamps in WhatsApp reports. Celery Beat schedules are global on `timezone="Australia/Sydney"` in `celery_app.py` — this is correct since ASX is in Sydney and all orgs trade on ASX. Do NOT change the Beat timezone — change `org_timezone` in SystemConfig if a user's local reporting timezone differs.
+`org_timezone` is a `SystemConfig` key seeded per org with value `Australia/Sydney`. Appears in `/admin/config` under General. Used for timestamps in Telegram reports. Celery Beat schedules are global on `timezone="Australia/Sydney"` in `celery_app.py` — this is correct since ASX is in Sydney and all orgs trade on ASX. Do NOT change the Beat timezone — change `org_timezone` in SystemConfig if a user's local reporting timezone differs.
 
 ### 20. Background job audit trail (entry/exit tasks)
 `check_entry_triggers` and `check_exit_rules_task` write a `TASK_RUN` `AuditLog` row on every invocation, including when the market is closed. Timestamps are formatted in AEST (`Australia/Sydney`) timezone to align with the ASX. Furthermore, if `check_entry_triggers` skips checking because the market is in a BEAR regime, has reached max positions, or has trading paused, it writes a detailed `TASK_RUN` audit log row for each pending signal explaining the skip reason to populate the UI and prevent "No entry check yet" blank states.
@@ -438,12 +462,13 @@ Detailed debug tracebacks are exposed in a collapsible console view if `settings
 
 ## Core Configuration & Environment Variables
 
-Key credentials, trading settings, and API keys reside in the database (`SystemConfig` table) at the organization level. They are dynamically resolved at runtime and can be adjusted via `/admin/config` in the dashboard or via WhatsApp commands:
+Key credentials, trading settings, and API keys reside in the database (`SystemConfig` table) at the organization level. They are dynamically resolved at runtime and can be adjusted via `/admin/config` in the dashboard or via Telegram commands:
 - `ibkr_account` (IBKR Account Number)
 - `ibkr_username` (IBKR Gateway login username)
 - `ibkr_password` (IBKR Gateway login password)
 - `ibkr_paper_mode` (True/False - controls port 4002 paper vs 4001 live)
-- `whatsapp_admin_number` (Your admin phone number, auto-derives admin JID)
+- `telegram_bot_token` (Telegram Bot Token from @BotFather)
+- `telegram_chat_id` (Comma-separated Telegram chat ID(s) to send alerts to)
 - `fmp_api_key` (Financial Modeling Prep API key)
 - `weekly_injection_aud` (Weekly Capital Injection)
 
@@ -452,7 +477,7 @@ Infrastructure/system settings remain in `.env`:
 |---|---|---|
 | `IBKR_PORT` | `4002` | 4002=paper, 4001=live |
 | `DASHBOARD_PASSWORD` | `changeme` | Set this before exposing dashboard |
-| `WAHA_API_KEY` | `changeme-waha-key` | Any string, used by WAHA container |
+| `MCP_SERVER_PORT` | `8502` | Standalone MCP server container port (optional, additive — see Architecture) |
 | `APP_SECRET_KEY` | `changeme-secret` | Session cookie signing key — use `openssl rand -hex 32` |
 
 ---
@@ -484,7 +509,7 @@ All rules have `enabled_globally=True` by default. Admin can toggle any non-mand
 | Mon–Fri 5:00pm | `refresh_price_data(ASX)` — yfinance EOD for full ASX universe |
 | Mon–Fri 5:15pm | `evaluate_market_regime_task(ASX)` — BULL/CAUTION/BEAR |
 | Mon–Fri 5:30pm | `run_daily_screen(ASX)` — full Minervini screen, generate signals |
-| Mon–Fri 6:00pm | `send_daily_report` — WhatsApp P&L summary |
+| Mon–Fri 6:00pm | `send_daily_report` — Telegram P&L summary |
 | Every 5 min (10am–4:12pm Mon–Fri) | `check_entry_triggers(ASX)` — intraday breakout detection |
 | Every 5 min (10am–4:12pm Mon–Fri) | `check_exit_rules_task(ASX)` — evaluate exit conditions |
 | Every 15 min (market hours Mon–Fri) | `sync_stop_orders` — ASX stop sync (IBKR modify-order TBD) |
@@ -538,7 +563,7 @@ All rules have `enabled_globally=True` by default. Admin can toggle any non-mand
 - `GET /admin/rules` — View and edit rules and tier-level configurations (scoped to organization, editable by Organisation Admins and Super Admins)
 - `POST /admin/rules/{rule_id}/toggle` — Toggle a rule for the active organization
 - `POST /admin/rules/{rule_id}/threshold` — Update a rule threshold for the active organization
-- `GET /admin/config` — Edit tenant-scoped settings (IBKR account, WhatsApp details, weekly capital)
+- `GET /admin/config` — Edit tenant-scoped settings (IBKR account, Telegram details, weekly capital)
 - `GET /admin/audit` — Filterable audit log (scoped to organization)
 - `GET /admin/tasks` — Live Task Log: streams new audit events (scoped to organization)
 - `GET /admin/data-log` — Data Log: intraday entry check snapshots from `entry_check_logs`; filters by time window/ticker/confirmed; auto-refresh via `/admin/data-log/poll`
@@ -575,7 +600,7 @@ All rules have `enabled_globally=True` by default. Admin can toggle any non-mand
 ```bash
 # 1. Clone and configure
 cp .env.example .env
-# Edit .env: set passwords, IBKR details, WhatsApp number
+# Edit .env: set passwords, IBKR details
 
 # 2. Start all core services (migrations/seeding run automatically on startup via app)
 docker compose up -d
@@ -639,9 +664,20 @@ The Telegram webhook (`POST /webhook/telegram` in `dashboard/main.py`) receives 
 
 ---
 
-## Session Handoff — Where We Are (15 Jun 2026)
+## Session Handoff — Where We Are (1 Jul 2026)
 
 **Current operational state (pick up here in next session):**
+
+- **Enterprise-grade refactor: WhatsApp removed, mobile app removed, Telegram multi-user fix, MCP server made independently deployable (1 Jul 2026):**
+  - **WhatsApp/WAHA fully removed** — `WhatsAppNotifier`, the `/webhook/whatsapp` + `/admin/whatsapp` routes, the WAHA docker-compose service, and all associated SystemConfig keys/seeding are gone. `get_notifier()` (`app/notifications/__init__.py`) now always returns `TelegramNotifier` — Telegram is the sole notification/remote-control channel.
+  - **Telegram multi-user-per-org bug fixed** — `telegram_chat_id` now accepts a comma-separated list. Previously only one exact chat_id could ever match, so a second org user DMing the bot was silently dropped. `TelegramNotifier.chat_ids` parses the list; `send()` broadcasts alerts to every configured chat while command replies still go only to the sender. Both the webhook (`dashboard/main.py::webhook_telegram`) and the polling fallback (`app/tasks/reporting.py::poll_telegram_updates`) resolve org by list membership now, not exact-string match. Full org-admin setup walkthrough (including the multi-user and shared-group options) is in this file's "Telegram Setup for Org Admins" section.
+  - **React Native mobile app removed** — `mobile/` (Expo app) and its `app/api/mobile.py` JWT-authenticated backend are gone; they were undocumented and duplicated what the mobile-responsive web dashboard already covers (see pattern #17).
+  - **MCP server made independently deployable** — new `app/mcp/standalone.py` entrypoint + `docker/Dockerfile.mcp` + `mcp-server` compose service (port 8502) serve the MCP tool-calling surface (`/mcp/sse`, `/mcp/messages`) as its own container. This is additive/opt-in — the dashboard still mounts the same MCP app in-process by default, so nothing changes unless you deliberately cut over (requires a reverse-proxy change; see the module docstring). OAuth token issuance (`/mcp/oauth/token`) and the `/authorize` consent page stay on the dashboard since they need its login session.
+  - **`docker-compose.yml` `api` service renamed to `dashboard`** to match the folder it actually runs — pure naming fix, zero import risk.
+  - **Root-level cleanup** — deleted legacy Streamlit files (`dashboard/Home.py`, `dashboard/pages/`), a leaked `env.txt` secret that was tracked in git (rotate `APP_SECRET_KEY` if you haven't already), `docker-compose.bak.yml`, and various superseded one-off debug scripts/logs.
+  - **⚠️ `docker-compose-nas.yml` still needs the same `api`→`dashboard` rename and `waha-data` volume removal** — a persistent file lock (something on the host has it open) blocked every write attempt this session. Apply that diff manually, or re-run this cleanup once whatever has it open is closed.
+  - **⚠️ Found but NOT fixed — flagged as a separate task**: `dashboard/main.py` has a large block of routes defined TWICE (~lines 6647-8263 and again ~8634-9942), including `/superadmin/users`, `/superadmin/data`, `/reset-password`, `/superadmin/exchanges`, `/superadmin/operations`, several `/superadmin/action/*` routes, `/authorize`, and `/mcp/oauth/token`. FastAPI/Starlette serves the FIRST-registered definition for any duplicated path, so the second copy is dead code — and the two copies aren't identical, meaning some intended fixes may never have actually shipped. Needs a careful, dedicated investigation (diff each pair, determine which is correct, remove the dead one) — do not assume the earlier copy is automatically right.
+  - **8 pre-existing pytest failures, unrelated to this refactor** (verified against a clean `git stash` baseline before and after every change in this session): `test_activity_logging.py::test_skipped_path_not_logged`, `test_entry_triggers.py::test_entry_check_portfolio_heat_within_limit_allows_entry`, `test_entry_triggers.py::test_entry_check_breakout_confirmed_opens_position`, `test_multi_org_membership.py::test_org_create_with_existing_email_adds_membership_no_400`, `test_price_range_rule.py::test_check_entry_triggers_within_range_still_opens_position`, `test_us_equity_universe.py::TestIBKRContractRouting::test_asx_still_routes_correctly`, `test_watchlist_vcp_persistence.py::test_upsert_watchlist_persists_vcp_geometry`, `test_watchlist_vcp_persistence.py::test_enrich_compute_path_computes_and_writes_back`.
 
 - **Exchange-scoped crypto universe + IR API spam fix (15 Jun 2026 — Session 2):**
   - **`_get_ir_live_price` — no more fallback for unknown coins** (`app/data/fetcher.py`): Removed the `base.lower()` fallback that was firing an IR API call for every coin not in `IR_SYMBOL_MAP` (NEAR, LOOM, STRK, PYUSD etc.). `IR_SYMBOL_MAP` is now authoritative — if a coin isn't in it, return `None` immediately with zero network calls. Eliminates the 400-flood log spam.
@@ -723,16 +759,17 @@ Before the next session can begin trading, complete ALL of:
 - [ ] `/admin/config` → set `crypto_api_key`, `crypto_api_secret`, `crypto_testnet=false` (IR live)
 - [ ] `/admin/config` → set `ibkr_username`, `ibkr_password`, `ibkr_account`, `ibkr_paper_mode=true`
 - [ ] `wsl docker compose --profile trading up ibkr -d` → start IBKR paper gateway
-- [ ] `/admin/whatsapp` → scan QR code for AW org
+- [ ] `/admin/config` → set `telegram_bot_token`, `telegram_chat_id` and `/admin/comms` → Register Webhook for AW org
 - [ ] `/superadmin/organizations` → AW → MCP Credentials → Generate (all scopes) → configure in Claude Desktop
 - [ ] Fund IR account → set `Account.is_paper=False` when ready for live
 
 ### Next Session Prompt
 
-> "AstraTrade — continuing from 15 Jun 2026. AW org (id=10). Trader Terminal + Watchlist Terminal live.  
-> IR crypto pipeline fully fixed: live prices, TV charts, exchange-scoped universe (purges non-IR coins on re-seed).  
-> MEXC integrated. 70 regression tests passing (28 IR + 42 MEXC).  
-> ⚠️ Action needed: go to Health page → 'Re-seed Crypto Universe' to purge NEAR/LOOM/STRK/PYUSD from DB.  
+> "AstraTrade — continuing from 1 Jul 2026. AW org (id=10). Trader Terminal + Watchlist Terminal live.
+> IR crypto pipeline fully fixed: live prices, TV charts, exchange-scoped universe (purges non-IR coins on re-seed). MEXC integrated.
+> WhatsApp fully removed — Telegram is the sole channel, now supports multiple org users via comma-separated telegram_chat_id.
+> Mobile app removed. MCP server now independently deployable (opt-in, see mcp-server compose service).
+> ⚠️ Action needed: (1) apply the api→dashboard rename + waha-data removal to docker-compose-nas.yml manually (file was locked all session), (2) rotate APP_SECRET_KEY (a leaked env.txt was removed from git), (3) go to Health page → 'Re-seed Crypto Universe' to purge NEAR/LOOM/STRK/PYUSD from DB, (4) there's a separate flagged task investigating a large block of duplicate/dead routes in dashboard/main.py — check its status.
 > Then: `get_portfolio_stats()` and `get_market_regime('CRYPTO_INDEPENDENTRESERVE')` to review state."
 
 ### Recovery Watchlist (when to expect first signals)
@@ -791,7 +828,7 @@ Watch: check_entry_triggers fires every 5 min 24/7 — it will auto-detect break
 
 **yfinance over paid APIs** — 250 FMP calls/day is enough when: yfinance handles all price/volume/MA data (unlimited), and FMP is only used for supplemental fundamentals on the shortlisted ~10-20 stocks per day.
 
-**WAHA over Meta Cloud API** — No Meta Business verification required, runs in Docker, free. Migrate to Meta Cloud API when going SaaS (Phase 3). Same WAHA API interface, minimal code change.
+**Telegram over WhatsApp/WAHA** — WhatsApp (via the self-hosted WAHA container) wasn't proving useful in practice and added real operational weight (a whole extra Docker service, per-org WAHA sessions, QR-code pairing flow) for a channel nobody used. Telegram's Bot API needs no self-hosted gateway, supports genuine multi-user orgs via a comma-separated chat ID list (or a shared group chat), and is the sole notification/remote-control channel now.
 
 **TimescaleDB over plain PostgreSQL** — `price_bars` is queried heavily by date range and ticker. TimescaleDB hypertable partitions by date (3-month chunks), dramatically faster for 2yr × 200 stocks of daily bars.
 

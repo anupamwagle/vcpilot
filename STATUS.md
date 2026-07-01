@@ -1,12 +1,22 @@
 # AstraTrade — Operational Status
 
-> Last updated: 15 June 2026 AEST. Update this file when major milestones are reached.
+> Last updated: 1 July 2026 AEST. Update this file when major milestones are reached.
 
 ---
 
 ## Current Phase: 3 — Multi-Market Support (ASX + US Equities + Crypto Foundation)
 
 ### ✅ Done
+
+- **Enterprise-grade refactor: WhatsApp removed, mobile app removed, Telegram multi-user fix, MCP server independently deployable (1 Jul 2026):**
+  - WhatsApp/WAHA removed entirely (`WhatsAppNotifier`, `/webhook/whatsapp`, `/admin/whatsapp`, the WAHA docker-compose service, all SystemConfig keys). Telegram is the sole notification/remote-control channel.
+  - Fixed the Telegram multi-user-per-org bug: `telegram_chat_id` now accepts a comma-separated list instead of one exact-match value, so more than one org user can DM the bot and both receive alerts and issue commands. See CLAUDE.md § "Telegram Setup for Org Admins".
+  - Removed the undocumented React Native mobile app (`mobile/`) and its `app/api/mobile.py` backend.
+  - MCP tool-calling surface is now independently deployable as its own `mcp-server` container (opt-in — dashboard still mounts it in-process by default). See `app/mcp/standalone.py`.
+  - `docker-compose.yml` `api` service renamed to `dashboard` to match the folder.
+  - Deleted legacy Streamlit files (`dashboard/Home.py`, `dashboard/pages/`), a leaked `env.txt` secret (was tracked in git — rotate `APP_SECRET_KEY`), and assorted stale root-level scripts/logs.
+  - Flagged (not fixed, needs dedicated follow-up): a large block of routes in `dashboard/main.py` appears defined twice — see CLAUDE.md Session Handoff for details.
+  - `docker-compose-nas.yml` still needs the same `api`→`dashboard` + `waha-data` cleanup — blocked by a persistent file lock this session.
 
 - **Independent Reserve (IR) Live Price Pipeline — Full Fix (15 Jun 2026):**
   - **Root cause 1 — NULL `asset_type` skipped by background task:** `refresh_live_prices_cache_task` filtered watchlist/signal rows with `(asset_type or "EQUITY") == "CRYPTO"`. Any row with `asset_type=NULL` (from the Jun 2026 exchange-filter DB bug) was silently treated as EQUITY and never refreshed. Fixed: added ticker-format fallback — if ticker ends in `-AUD`, `-USD`, or `-USDT`, force `asset_type = "CRYPTO"` regardless of DB value.
@@ -376,7 +386,7 @@
    - `ibkr_paper_mode` = `true` (start with paper)
    - Then: `wsl docker compose --profile trading up ibkr -d`
 
-4. **Scan WhatsApp QR** — Go to `/admin/whatsapp` → scan QR → test with `HELP` message.
+4. **Configure Telegram** — Go to `/admin/config` under Alert & Chat Channels: set `telegram_bot_token` and `telegram_chat_id`, then go to `/admin/comms` → Register Webhook → test with `HELP` message. See CLAUDE.md § "Telegram Setup for Org Admins" for the full walkthrough (including adding a second org user).
 
 5. **Generate MCP credentials for AW** — Go to `/superadmin/organizations` → AW org → MCP Credentials section → Generate → grant ALL scopes. Configure in Claude Desktop Settings → MCP → AstraTrade.
 
@@ -422,7 +432,7 @@ First signals likely from: BTC-AUD, DOGE-AUD, LINK-AUD, XRP-AUD (closest to 200M
 
 ---
 
-## Services Status (as of 14 Jun 2026)
+## Services Status (as of 1 Jul 2026)
 
 | Service | Status | Notes |
 |---|---|---|
@@ -432,9 +442,11 @@ First signals likely from: BTC-AUD, DOGE-AUD, LINK-AUD, XRP-AUD (closest to 200M
 | `vcpilot-worker-equities` | ✅ Running | 5-min P&L refresh + ASX entry/exit checks |
 | `vcpilot-worker-crypto` | ✅ Running | 5-min crypto entry/exit/stop checks |
 | `vcpilot-beat` | ✅ Running | 5-min crypto beat + 4× daily screener active |
-| `vcpilot-api` | ✅ Running | http://localhost:8501 |
-| `vcpilot-whatsapp` | ✅ Running | http://localhost:3000 — QR not yet scanned for AW |
+| `vcpilot-dashboard` | ✅ Running | http://localhost:8501 — renamed from `vcpilot-api`, requires `docker compose up -d` to pick up |
+| `vcpilot-mcp-server` | ⏸ New, opt-in | http://localhost:8502 — not yet started; additive service, see CLAUDE.md Architecture |
 | `vcpilot-ibkr` | ⏸ Not started | Need: `docker compose --profile trading up ibkr -d` |
+
+Note: the WhatsApp/WAHA container (`vcpilot-whatsapp`) has been removed entirely — Telegram is the sole notification/remote-control channel.
 
 ## Data State (AW Org — id=10, as of 12 Jun 2026)
 
@@ -452,7 +464,7 @@ First signals likely from: BTC-AUD, DOGE-AUD, LINK-AUD, XRP-AUD (closest to 200M
 | AstraTrade rules | ✅ 56 total | 11 crypto | 45 equity |
 | IBKR connection | ⏸ Not connected (simulation mode active) |
 | IR API credentials | ⚠️ Needs config in /admin/config |
-| WhatsApp | ⚠️ QR not scanned for AW org |
+| Telegram | ⚠️ Needs `telegram_bot_token`/`telegram_chat_id` set + webhook registered for AW org |
 | MCP credentials | ⚠️ Not generated for AW org yet |
 
 ---
@@ -473,7 +485,7 @@ First signals likely from: BTC-AUD, DOGE-AUD, LINK-AUD, XRP-AUD (closest to 200M
 
 | Issue | Severity | Fix |
 |---|---|---|
-| Old Streamlit files in `dashboard/` | Low | Delete manually from WSL |
+| ~~Old Streamlit files in `dashboard/`~~ | ~~Low~~ | ✅ Fixed (1 Jul 2026) — `dashboard/Home.py` and `dashboard/pages/` deleted |
 | `sync_stop_orders` is a placeholder | Medium | Implement IBKR modify order API |
 | ~~Entry triggers use last EOD close, not live price~~ | ~~Medium~~ | ✅ Fixed — `get_intraday_price()` uses IBKR real-time or yfinance 15-min; EOD is last-resort fallback |
 | ~~WhatsApp webhook not wired~~ | ~~High~~ | ✅ Fixed |
