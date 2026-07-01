@@ -165,13 +165,13 @@ services:
       --max-interval=30"
 
   # ---------------------------------------------------------------------------
-  # API — FastAPI & Streamlit Admin/Client UI
+  # Dashboard — FastAPI + Jinja2 Admin/Client UI
   # ---------------------------------------------------------------------------
-  api:
+  dashboard:
     build:
       context: .
       dockerfile: docker/Dockerfile.dashboard
-    container_name: vcpilot-api
+    container_name: vcpilot-dashboard
     restart: unless-stopped
     <<: *app-env
     depends_on:
