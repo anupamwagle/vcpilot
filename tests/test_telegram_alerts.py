@@ -21,7 +21,7 @@ def _notifier():
     n.organization_id = 1
     n.telegram_enabled = True
     n.token = "TESTTOKEN"
-    n.chat_id = "123456"
+    n.chat_ids = ["123456"]
     return n
 
 

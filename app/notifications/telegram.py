@@ -31,10 +31,11 @@ class TelegramNotifier(BaseNotifier):
         self.organization_id = organization_id
         self.telegram_enabled = False
         self.token = ""
-        self.chat_id = ""
+        self.chat_ids: list[str] = []
 
         # Resolve settings from database
         enabled_val = None
+        chat_id_val = None
         try:
             from app.database import SessionLocal
             from app.models.config import SystemConfig
@@ -56,14 +57,12 @@ class TelegramNotifier(BaseNotifier):
                 enabled_val = cfg("telegram_enabled")
                 if enabled_val is not None:
                     self.telegram_enabled = enabled_val.lower() in ("true", "1", "yes")
-                
+
                 token_val = cfg("telegram_bot_token")
                 if token_val:
                     self.token = token_val
 
                 chat_id_val = cfg("telegram_chat_id")
-                if chat_id_val:
-                    self.chat_id = chat_id_val
             finally:
                 db.close()
         except Exception as e:
@@ -73,10 +72,19 @@ class TelegramNotifier(BaseNotifier):
         import os
         if not self.token:
             self.token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-        if not self.chat_id:
-            self.chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+        if not chat_id_val:
+            chat_id_val = os.getenv("TELEGRAM_CHAT_ID", "")
         if enabled_val is None:
             self.telegram_enabled = os.getenv("TELEGRAM_ENABLED", "true").lower() in ("true", "1", "yes")
+
+        # telegram_chat_id supports a comma-separated list — one chat per org
+        # user (each DMs the bot individually) or a single shared group chat.
+        self.chat_ids = [c.strip() for c in (chat_id_val or "").split(",") if c.strip()]
+
+    @property
+    def chat_id(self) -> str:
+        """First configured chat ID, for callers that only need one (e.g. display)."""
+        return self.chat_ids[0] if self.chat_ids else ""
 
     def _audit_send_failure(self, reason: str, message: str) -> None:
         """Write a TASK_ERROR audit row so notification failures are visible in
@@ -105,23 +113,34 @@ class TelegramNotifier(BaseNotifier):
             logger.warning(f"Telegram failure audit write failed (non-fatal): {e}")
 
     def send(self, message: str, chat_id: str | None = None) -> bool:
-        """Send a markdown text message to Telegram."""
+        """Send a markdown text message to Telegram.
+
+        With no explicit chat_id, broadcasts to every configured chat (multi-user
+        orgs) and succeeds if at least one delivery succeeds. An explicit chat_id
+        (e.g. replying to whoever issued a command) sends to that chat only.
+        """
         if not self.telegram_enabled:
             logger.info(f"Telegram alerts are disabled for Org {self.organization_id}. Did not send message: {message[:60]}...")
             self._audit_send_failure("telegram_enabled is False for this org", message)
             return False
 
-        token = self.token
-        target = chat_id or self.chat_id
+        targets = [chat_id] if chat_id else self.chat_ids
 
-        if not token or not target:
+        if not self.token or not targets:
             logger.warning(f"Telegram send skipped: Bot Token or Chat ID not configured (Org: {self.organization_id})")
             self._audit_send_failure("telegram_bot_token or telegram_chat_id not configured", message)
             return False
 
+        # List comprehension (not any(generator)) so every target is actually
+        # sent to — a generator passed to any() would short-circuit and stop
+        # broadcasting after the first successful delivery.
+        results = [self._send_to_chat(target, message) for target in targets]
+        return any(results)
+
+    def _send_to_chat(self, target: str, message: str) -> bool:
         # Clean markdown formatting issues (Telegram Markdown can be strict)
         # We ensure bold (*) and italic (_) syntax match
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        url = f"https://api.telegram.org/bot{self.token}/sendMessage"
         payload = {
             "chat_id": target,
             "text": message,
@@ -145,15 +164,15 @@ class TelegramNotifier(BaseNotifier):
                     logger.debug("Telegram sent OK as plain text after Markdown parse error")
                     return True
                 logger.warning(f"Telegram plain-text retry failed ({plain.status_code}): {plain.text[:120]}")
-                self._audit_send_failure(f"HTTP {plain.status_code} (plain retry): {plain.text[:120]}", message)
+                self._audit_send_failure(f"HTTP {plain.status_code} (plain retry) to {target}: {plain.text[:120]}", message)
                 return False
 
             logger.warning(f"Telegram send failed ({resp.status_code}): {resp.text[:120]}")
-            self._audit_send_failure(f"HTTP {resp.status_code}: {resp.text[:120]}", message)
+            self._audit_send_failure(f"HTTP {resp.status_code} to {target}: {resp.text[:120]}", message)
             return False
         except Exception as e:
             logger.error(f"Telegram send error: {e}")
-            self._audit_send_failure(f"exception: {e}", message)
+            self._audit_send_failure(f"exception sending to {target}: {e}", message)
             return False
 
     def send_signal_alert(self, signal_data: dict) -> bool:

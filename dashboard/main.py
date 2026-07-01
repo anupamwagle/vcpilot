@@ -6286,18 +6286,16 @@ async def webhook_telegram(request: Request, db: Session = Depends(get_db)):
     if not chat_id or not text:
         return JSONResponse({"ok": True})
 
-    # Look up organization by telegram_chat_id
+    # Look up organization by telegram_chat_id — value may be a comma-separated
+    # list (one chat per org user, or a single shared group chat).
     org_id = None
-    config = db.query(SystemConfig).filter(
-        SystemConfig.key == "telegram_chat_id",
-        SystemConfig.value == chat_id
-    ).first()
-    
-    if config:
-        org_id = config.organization_id
-    else:
-        # Fallback: check if the notification_channel is telegram and this matches a global one
-        # Or just log warning
+    for config in db.query(SystemConfig).filter(SystemConfig.key == "telegram_chat_id").all():
+        configured_ids = [c.strip() for c in (config.value or "").split(",") if c.strip()]
+        if chat_id in configured_ids:
+            org_id = config.organization_id
+            break
+
+    if org_id is None:
         logger.warning(f"Telegram message from unknown chat {chat_id} — ignored")
         return JSONResponse({"ok": True})
 
@@ -6335,6 +6333,7 @@ async def admin_comms(request: Request, db: Session = Depends(get_db)):
     # ── Telegram Context ──────────────────────────────────────────────────
     tg_status = "NOT_CONFIGURED"
     tg_bot_info = {}
+    tg_chat_id = ""
     try:
         tg_notifier = TelegramNotifier(organization_id=org_id)
         if tg_notifier.token:
@@ -6345,7 +6344,7 @@ async def admin_comms(request: Request, db: Session = Depends(get_db)):
                 tg_bot_info = resp.json().get("result", {})
             else:
                 tg_status = "INVALID_TOKEN"
-        tg_chat_id = tg_notifier.chat_id
+        tg_chat_id = ", ".join(tg_notifier.chat_ids)
     except Exception as _e:
         tg_status = "ERROR"
 

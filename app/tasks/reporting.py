@@ -270,15 +270,16 @@ def poll_telegram_updates(self):
                 if not text or not chat_id:
                     continue
 
-                # Security: verify chat_id matches org's configured telegram_chat_id
+                # Security: verify chat_id is one of org's configured telegram_chat_id
+                # values (comma-separated — one per org user, or a shared group chat).
                 with get_db() as db:
                     cfg_chat = db.query(SystemConfig).filter(
                         SystemConfig.key == "telegram_chat_id",
                         SystemConfig.organization_id == org_id,
                     ).first()
-                    allowed_chat = cfg_chat.value if cfg_chat else None
+                    allowed_chats = [c.strip() for c in (cfg_chat.value or "").split(",") if c.strip()] if cfg_chat else []
 
-                if not allowed_chat or allowed_chat != chat_id:
+                if chat_id not in allowed_chats:
                     logger.warning(f"Telegram poll Org {org_id}: message from unknown chat {chat_id} — ignored")
                     continue
 

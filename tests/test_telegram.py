@@ -10,7 +10,7 @@ def _make_notifier(enabled=True, token="testtoken", chat_id="12345"):
     n.organization_id = None
     n.telegram_enabled = enabled
     n.token = token
-    n.chat_id = chat_id
+    n.chat_ids = [chat_id] if chat_id else []
     return n
 
 
@@ -120,6 +120,121 @@ def test_send_daily_report():
     msg = mock_send.call_args[0][0]
     assert "2026-06-10" in msg
     assert "BULL" in msg
+
+
+# --- Multi-user chat_ids (comma-separated telegram_chat_id) ---
+
+def test_chat_id_property_returns_first_configured():
+    n = _make_notifier(chat_id="")
+    n.chat_ids = ["111", "222"]
+    assert n.chat_id == "111"
+
+
+def test_chat_id_property_empty_when_no_chats():
+    n = _make_notifier(chat_id="")
+    assert n.chat_ids == []
+    assert n.chat_id == ""
+
+
+def test_send_broadcasts_to_all_configured_chats():
+    n = _make_notifier(chat_id="")
+    n.chat_ids = ["111", "222", "333"]
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    with patch("httpx.post", return_value=mock_resp) as mock_post:
+        result = n.send("Broadcast message")
+    assert result is True
+    assert mock_post.call_count == 3
+    sent_chat_ids = {call.kwargs["json"]["chat_id"] for call in mock_post.call_args_list}
+    assert sent_chat_ids == {"111", "222", "333"}
+
+
+def test_send_succeeds_if_at_least_one_chat_succeeds():
+    n = _make_notifier(chat_id="")
+    n.chat_ids = ["111", "222"]
+    ok_resp = MagicMock(status_code=200)
+    fail_resp = MagicMock(status_code=500, text="Internal error")
+    with patch("httpx.post", side_effect=[fail_resp, ok_resp]):
+        result = n.send("Broadcast message")
+    assert result is True
+
+
+def test_send_with_explicit_chat_id_only_sends_to_that_chat():
+    """Command replies (webhook) target only the sender's chat, not a broadcast."""
+    n = _make_notifier(chat_id="")
+    n.chat_ids = ["111", "222", "333"]
+    mock_resp = MagicMock(status_code=200)
+    with patch("httpx.post", return_value=mock_resp) as mock_post:
+        n.send("Reply to sender", chat_id="222")
+    mock_post.assert_called_once()
+    assert mock_post.call_args.kwargs["json"]["chat_id"] == "222"
+
+
+class _FakeTelegramRequest:
+    """Minimal stand-in for FastAPI's Request — webhook_telegram only awaits .json()."""
+    def __init__(self, payload):
+        self._payload = payload
+
+    async def json(self):
+        return self._payload
+
+
+def test_webhook_telegram_resolves_org_from_any_configured_chat_id(db_session, org_and_account):
+    """A second org user DMing the bot from their own chat must still route to the
+    org and get a reply — this is the exact multi-user bug: previously only the
+    single chat_id stored verbatim in SystemConfig would match."""
+    import asyncio
+    from unittest.mock import patch
+    from dashboard.main import webhook_telegram
+    from app.models.config import SystemConfig
+
+    org, _ = org_and_account
+    db_session.add(SystemConfig(key="telegram_chat_id", value="111,222,333", organization_id=org.id))
+    db_session.add(SystemConfig(key="telegram_bot_token", value="tok", organization_id=org.id))
+    db_session.commit()
+
+    request = _FakeTelegramRequest({"message": {"chat": {"id": 222}, "text": "STATUS", "from": {"id": 999}}})
+
+    with patch("app.agent.commands.AgentCommandHandler.handle", return_value="ok"), \
+         patch("app.notifications.telegram.TelegramNotifier.send", return_value=True) as mock_send:
+        response = asyncio.run(webhook_telegram(request, db=db_session))
+
+    assert response.status_code == 200
+    mock_send.assert_called_once()
+    # Reply goes only to the sender's own chat, not a broadcast to all configured chats.
+    assert mock_send.call_args.kwargs.get("chat_id") == "222"
+
+
+def test_webhook_telegram_ignores_unknown_chat(db_session, org_and_account):
+    import asyncio
+    from unittest.mock import patch
+    from dashboard.main import webhook_telegram
+    from app.models.config import SystemConfig
+
+    org, _ = org_and_account
+    db_session.add(SystemConfig(key="telegram_chat_id", value="111,222", organization_id=org.id))
+    db_session.commit()
+
+    request = _FakeTelegramRequest({"message": {"chat": {"id": 999999}, "text": "STATUS", "from": {"id": 1}}})
+
+    with patch("app.notifications.telegram.TelegramNotifier.send", return_value=True) as mock_send:
+        response = asyncio.run(webhook_telegram(request, db=db_session))
+
+    assert response.status_code == 200
+    mock_send.assert_not_called()
+
+
+def test_notifier_parses_comma_separated_chat_ids_from_db(db_session, org_and_account):
+    from app.notifications.telegram import TelegramNotifier
+    from app.models.config import SystemConfig
+    org, _ = org_and_account
+    db_session.add(SystemConfig(key="telegram_chat_id", value=" 111 , 222 ,333", organization_id=org.id))
+    db_session.add(SystemConfig(key="telegram_bot_token", value="tok", organization_id=org.id))
+    db_session.commit()
+
+    n = TelegramNotifier(organization_id=org.id)
+    assert n.chat_ids == ["111", "222", "333"]
+    assert n.chat_id == "111"
 
 
 # --- Construction with DB (via test db_session) ---
