@@ -81,7 +81,7 @@
       It screens ASX equities, US equities (NYSE/NASDAQ), and crypto for the Volatility Contraction
       Pattern (VCP) — Minervini's signature setup — and executes bracket orders through Interactive
       Brokers (equities) or Independent Reserve / MEXC (crypto) when a breakout confirms.
-      The system is fully controlled via a web dashboard and WhatsApp commands, runs 24/7 in Docker,
+      The system is fully controlled via a web dashboard and Telegram commands, runs 24/7 in Docker,
       and is designed around capital preservation first, growth second.
     </p>
 
@@ -124,7 +124,7 @@
       <a href="#q16">16. Why isn't yfinance returning fundamental data for my stocks?</a>
       <a href="#q17">17. Why am I not seeing any signals?</a>
       <a href="#q18">18. How does crypto trading differ from equities?</a>
-      <a href="#q19">19. What WhatsApp commands are available?</a>
+      <a href="#q19">19. What Telegram commands are available?</a>
       <a href="#q20">20. How do I add a stock to my watchlist?</a>
       <a href="#q21">21. What is pyramiding / add-on buying?</a>
       <a href="#q22">22. What is portfolio heat?</a>
@@ -384,7 +384,7 @@
         <li>Checks portfolio heat is below the maximum</li>
         <li>Checks max open positions not reached</li>
       </ul>
-      <p>If all conditions met → submits a bracket order (entry limit at current price, stop at signal stop price, take-profit at T1 = pivot + 20%). Position is immediately written to the DB and WhatsApp alert sent.</p>
+      <p>If all conditions met → submits a bracket order (entry limit at current price, stop at signal stop price, take-profit at T1 = pivot + 20%). Position is immediately written to the DB and Telegram alert sent.</p>
     </div>
   </details>
 
@@ -576,13 +576,13 @@
   </details>
 
   <!-- ════════════════════════════════════════════════════════════════════════ -->
-  <div class="section-title">📱 WhatsApp &amp; Controls</div>
+  <div class="section-title">📱 Telegram &amp; Controls</div>
 
   <!-- Q19 -->
   <details id="q19">
-    <summary>19. What WhatsApp commands are available?</summary>
+    <summary>19. What Telegram commands are available?</summary>
     <div class="faq-body">
-      <p>Send any of these from your configured admin WhatsApp number to the AstraTrade bot:</p>
+      <p>Send any of these from your Telegram chat with the AstraTrade bot:</p>
       <div class="rule-grid">
         <div class="rule-item"><code>STATUS</code> — System overview</div>
         <div class="rule-item"><code>POSITIONS</code> — Open positions &amp; P&amp;L</div>
@@ -598,7 +598,7 @@
         <div class="rule-item"><code>CONFIG [KEY] [VALUE]</code> — Update a config setting</div>
         <div class="rule-item"><code>HELP</code> — Full command list</div>
       </div>
-      <p>Configure your phone number in Admin → Config → <code>whatsapp_admin_number</code> (digits only, e.g. <code>61450325233</code>). Then set up the WAHA session in Admin → WhatsApp → Start Session.</p>
+      <p>Set up your bot token and chat ID(s) in Admin → Config under Alert &amp; Chat Channels, then register the webhook from Admin → Communications. See CLAUDE.md "Telegram Setup for Org Admins" for the full walkthrough, including multi-user setup.</p>
     </div>
   </details>
 
@@ -716,7 +716,7 @@
     <summary>27. What is the earnings avoid rule?</summary>
     <div class="faq-body">
       <p>Earnings announcements introduce binary risk — the stock can gap 10–20% either direction regardless of the chart setup. Minervini's rule: if you're sitting on an unrealised gain of less than about 10%, the risk of holding through earnings is not worth it.</p>
-      <p>AstraTrade's <code>exit_earnings_avoid</code> rule: if a position has an upcoming earnings date within N days (default 5) and unrealised P&L is below the threshold (default 10%), the exit rule fires and recommends exiting before the announcement. The WhatsApp alert includes the earnings date.</p>
+      <p>AstraTrade's <code>exit_earnings_avoid</code> rule: if a position has an upcoming earnings date within N days (default 5) and unrealised P&L is below the threshold (default 10%), the exit rule fires and recommends exiting before the announcement. The Telegram alert includes the earnings date.</p>
     </div>
   </details>
 
@@ -761,7 +761,7 @@
   <details id="q30">
     <summary>30. What is the daily report?</summary>
     <div class="faq-body">
-      <p>At 6:00pm AEST weekdays (and any time via WhatsApp <code>REPORT</code> command or Admin → Health), AstraTrade sends a WhatsApp summary to your configured admin number covering:</p>
+      <p>At 6:00pm AEST weekdays (and any time via Telegram <code>REPORT</code> command or Admin → Health), AstraTrade sends a Telegram summary to your configured chat(s) covering:</p>
       <ul>
         <li>Open positions with current price, P&L, and stop levels</li>
         <li>Today's closed trades and realised P&L</li>
@@ -769,7 +769,7 @@
         <li>Current market regime</li>
         <li>Portfolio total value and heat</li>
       </ul>
-      <p>Configure your phone number in Admin → Config (<code>whatsapp_admin_number</code>, digits only).</p>
+      <p>Configure your bot token and chat ID(s) in Admin → Config under Alert &amp; Chat Channels.</p>
     </div>
   </details>
 
@@ -830,7 +830,7 @@
         <li>Every exit rule evaluation per position</li>
         <li>Every order submitted / filled / rejected</li>
         <li>Every config change, rule toggle, manual action</li>
-        <li>Every WhatsApp command received</li>
+        <li>Every Telegram command received</li>
       </ul>
       <p>Rows are <strong>never updated or deleted</strong>. This is critical for debugging ("why did this trade fire?"), CGT reporting ("what was the exact fill price?"), and rule auditing ("was the stop correctly set?"). The actor field records your email for manual actions and "system" for automated tasks.</p>
       <p>The Data Log page (Admin → Data Log) is a specialised view showing just the intraday entry-check snapshots — price vs pivot, volume ratio, data source, delay — useful for diagnosing why an entry didn't fire.</p>

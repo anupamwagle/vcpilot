@@ -85,59 +85,6 @@ def test_settings_fmp_api_key_db_override():
         assert s.fmp_api_key == "fmp_key_123"
 
 
-def test_settings_whatsapp_enabled_false():
-    from app.config import Settings
-    s = Settings()
-    with patch.object(s, "_get_db_config", return_value="false"):
-        assert s.whatsapp_enabled is False
-
-
-def test_settings_whatsapp_enabled_fallback():
-    from app.config import Settings
-    s = Settings()
-    s.whatsapp_enabled_env = True
-    with patch.object(s, "_get_db_config", return_value=None):
-        assert s.whatsapp_enabled is True
-
-
-def test_settings_admin_jid_from_db_number():
-    from app.config import Settings
-    s = Settings()
-    with patch.object(s, "_get_db_config", return_value="61400000000"):
-        jid = s.admin_jid
-    assert jid == "61400000000@c.us"
-
-
-def test_settings_admin_jid_from_env_number():
-    from app.config import Settings
-    s = Settings()
-    s.whatsapp_admin_number_env = "+61400000001"
-    s.whatsapp_admin_jid_env = ""
-    with patch.object(s, "_get_db_config", return_value=None):
-        jid = s.admin_jid
-    assert jid == "61400000001@c.us"
-
-
-def test_settings_admin_jid_from_env_jid():
-    from app.config import Settings
-    s = Settings()
-    s.whatsapp_admin_jid_env = "61400000002@c.us"
-    s.whatsapp_admin_number_env = ""
-    with patch.object(s, "_get_db_config", return_value=None):
-        jid = s.admin_jid
-    assert jid == "61400000002@c.us"
-
-
-def test_settings_admin_jid_empty_when_nothing_set():
-    from app.config import Settings
-    s = Settings()
-    s.whatsapp_admin_jid_env = ""
-    s.whatsapp_admin_number_env = ""
-    with patch.object(s, "_get_db_config", return_value=None):
-        jid = s.admin_jid
-    assert jid == ""
-
-
 def test_settings_working_capital_db_override():
     from app.config import Settings
     s = Settings()
@@ -212,13 +159,6 @@ def test_settings_ibkr_simulate_live_db():
     s = Settings()
     with patch.object(s, "_get_db_config", return_value="true"):
         assert s.ibkr_simulate_live is True
-
-
-def test_settings_notification_channel_db():
-    from app.config import Settings
-    s = Settings()
-    with patch.object(s, "_get_db_config", return_value="whatsapp"):
-        assert s.notification_channel == "whatsapp"
 
 
 def test_settings_weekly_capital_injection_deprecated():

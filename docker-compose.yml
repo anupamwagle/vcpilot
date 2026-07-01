@@ -16,7 +16,6 @@ networks:
 volumes:
   postgres-data:
   redis-data:
-  waha-data:
   ibkr-jts:
 
 services:
@@ -192,33 +191,6 @@ services:
              else
                uvicorn dashboard.main:app --host 0.0.0.0 --port 8501 --loop asyncio --reload --reload-dir /app/dashboard --proxy-headers --forwarded-allow-ips='*';
              fi"
-
-  # ---------------------------------------------------------------------------
-  # WhatsApp — WAHA Core
-  # ---------------------------------------------------------------------------
-  whatsapp:
-    image: devlikeapro/waha:latest
-    container_name: vcpilot-whatsapp
-    restart: unless-stopped
-    environment:
-      WHATSAPP_API_KEY: ${WAHA_API_KEY}
-      WHATSAPP_DEFAULT_ENGINE: WEBJS
-      WAHA_DASHBOARD_USERNAME: admin
-      WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:-vcpilot_2026}
-      # NOTE: do NOT auto-start a session here. Auto-starting "default" makes WAHA
-      # endlessly emit session.status=SCAN_QR_CODE webhooks even when no org uses
-      # WhatsApp, flooding the API logs. Sessions are started on demand from
-      # /admin/whatsapp ("Start Session") when an org actually connects WhatsApp.
-      # To restore the old behaviour set WAHA_START_SESSION via .env instead.
-      WHATSAPP_START_SESSION: ${WAHA_START_SESSION:-}
-      WHATSAPP_HOOK_URL: ${WAHA_HOOK_URL:-http://api:8501/webhook/whatsapp}
-      WHATSAPP_HOOK_EVENTS: message,session.status
-    ports:
-      - "3000:3000"
-    volumes:
-      - waha-data:/app/.sessions
-    networks:
-      - vcpilot-net
 
   # ---------------------------------------------------------------------------
   # IBKR — Interactive Brokers Gateway (paper by default)

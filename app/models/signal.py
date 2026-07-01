@@ -16,7 +16,7 @@ class SignalStatus(str, enum.Enum):
     PENDING   = "PENDING"    # Generated, awaiting intraday entry trigger
     TRIGGERED = "TRIGGERED"  # Entry condition met, order placed
     EXPIRED   = "EXPIRED"    # Not triggered within the session
-    SKIPPED   = "SKIPPED"    # Manually skipped via WhatsApp command
+    SKIPPED   = "SKIPPED"    # Manually skipped via dashboard or Telegram command
     CANCELLED = "CANCELLED"  # Rule or regime filter cancelled after generation
 
 

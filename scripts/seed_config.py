@@ -50,27 +50,16 @@ SYSTEM_CONFIGS = [
          label="IBKR Paper Mode", group="ibkr",
          description="True for paper trading (port 4002), False for live trading (port 4001)"),
 
-    # --- WhatsApp ---
-    dict(key="whatsapp_enabled", value="true" if settings.whatsapp_enabled_env else "false", value_type="BOOLEAN",
-         label="WhatsApp Alerts Enabled", group="whatsapp",
-         description="Enable or disable all WhatsApp notifications and remote command handling"),
-    dict(key="whatsapp_admin_number", value=str(settings.whatsapp_admin_number_env), value_type="STRING",
-         label="WhatsApp Admin Number", group="whatsapp",
-         description="Your WhatsApp phone number in international format (e.g. 61400000000, no + or spaces)"),
-
-    # --- Notifications / Alert Channel ---
-    dict(key="notification_channel", value="telegram", value_type="STRING",
-         label="Notification Channel", group="whatsapp",
-         description="Active communication channel ('whatsapp' or 'telegram')"),
+    # --- Notifications / Alert Channel (Telegram) ---
     dict(key="telegram_enabled", value="true", value_type="BOOLEAN",
-         label="Telegram Alerts Enabled", group="whatsapp",
+         label="Telegram Alerts Enabled", group="notifications",
          description="Enable or disable all Telegram notifications and remote command handling"),
     dict(key="telegram_bot_token", value="", value_type="STRING",
-         label="Telegram Bot Token", group="whatsapp", is_secret=True,
+         label="Telegram Bot Token", group="notifications", is_secret=True,
          description="The Telegram Bot Token from @BotFather"),
     dict(key="telegram_chat_id", value="", value_type="STRING",
-         label="Telegram Chat ID", group="whatsapp",
-         description="The Telegram Chat ID to send alerts to"),
+         label="Telegram Chat ID(s)", group="notifications",
+         description="Comma-separated Telegram chat IDs to send alerts to — one per org user, or a single group chat ID"),
 
     # --- Data APIs ---
     dict(key="fmp_api_key", value=str(settings.fmp_api_key_env), value_type="STRING",

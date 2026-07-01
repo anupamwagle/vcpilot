@@ -47,7 +47,7 @@ class ExitReason(str, enum.Enum):
     MARKET_REGIME    = "MARKET_REGIME"        # Market went into correction
     EARNINGS_AVOID   = "EARNINGS_AVOID"       # Exited before earnings
     CLIMAX_TOP       = "CLIMAX_TOP"           # Exhaustion signal
-    MANUAL           = "MANUAL"              # Admin / WhatsApp override
+    MANUAL           = "MANUAL"              # Admin / Telegram override
     THREE_WEEKS_TIGHT= "THREE_WEEKS_TIGHT"   # 3-weeks-tight trailing stop
 
 
@@ -144,7 +144,7 @@ EXIT_REASON_RATIONALE: dict[str, dict[str, str]] = {
         ),
     },
     "MANUAL": {
-        "summary": "Closed manually by you (via the dashboard or a WhatsApp/Telegram command).",
+        "summary": "Closed manually by you (via the dashboard or a Telegram command).",
         "detail": (
             "This position was closed by hand rather than by an automatic rule — for example from the "
             "Positions page or a remote command. The system simply recorded and executed your decision."

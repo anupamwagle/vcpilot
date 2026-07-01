@@ -250,7 +250,7 @@ async function cancelOpenOrder(orderId) {
   <div class="section-head" style="flex-wrap:wrap;gap:.5rem">
     <div>
       <p class="section-title">Open Positions ({{ positions|length }})</p>
-      <p class="text-xs" style="color:var(--text-subtle)">Close = mark as closed, record trade, notify {% if notification_channel == 'telegram' %}Telegram{% else %}WhatsApp{% endif %}</p>
+      <p class="text-xs" style="color:var(--text-subtle)">Close = mark as closed, record trade, notify Telegram</p>
     </div>
     {% if positions %}
     <div style="position:relative;flex-shrink:0">

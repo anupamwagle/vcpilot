@@ -1,1 +1,1 @@
-"""WhatsApp agent command handler."""
+"""Remote control agent command handler (Telegram)."""

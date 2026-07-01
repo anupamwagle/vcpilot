@@ -25,7 +25,7 @@
 
 {% if msg == 'ping' %}<div class="alert-success mb-4">Worker ping queued — refresh in ~10 seconds.</div>
 {% elif msg == 'screen' %}<div class="alert-info mb-4">Screener queued — results appear in Signals within minutes.</div>
-{% elif msg == 'report' %}<div class="alert-info mb-4">Daily report queued — {% if notification_channel == 'telegram' %}Telegram{% else %}WhatsApp{% endif %} message incoming.</div>
+{% elif msg == 'report' %}<div class="alert-info mb-4">Daily report queued — Telegram message incoming.</div>
 {% elif msg == 'recategorise' %}<div class="alert-success mb-4">Watchlist label re-categorisation queued — sector labels will be assigned to unlabelled items. Check Task Log.</div>
 {% elif msg == 'universe' %}<div class="alert-success mb-4">ASX universe refresh queued — constituent list will be updated. Check Task Log.</div>
 {% elif msg == 'universe_us' %}<div class="alert-success mb-4">US universe refresh queued — S&P 500 / NASDAQ-100 stocks will be seeded. Check Task Log for progress.</div>
@@ -304,7 +304,7 @@
         <td class="px-4 py-2.5 text-xs" style="color:var(--text-subtle)">All</td>
         <td class="px-4 py-2.5 text-xs font-mono" style="color:var(--text-muted)">Mon&ndash;Fri 6:00pm</td>
         <td class="px-4 py-2.5 text-xs">{% if r %}<span style="color:var(--pos)">&#x25CF; {{ r.time }}</span>{% else %}<span style="color:var(--text-subtle)">Never</span>{% endif %}</td>
-        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">{% if notification_channel == 'telegram' %}Telegram{% else %}WhatsApp{% endif %} P&amp;L summary to configured admin number</td>
+        <td class="px-4 py-2.5 text-xs hidden md:table-cell" style="color:var(--text-subtle)">Telegram P&amp;L summary to configured admin number</td>
       </tr>
 
       <!-- ASX tasks -->

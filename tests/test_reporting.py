@@ -1,4 +1,4 @@
-"""Tests for app/tasks/reporting.py — generate_daily_report, health_check, send_whatsapp_message."""
+"""Tests for app/tasks/reporting.py — generate_daily_report, health_check, send_notification_message."""
 import pytest
 from datetime import date
 from unittest.mock import patch, MagicMock
@@ -118,14 +118,14 @@ def test_health_check_updates_existing_heartbeat(db_session, org_and_account):
     assert row.value != "2000-01-01T00:00:00"
 
 
-# --- send_whatsapp_message task ---
+# --- send_notification_message task ---
 
-def test_send_whatsapp_message_calls_notifier_method(db_session, org_and_account):
-    from app.tasks.reporting import send_whatsapp_message
+def test_send_notification_message_calls_notifier_method(db_session, org_and_account):
+    from app.tasks.reporting import send_notification_message
     org, _ = org_and_account
     mock_notifier = MagicMock()
     with patch("app.notifications.get_notifier", return_value=mock_notifier):
-        send_whatsapp_message.run(
+        send_notification_message.run(
             organization_id=org.id,
             method_name="send",
             args=["hello"],
@@ -134,13 +134,13 @@ def test_send_whatsapp_message_calls_notifier_method(db_session, org_and_account
     mock_notifier.send.assert_called_once_with("hello")
 
 
-def test_send_whatsapp_message_unknown_method_does_not_raise(db_session, org_and_account):
-    from app.tasks.reporting import send_whatsapp_message
+def test_send_notification_message_unknown_method_does_not_raise(db_session, org_and_account):
+    from app.tasks.reporting import send_notification_message
     org, _ = org_and_account
     mock_notifier = MagicMock(spec=[])  # no methods
     with patch("app.notifications.get_notifier", return_value=mock_notifier):
         # Should not raise — just logs error
-        send_whatsapp_message.run(
+        send_notification_message.run(
             organization_id=org.id,
             method_name="nonexistent_method",
         )

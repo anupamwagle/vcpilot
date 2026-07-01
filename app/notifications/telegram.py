@@ -81,9 +81,9 @@ class TelegramNotifier(BaseNotifier):
     def _audit_send_failure(self, reason: str, message: str) -> None:
         """Write a TASK_ERROR audit row so notification failures are visible in
         /admin/tasks without needing server log access. Never raises.
-        Mirrors WhatsAppNotifier._audit_send_failure — Telegram is the default
-        notification_channel (see app/notifications/__init__.py::get_notifier),
-        so this is the audit path that actually fires for most orgs."""
+        Telegram is the only notification channel (see
+        app/notifications/__init__.py::get_notifier), so this is the audit
+        path that fires for every org."""
         try:
             from app.database import SessionLocal
             from app.models.audit import AuditLog, AuditAction

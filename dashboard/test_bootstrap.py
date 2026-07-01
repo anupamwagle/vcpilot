@@ -44,7 +44,6 @@ def run_test():
         # Seed system configs
         configs_to_seed = [
             ("onboarding_completed", "false", ConfigValueType.BOOLEAN, "Onboarding Completed", "Whether the organization has completed first-time setup"),
-            ("whatsapp_session_name", f"org_{org.id}", ConfigValueType.STRING, "WhatsApp Session Name", "WAHA session name"),
             ("active_exchanges", "ASX,CRYPTO_INDEPENDENTRESERVE", ConfigValueType.STRING, "Active Exchanges", "Comma-separated exchange keys"),
         ]
         for key, val, vtype, label, desc in configs_to_seed:

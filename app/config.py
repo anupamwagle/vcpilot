@@ -47,17 +47,7 @@ class Settings(BaseSettings):
     # Data APIs
     fmp_api_key_env: str = Field(default="", validation_alias="fmp_api_key")
 
-    # WAHA / WhatsApp
-    waha_api_url: str = "http://whatsapp:3000"
-    waha_api_key: str = "changeme-waha-key"
-    waha_session: str = "default"         # WAHA Core only supports 'default'
-    waha_hook_url: str = ""               # e.g. http://dashboard:8501/webhook/whatsapp
-    whatsapp_enabled_env: bool = Field(default=True, validation_alias="whatsapp_enabled")
-    whatsapp_admin_number_env: str = Field(default="", validation_alias="whatsapp_admin_number")
-    whatsapp_admin_jid_env: str = Field(default="", validation_alias="whatsapp_admin_jid")
-
     # Telegram / General alerts
-    notification_channel_env: str = Field(default="telegram", validation_alias="notification_channel")
     telegram_enabled_env: bool = Field(default=True, validation_alias="telegram_enabled")
     telegram_bot_token_env: str = Field(default="", validation_alias="telegram_bot_token")
     telegram_chat_id_env: str = Field(default="", validation_alias="telegram_chat_id")
@@ -132,23 +122,6 @@ class Settings(BaseSettings):
         return val if val is not None else self.fmp_api_key_env
 
     @property
-    def whatsapp_enabled(self) -> bool:
-        val = self._get_db_config("whatsapp_enabled")
-        if val is not None:
-            return val.lower() in ("true", "1", "yes")
-        return self.whatsapp_enabled_env
-
-    @property
-    def whatsapp_admin_number(self) -> str:
-        val = self._get_db_config("whatsapp_admin_number")
-        return val if val is not None else self.whatsapp_admin_number_env
-
-    @property
-    def notification_channel(self) -> str:
-        val = self._get_db_config("notification_channel")
-        return val if val is not None else self.notification_channel_env
-
-    @property
     def telegram_enabled(self) -> bool:
         val = self._get_db_config("telegram_enabled")
         if val is not None:
@@ -181,21 +154,6 @@ class Settings(BaseSettings):
     def weekly_capital_injection(self) -> float:
         """Deprecated: use working_capital instead."""
         return self.working_capital
-
-    @property
-    def admin_jid(self) -> str:
-        """Derive JID from phone number if not explicitly set."""
-        db_num = self._get_db_config("whatsapp_admin_number")
-        if db_num:
-            num = db_num.lstrip("+").replace(" ", "")
-            return f"{num}@c.us"
-
-        if self.whatsapp_admin_jid_env:
-            return self.whatsapp_admin_jid_env
-        if self.whatsapp_admin_number_env:
-            num = self.whatsapp_admin_number_env.lstrip("+").replace(" ", "")
-            return f"{num}@c.us"
-        return ""
 
     @property
     def is_production(self) -> bool:

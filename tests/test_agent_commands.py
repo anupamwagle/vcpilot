@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 
 def _make_handler(db_session, org, notifier=None):
-    """Build AgentCommandHandler with mocked notifier to avoid WhatsApp calls."""
+    """Build AgentCommandHandler with mocked notifier to avoid live Telegram calls."""
     from app.agent.commands import AgentCommandHandler
     mock_notifier = notifier or MagicMock()
     handler = AgentCommandHandler(organization_id=org.id, notifier=mock_notifier)

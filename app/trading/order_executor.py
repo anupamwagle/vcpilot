@@ -2,9 +2,9 @@
 Shared order-execution helper.
 
 Extracted from app.mcp.tools.place_order so that BOTH the MCP tool surface
-and the WhatsApp agent (app.agent.commands) submit live/paper bracket orders
+and the Telegram agent (app.agent.commands) submit live/paper bracket orders
 through one single, audited code path. Do not duplicate this logic elsewhere —
-any new entry point (dashboard button, WhatsApp command, MCP tool, etc.) should
+any new entry point (dashboard button, Telegram command, MCP tool, etc.) should
 call execute_signal_order().
 
 Flow:
@@ -16,7 +16,7 @@ Flow:
      (CryptoBroker/ccxt for crypto, IBKRBroker — with simulation fallback —
      for equities).
   5. Persist a Position row, mark the Signal TRIGGERED, write an AuditLog row.
-  6. Send a WhatsApp confirmation to the org's configured admin number.
+  6. Send a Telegram confirmation to the org's configured chat(s).
 
 Returns the same {"ok": ..., ...} shape regardless of caller.
 """
@@ -43,7 +43,7 @@ def execute_signal_order(
         signal_id:         ID of the PENDING signal to trade.
         organization_id:   Org that owns the signal — every query is scoped to it.
         actor:             Audit actor string, e.g. "mcp:claude-desktop" or
-                           "whatsapp:+61450325233". Shown in the audit trail.
+                           "telegram:123456789". Shown in the audit trail.
         notes:             Free-text note appended to the audit log message.
         force_entry_price: Override the entry price (limit-order style). If
                            omitted, the live exchange price is fetched.
@@ -149,7 +149,7 @@ def execute_signal_order(
 
         # Share Price Range Filter (equity only, opt-in) — final defensive
         # gate before any capital is committed. Applies to every caller of
-        # this function: MCP place_order, WhatsApp agent, and any future
+        # this function: MCP place_order, Telegram agent, and any future
         # entry point, since this is the single shared order-submission
         # path (see module docstring).
         if asset_type != "CRYPTO":

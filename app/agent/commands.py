@@ -1,5 +1,5 @@
 """
-WhatsApp Agent — Command handler for remote control of AstraTrade.
+Remote Control Agent — Command handler for remote control of AstraTrade via Telegram.
 
 Supported commands (case-insensitive):
   STATUS              — System status overview
@@ -47,12 +47,14 @@ class AgentCommandHandler:
     def __init__(self, organization_id: int = None, notifier: BaseNotifier = None):
         self.organization_id = organization_id
         self.notifier = notifier or get_notifier(organization_id=organization_id)
+        self.sender = None
 
     def handle(self, message: str, sender_jid: str) -> str:
         """
         Main entry point. Parse message and dispatch to handler.
         Returns response string.
         """
+        self.sender = sender_jid
         self._audit(AuditAction.AGENT_COMMAND, detail={"message": message, "sender": sender_jid})
 
         text = message.strip().upper()
@@ -507,14 +509,14 @@ class AgentCommandHandler:
             ticker = signal.ticker
 
         self._audit(AuditAction.MANUAL_OVERRIDE, ticker=ticker,
-                    detail={"action": "whatsapp_confirm_buy", "signal_id": signal_id})
+                    detail={"action": "agent_confirm_buy", "signal_id": signal_id, "sender": self.sender})
 
         from app.trading.order_executor import execute_signal_order
         result = execute_signal_order(
             signal_id=signal_id,
             organization_id=self.organization_id,
-            actor=f"whatsapp:{self.organization_id}",
-            notes="Confirmed via WhatsApp",
+            actor=self.sender or f"agent:{self.organization_id}",
+            notes="Confirmed via remote agent",
         )
 
         if not result.get("ok"):

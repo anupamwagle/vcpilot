@@ -82,7 +82,7 @@ def generate_daily_report(organization_id: int = None) -> dict:
 
 @app.task(name="app.tasks.reporting.send_daily_report", bind=True)
 def send_daily_report(self, organization_id: int = None):
-    """Send daily P&L report via WhatsApp.
+    """Send daily P&L report via Telegram.
     When organization_id is provided, sends only to that org (manual trigger).
     When None (scheduled), sends to all active orgs.
     """
@@ -174,14 +174,14 @@ def health_check(self):
         notifier.send_health_alert("Celery Worker", str(e))
 
 
-@app.task(name="app.tasks.reporting.send_whatsapp_message", bind=True)
-def send_whatsapp_message(self, organization_id: int, method_name: str, args: list = None, kwargs: dict = None):
+@app.task(name="app.tasks.reporting.send_notification_message", bind=True)
+def send_notification_message(self, organization_id: int, method_name: str, args: list = None, kwargs: dict = None):
     """
-    Asynchronously send a WhatsApp notification via the background worker.
+    Asynchronously send a notification (Telegram) via the background worker.
     """
     args = args or []
     kwargs = kwargs or {}
-    logger.info(f"Sending WhatsApp notification asynchronously for Org {organization_id} calling {method_name}...")
+    logger.info(f"Sending notification asynchronously for Org {organization_id} calling {method_name}...")
     try:
         from app.notifications import get_notifier
         notifier = get_notifier(organization_id=organization_id)
@@ -192,7 +192,7 @@ def send_whatsapp_message(self, organization_id: int, method_name: str, args: li
         else:
             logger.error(f"Notifier does not have method {method_name}")
     except Exception as e:
-        logger.error(f"Failed to send WhatsApp message: {e}")
+        logger.error(f"Failed to send notification message: {e}")
 
 
 @app.task(name="app.tasks.reporting.poll_telegram_updates", bind=True)

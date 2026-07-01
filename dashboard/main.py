@@ -38,7 +38,6 @@ _FEATURE_MAP = [
     ("/superadmin/mcp",           "MCP Credentials"),
     ("/superadmin",               "Super Admin"),
     ("/admin/data-log",           "Data Log"),
-    ("/admin/whatsapp",           "WhatsApp"),
     ("/admin/config",             "Org Config"),
     ("/admin/health",             "Health & Ops"),
     ("/admin/rules",              "Rules"),
@@ -289,12 +288,6 @@ class NoStoreCacheMiddleware:
 app.add_middleware(NoStoreCacheMiddleware)
 
 
-# ---------------------------------------------------------------------------
-# Mobile REST API (JWT-authenticated, consumed by React Native app)
-# ---------------------------------------------------------------------------
-from app.api.mobile import router as mobile_router
-app.include_router(mobile_router)
-
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.exceptions import RequestValidationError
 from app.utils.cache import cache
@@ -439,44 +432,6 @@ def _get_display_tz(org_id, db) -> str:
         SystemConfig.organization_id == org_id,
     ).first()
     return (cfg.value or "UTC") if cfg else "UTC"
-
-
-@app.on_event("startup")
-async def _startup():
-    """
-    On startup, verify WAHA is reachable and log active sessions.
-    We do NOT auto-start any org session — each org admin triggers their own
-    QR scan via /admin/whatsapp → 'Start Session'.
-    Each org uses session name 'org_{id}' (requires WAHA Plus for multi-session).
-    """
-    import asyncio, httpx
-    from loguru import logger
-    from app.config import settings
-
-    async def _check_waha():
-        await asyncio.sleep(4)   # give WAHA a moment to be ready
-        api  = settings.waha_api_url.rstrip("/")
-        key  = settings.waha_api_key
-        sess = settings.waha_session   # "default" for WAHA Core
-        hook = settings.waha_hook_url
-        hdrs = {"X-Api-Key": key, "Content-Type": "application/json"}
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                # Start/ensure default session
-                r = await client.post(f"{api}/api/sessions/start",
-                                      json={"name": sess}, headers=hdrs)
-                status = r.json().get("status", "?") if r.status_code in (200,201) else r.status_code
-                logger.info(f"WAHA session '{sess}' → {status}")
-                # Register webhook
-                if hook:
-                    await client.put(f"{api}/api/sessions/{sess}",
-                        json={"webhooks": [{"url": hook, "events": ["message","message.any","session.status"]}]},
-                        headers=hdrs)
-                    logger.info(f"WAHA webhook registered: {hook}")
-        except Exception as e:
-            logger.warning(f"WAHA startup init failed (non-fatal): {e}")
-
-    asyncio.create_task(_check_waha())
 
 
 # ---------------------------------------------------------------------------
@@ -643,8 +598,6 @@ def _global(request: Request, db: Session) -> dict:
     hb_display   = _fmt_dt(raw_hb, display_tz)
     wstatus      = _worker_status(raw_hb)
     trading_paused = cfg("trading_paused", "false").lower() == "true"
-    whatsapp_enabled = cfg("whatsapp_enabled", "true").lower() == "true"
-    notification_channel = cfg("notification_channel", "whatsapp") or "whatsapp"
 
     # Resolve active market regime across all active exchanges; use mock when sim clock is on
     mock_time_on = cfg("mock_time_enabled", "false").lower() == "true"
@@ -737,8 +690,6 @@ def _global(request: Request, db: Session) -> dict:
         "regime_is_simulated": regime_is_simulated,
         "regime_set": bool(regime_raw and regime_raw not in ("UNKNOWN", "")),
         "trading_paused": trading_paused,
-        "whatsapp_enabled": whatsapp_enabled,
-        "notification_channel": notification_channel,
         "is_paper": is_paper,
         "heartbeat": hb_display or "Never",
         "display_tz": display_tz,
@@ -3646,7 +3597,7 @@ async def close_position(
 ):
     """
     Manually close an open position using AstraTrade exit rules.
-    Records a Trade, marks Position CLOSED, writes audit, sends WhatsApp alert.
+    Records a Trade, marks Position CLOSED, writes audit, sends Telegram alert.
     If exit_price is not provided, the last known current_price is used.
     """
     if not _auth(request):
@@ -3713,17 +3664,17 @@ async def close_position(
     ))
     db.commit()
 
-    # WhatsApp alert in background
+    # Notification alert in background
     try:
-        from app.tasks.reporting import send_whatsapp_message
-        send_whatsapp_message.delay(
+        from app.tasks.reporting import send_notification_message
+        send_notification_message.delay(
             org_id,
             "send_exit_alert",
             [pos.ticker, reason.value, pnl_pct, pnl_aud, pos.is_paper]
         )
     except Exception as e:
         from loguru import logger
-        logger.error(f"Failed to queue exit alert WhatsApp message: {e}")
+        logger.error(f"Failed to queue exit alert notification: {e}")
 
     return RedirectResponse("/positions?msg=closed", 302)
 
@@ -5981,7 +5932,7 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
         "general":     {"icon": "⚙️",  "title": "General"},
         "broker":      {"icon": "🏦",  "title": "Broker — IBKR"},
         "trading":     {"icon": "📈",  "title": "Trading"},
-        "whatsapp":    {"icon": "💬",  "title": "Alert & Chat Channels"},
+        "notifications": {"icon": "💬",  "title": "Alert & Chat Channels"},
         "data":        {"icon": "📡",  "title": "Data Sources"},
         "risk":        {"icon": "🛡️",  "title": "Risk Management"},
         "crypto":      {"icon": "₿",   "title": "Crypto Exchange"},
@@ -6012,20 +5963,10 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
         "fx_audusd_override":    {"control": "number", "placeholder": "0.65", "step": "0.0001",
                                   "hint_extra": "Manual AUD/USD rate override. Leave blank to fetch live."},
         # Alerts & Chat
-        "notification_channel":  {"control": "select", "options": [
-                                     ("whatsapp", "WhatsApp"),
-                                     ("telegram", "Telegram"),
-                                 ],
-                                  "hint_extra": "Select the active alert and command communication channel"},
         "telegram_enabled":      {},   # boolean
         "telegram_bot_token":    {"control": "password", "hint_extra": "Telegram bot token from @BotFather"},
-        "telegram_chat_id":      {"placeholder": "123456789", "hint_extra": "Your Telegram user or group chat ID"},
-        "whatsapp_admin_number": {"placeholder": "61450325233",
-                                  "hint_extra": "Digits only, no + or spaces. E.g. 61450325233 for AU +61 450 325 233"},
-        "whatsapp_api_key":      {"control": "password", "hint_extra": "WAHA API key from your .env"},
-        "whatsapp_session_name": {"placeholder": "default",
-                                  "hint_extra": "WAHA session name. Use 'default' for shared WAHA Core instance."},
-        "whatsapp_enabled":      {},   # boolean
+        "telegram_chat_id":      {"placeholder": "123456789,987654321",
+                                  "hint_extra": "Comma-separated list of Telegram chat IDs — one per org user, or a single group chat ID"},
         # ASX Universe
         "asx_universe_scope":    {"control": "select", "options": [
                                      ("ASX200",     "ASX200 — Top 200 by market cap (default, fast)"),
@@ -6377,163 +6318,19 @@ async def webhook_telegram(request: Request, db: Session = Depends(get_db)):
     return JSONResponse({"ok": True})
 
 
-@app.post("/webhook/whatsapp")
-async def webhook_whatsapp(request: Request, db: Session = Depends(get_db)):
-    """
-    WAHA calls this for every incoming WhatsApp message / session event.
-    No login cookie required — security via sender JID matching admin number.
-    """
-    from fastapi.responses import JSONResponse
-    from app.notifications.whatsapp import WhatsAppNotifier
-    from app.agent.commands import AgentCommandHandler
-    from app.config import settings
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
-
-    session_name = body.get("session", "default")
-    event = body.get("event", "")
-    payload    = body.get("payload", {})
-    from_jid   = payload.get("from", "")
-    text       = payload.get("body", "").strip()
-    is_from_me = payload.get("fromMe", False)
-
-    org_id = None
-    if session_name.startswith("org_"):
-        try:
-            org_id = int(session_name.split("_")[1])
-        except (ValueError, IndexError):
-            pass
-
-    # If it's a shared session name like "default", look up by sender phone number (from_jid)
-    if org_id is None and from_jid:
-        sender_number = from_jid.split("@")[0] if "@" in from_jid else from_jid
-        sender_number = sender_number.lstrip("+").replace(" ", "")
-        
-        from app.models.config import SystemConfig
-        # Order by organization_id DESC to prioritize custom organizations (e.g. Org 10) over Default Org (Org 1)
-        configs = db.query(SystemConfig).filter(SystemConfig.key == "whatsapp_admin_number").order_by(SystemConfig.organization_id.desc()).all()
-        for cfg in configs:
-            if cfg.value:
-                val_clean = cfg.value.lstrip("+").replace(" ", "")
-                if val_clean == sender_number:
-                    org_id = cfg.organization_id
-                    break
-
-    # If still not resolved, fall back to default organization
-    if org_id is None:
-        from app.models.account import Organization
-        default_org = db.query(Organization).order_by(Organization.id).first()
-        if default_org:
-            org_id = default_org.id
-
-    if org_id is None:
-        logger.error(f"Incoming WhatsApp message ignored — no organization context found for session {session_name}")
-        return JSONResponse({"ok": True, "ignored": "no_org"})
-
-    from app.models.config import SystemConfig
-    def get_org_cfg(key: str) -> str | None:
-        c = db.query(SystemConfig).filter(
-            SystemConfig.key == key,
-            SystemConfig.organization_id == org_id
-        ).first()
-        return c.value if c else None
-
-    # Check if WhatsApp is enabled for this organization
-    org_enabled = get_org_cfg("whatsapp_enabled")
-    whatsapp_enabled = org_enabled.lower() in ("true", "1", "yes") if org_enabled is not None else settings.whatsapp_enabled
-
-    if not whatsapp_enabled:
-        logger.info(f"Incoming WhatsApp message ignored — WhatsApp disabled for Org {org_id}")
-        return JSONResponse({"ok": True, "ignored": "disabled_for_org"})
-
-    logger.debug(f"WAHA webhook: event={event}, session={session_name}, org_id={org_id}")
-
-    # Session status notification — log at DEBUG only. WAHA emits these continuously
-    # (e.g. SCAN_QR_CODE while a session waits to be linked); logging at INFO floods
-    # the API logs, so keep it quiet unless actively debugging.
-    if event == "session.status":
-        status = body.get("payload", {}).get("status", "")
-        logger.debug(f"WAHA session status for {session_name} → {status}")
-        return JSONResponse({"ok": True})
-
-    if event not in ("message", "message.any"):
-        return JSONResponse({"ok": True})
-
-    if not text:
-        return JSONResponse({"ok": True})
-
-    # If the message is from me, only allow it to proceed if it is a valid AstraTrade command.
-    # This prevents infinite message loops when the bot replies to itself.
-    if is_from_me:
-        cmd_word = text.split()[0].upper() if text.split() else ""
-        valid_commands = {
-            "STATUS", "POSITIONS", "SIGNALS", "WATCHLIST", "MARKET", 
-            "PAUSE", "RESUME", "REPORT", "SKIP", "UNSKIP", "EXIT", 
-            "STOP", "RULE", "CONFIG", "HELP"
-        }
-        if cmd_word not in valid_commands:
-            return JSONResponse({"ok": True})
-        logger.debug(f"WAHA webhook: allowing self-message command '{cmd_word}'")
-
-    # Security: only respond to the configured admin number for this organization
-    admin_number = get_org_cfg("whatsapp_admin_number")
-    if not admin_number:
-        admin_jid = settings.admin_jid
-    else:
-        num = admin_number.lstrip("+").replace(" ", "")
-        admin_jid = f"{num}@c.us"
-
-    if admin_jid and from_jid.split("@")[0] != admin_jid.split("@")[0]:
-        logger.warning(f"WhatsApp from unknown sender {from_jid} for Org {org_id} (expected {admin_jid}) — ignored")
-        return JSONResponse({"ok": True})
-
-    handler  = AgentCommandHandler(organization_id=org_id)
-    response = handler.handle(text, from_jid)
-
-    notifier = WhatsAppNotifier(organization_id=org_id)
-    notifier.send(response, chat_id=from_jid)
-
-    return JSONResponse({"ok": True, "replied": response[:80]})
-
-
-@app.get("/admin/whatsapp")
-async def admin_whatsapp_redirect():
-    return RedirectResponse("/admin/comms", 302)
-
-
 @app.get("/admin/comms", response_class=HTMLResponse)
 async def admin_comms(request: Request, db: Session = Depends(get_db)):
-    """Communications hub — status for Telegram and WhatsApp integration."""
+    """Communications hub — status for the Telegram integration."""
     if not _auth(request):
         return RedirectResponse("/login", 302)
     org_id = request.session.get("organization_id")
 
-    from app.notifications.whatsapp import WhatsAppNotifier
     from app.notifications.telegram import TelegramNotifier
     from app.models.audit import AuditLog, AuditAction
     from app.config import settings
     import httpx
 
     ctx = _global(request, db)
-    
-    # ── WhatsApp Context ──────────────────────────────────────────────────
-    try:
-        wa_notifier  = WhatsAppNotifier(organization_id=org_id)
-        wa_session_info = wa_notifier.get_session_status()
-        wa_status    = wa_session_info.get("status", "UNKNOWN")
-        wa_qr_b64    = wa_notifier.get_qr() if wa_status in ("SCAN_QR_CODE", "STARTING") else None
-        wa_session_name = wa_notifier.session
-        wa_admin_jid = wa_notifier.admin_jid or ""
-        wa_admin_number = wa_admin_jid.split("@")[0] if wa_admin_jid else ""
-    except Exception as _e:
-        wa_status = "UNKNOWN"
-        wa_qr_b64 = None
-        wa_session_name = "—"
-        wa_admin_jid = ""
-        wa_admin_number = ""
 
     # ── Telegram Context ──────────────────────────────────────────────────
     tg_status = "NOT_CONFIGURED"
@@ -6562,15 +6359,10 @@ async def admin_comms(request: Request, db: Session = Depends(get_db)):
         recent_cmds = []
 
     ctx.update({
-        "wa_status":       wa_status,
-        "wa_session":      wa_session_name,
-        "wa_admin_number": wa_admin_number,
-        "wa_qr_b64":       wa_qr_b64,
         "tg_status":       tg_status,
         "tg_bot_info":     tg_bot_info,
         "tg_chat_id":      tg_chat_id,
         "tg_webhook_url":  f"{str(request.base_url).rstrip('/')}/webhook/telegram",
-        "wa_webhook_url":  f"{str(request.base_url).rstrip('/')}/webhook/whatsapp",
         "recent_commands": [
             {"time":    _fmt_dt(str(l.created_at), ctx.get("display_tz", "UTC")),
              "message": (l.detail or {}).get("message", ""),
@@ -6580,22 +6372,6 @@ async def admin_comms(request: Request, db: Session = Depends(get_db)):
         "msg": request.query_params.get("msg", ""),
     })
     return templates.TemplateResponse("admin/comms.html", ctx)
-
-
-@app.post("/admin/whatsapp/start-session")
-async def whatsapp_start_session(request: Request):
-    """Force-restart the WAHA session."""
-    if not _auth(request):
-        return RedirectResponse("/login", 302)
-    org_id = request.session.get("organization_id")
-    from app.notifications.whatsapp import WhatsAppNotifier
-    new_status = WhatsAppNotifier(organization_id=org_id).restart_session()
-    if new_status == "SCAN_QR_CODE":
-        return RedirectResponse("/admin/comms?msg=scan_qr", 302)
-    elif new_status == "WORKING":
-        return RedirectResponse("/admin/comms?msg=already_working", 302)
-    else:
-        return RedirectResponse(f"/admin/comms?msg=started", 302)
 
 
 @app.post("/admin/telegram/set-webhook")
@@ -6987,20 +6763,14 @@ async def superadmin_organizations_create(
             user.roles.append(admin_role)
 
         # 4. Seed Organization System Configurations
-        # WAHA Core (free) only supports one "default" session shared by all orgs.
-        # The webhook routes messages to the correct org by matching the sender phone number
-        # against each org's whatsapp_admin_number setting.
-        # For per-org sessions, use WAHA Plus (paid): devlikeapro/waha-plus:latest
+        # Telegram is the only remote-control/notification channel. telegram_chat_id
+        # supports a comma-separated list so multiple org users can each DM the bot
+        # and both receive alerts and issue commands independently.
         configs_to_seed = [
             ("trading_paused", "false", ConfigValueType.BOOLEAN, "Trading Paused", "Toggles automated trade placement"),
-            ("whatsapp_enabled", "true", ConfigValueType.BOOLEAN, "WhatsApp Alerts", "Enables real-time notifications"),
-            ("whatsapp_admin_number", "", ConfigValueType.STRING, "WhatsApp Admin Number", "Number to send alerts and receive commands JID format"),
-            ("whatsapp_api_key", settings.waha_api_key, ConfigValueType.STRING, "WhatsApp API Key", "API key for the WhatsApp (WAHA) service", True),
-            ("whatsapp_session_name", "default", ConfigValueType.STRING, "WhatsApp Session Name", "WAHA session name (always 'default' for WAHA Core; use WAHA Plus for per-org sessions)"),
-            ("notification_channel", "telegram", ConfigValueType.STRING, "Notification Channel", "Active communication channel ('whatsapp' or 'telegram')"),
             ("telegram_enabled", "true", ConfigValueType.BOOLEAN, "Telegram Alerts Enabled", "Enable or disable Telegram notifications"),
             ("telegram_bot_token", "", ConfigValueType.STRING, "Telegram Bot Token", "The Telegram Bot Token from @BotFather", True),
-            ("telegram_chat_id", "", ConfigValueType.STRING, "Telegram Chat ID", "The Telegram Chat ID to send alerts to"),
+            ("telegram_chat_id", "", ConfigValueType.STRING, "Telegram Chat ID(s)", "Comma-separated Telegram chat IDs to send alerts to"),
             ("ibkr_account", "", ConfigValueType.STRING, "IBKR Account ID", "Interactive Brokers account number"),
             ("fmp_api_key", "", ConfigValueType.STRING, "FMP API Key", "Financial Modeling Prep API key", True),
             ("working_capital_aud", "5000.0", ConfigValueType.FLOAT, "Working Capital (AUD)", "Working capital used for sizing and risk calculations"),
@@ -7011,7 +6781,7 @@ async def superadmin_organizations_create(
             db.add(SystemConfig(
                 key=key, value=val, value_type=vtype, label=label,
                 description=desc, is_secret=is_sec, organization_id=org.id,
-                group="broker" if "ibkr" in key else ("whatsapp" if ("whatsapp" in key or "telegram" in key or "notification" in key) else "general")
+                group="broker" if "ibkr" in key else ("notifications" if "telegram" in key else "general")
             ))
 
         # 5. Clone default templates to RuleConfig for the new organization

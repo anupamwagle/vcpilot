@@ -37,7 +37,7 @@ class AuditAction(str, enum.Enum):
     SYSTEM_STARTED      = "SYSTEM_STARTED"
     HEALTH_CHECK        = "HEALTH_CHECK"
 
-    # Agent / WhatsApp events
+    # Agent / Telegram events
     AGENT_COMMAND       = "AGENT_COMMAND"
     MANUAL_OVERRIDE     = "MANUAL_OVERRIDE"
 

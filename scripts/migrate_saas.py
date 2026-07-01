@@ -424,14 +424,9 @@ def migrate():
         # Ensure all organizations have the required system config keys
         configs_to_ensure = [
             ("trading_paused", "false", "BOOLEAN", "Trading Paused", "Toggles automated trade placement", "general", False),
-            ("whatsapp_enabled", "true", "BOOLEAN", "WhatsApp Alerts", "Enables real-time notifications", "whatsapp", False),
-            ("whatsapp_admin_number", "", "STRING", "WhatsApp Admin Number", "Number to send alerts and receive commands JID format", "whatsapp", False),
-            ("whatsapp_api_key", settings.waha_api_key, "STRING", "WhatsApp API Key", "API key for the WhatsApp (WAHA) service", "whatsapp", True),
-            ("whatsapp_session_name", "default", "STRING", "WhatsApp Session Name", "WAHA session name (always \'default\' for WAHA Core)", "whatsapp", False),
-            ("notification_channel", "telegram", "STRING", "Notification Channel", "Active communication channel ('whatsapp' or 'telegram')", "whatsapp", False),
-            ("telegram_enabled", "true", "BOOLEAN", "Telegram Alerts Enabled", "Enable or disable Telegram notifications", "whatsapp", False),
-            ("telegram_bot_token", "", "STRING", "Telegram Bot Token", "The Telegram Bot Token from @BotFather", "whatsapp", True),
-            ("telegram_chat_id", "", "STRING", "Telegram Chat ID", "The Telegram Chat ID to send alerts to", "whatsapp", False),
+            ("telegram_enabled", "true", "BOOLEAN", "Telegram Alerts Enabled", "Enable or disable Telegram notifications", "notifications", False),
+            ("telegram_bot_token", "", "STRING", "Telegram Bot Token", "The Telegram Bot Token from @BotFather", "notifications", True),
+            ("telegram_chat_id", "", "STRING", "Telegram Chat ID(s)", "Comma-separated Telegram chat IDs to send alerts to — one per org user, or a single group chat ID", "notifications", False),
             ("ibkr_account", "", "STRING", "IBKR Account ID", "Interactive Brokers account number", "broker", False),
             ("novnc_url", "", "STRING", "Gateway Login URL (noVNC)", "noVNC URL for this org's IBKR Gateway. Managed via Super Admin → Org Detail.", "system", False),
             ("vnc_password", "", "STRING", "Gateway VNC Password", "VNC password for this org's IBKR Gateway. Managed via Super Admin → Org Detail.", "system", True),
@@ -455,7 +450,7 @@ def migrate():
                 """), {"key": key, "org_id": org_id}).fetchone()
                 if not existing_cfg:
                     logger.info(f"Seeding missing config '{key}' for organization ID {org_id}...")
-                    actual_val = f"org_{org_id}" if key == "whatsapp_session_name" else val
+                    actual_val = val
                     conn.execute(text("""
                         INSERT INTO system_configs (key, value, value_type, label, description, organization_id, "group", is_secret)
                         VALUES (:key, :value, :value_type, :label, :description, :org_id, :group, :is_secret);
@@ -486,12 +481,13 @@ def migrate():
                 WHERE key IN ('novnc_url', 'vnc_password')
                   AND organization_id = :org_id AND "group" != 'system';
             """), {"org_id": org_id})
-            
-            # Force update any tenant organization's whatsapp_session_name to match their org ID
+
+            # WhatsApp removed — drop legacy config rows left over from earlier sessions
             conn.execute(text("""
-                UPDATE system_configs
-                SET value = 'org_' || organization_id
-                WHERE key = 'whatsapp_session_name' AND (value = 'default' OR value = '') AND organization_id = :org_id;
+                DELETE FROM system_configs
+                WHERE key IN ('whatsapp_enabled', 'whatsapp_admin_number', 'whatsapp_api_key',
+                              'whatsapp_session_name', 'notification_channel')
+                  AND organization_id = :org_id;
             """), {"org_id": org_id})
             conn.commit()
 

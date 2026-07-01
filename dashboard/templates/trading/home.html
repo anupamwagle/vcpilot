@@ -33,23 +33,12 @@
     <div style="background: var(--surface-alt); padding: 1rem; border-radius: 0.5rem; border: 1px solid var(--border)">
       <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem">
         <span style="background: var(--t-accent); color: white; border-radius: 9999px; width: 1.25rem; height: 1.25rem; display: inline-flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: bold;">2</span>
-        {% if notification_channel == 'telegram' %}
         <h4 class="text-sm font-semibold" style="color: var(--text)">Connect Telegram</h4>
-        {% else %}
-        <h4 class="text-sm font-semibold" style="color: var(--text)">Connect WhatsApp</h4>
-        {% endif %}
       </div>
-      {% if notification_channel == 'telegram' %}
       <p class="text-xs" style="color: var(--text-subtle)">
         Go to System Config, fill in your Telegram Bot Token and Chat ID under Alert &amp; Chat Channels to receive alerts.
       </p>
       <a href="/admin/config" class="text-xs font-semibold hover:underline block mt-2" style="color: var(--t-accent)">Go to System Config →</a>
-      {% else %}
-      <p class="text-xs" style="color: var(--text-subtle)">
-        Go to the WhatsApp page, scan the QR code to pair your device, and configure your phone number to receive alerts.
-      </p>
-      <a href="/admin/whatsapp" class="text-xs font-semibold hover:underline block mt-2" style="color: var(--t-accent)">Go to WhatsApp Setup →</a>
-      {% endif %}
     </div>
     
     <div style="background: var(--surface-alt); padding: 1rem; border-radius: 0.5rem; border: 1px solid var(--border)">

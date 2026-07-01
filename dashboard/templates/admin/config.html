@@ -109,9 +109,8 @@
   {% set hint = cfg.hint %}
   {% set ctrl = hint.get('control', 'text') %}
   {% set has_value = cfg.has_value %}
-  {% set channel_keys = {'whatsapp_enabled': 'whatsapp', 'whatsapp_admin_number': 'whatsapp', 'whatsapp_api_key': 'whatsapp', 'whatsapp_session_name': 'whatsapp', 'telegram_enabled': 'telegram', 'telegram_bot_token': 'telegram', 'telegram_chat_id': 'telegram'} %}
 
-  <form method="post" action="/admin/config/{{ cfg.id }}/update" class="cfg-row" {% if cfg.key in channel_keys %}data-channel="{{ channel_keys[cfg.key] }}"{% endif %}>
+  <form method="post" action="/admin/config/{{ cfg.id }}/update" class="cfg-row">
 
     {# ── Left: label + description + key + hints ── #}
     <div>
@@ -203,7 +202,7 @@
       {# GENERIC SELECT #}
       {% elif ctrl == 'select' %}
       <div style="display:flex;align-items:center;gap:.5rem">
-        <select name="value" class="input cfg-input" {% if cfg.key == 'notification_channel' %}id="notification-channel-select"{% endif %}>
+        <select name="value" class="input cfg-input">
           {% for opt_val, opt_label in hint.get('options', []) %}
           <option value="{{ opt_val }}" {% if cfg.value == opt_val %}selected{% endif %}>{{ opt_label }}</option>
           {% endfor %}
@@ -331,22 +330,6 @@ function togglePw(inputId, btn) {
     eyeIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 4.411m0 0L21 21"/>';
   }
 }
-
-// Notification channel — show/hide rows tagged with data-channel based on selection
-function applyChannelVisibility(channel) {
-  document.querySelectorAll('[data-channel]').forEach(row => {
-    row.style.display = (row.getAttribute('data-channel') === channel) ? '' : 'none';
-  });
-}
-(function() {
-  const channelSelect = document.getElementById('notification-channel-select');
-  if (channelSelect) {
-    applyChannelVisibility(channelSelect.value);
-    channelSelect.addEventListener('change', function() {
-      applyChannelVisibility(this.value);
-    });
-  }
-})();
 
 // Inline save feedback — briefly flash row green on submit
 document.querySelectorAll('.cfg-row form, .cfg-row').forEach(form => {

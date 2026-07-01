@@ -10,7 +10,7 @@ Covers every bug identified in the comprehensive audit:
   #6  check_entry_triggers — crypto regime uses org's active exchange, not hardcoded IR
   #7  generate_daily_report — includes crypto regime
   #8  _run_screen_force — NYSE key includes NASDAQ stocks
-  #9  cmd_market — crypto regime shown in WhatsApp MARKET command
+  #9  cmd_market — crypto regime shown in MARKET command output
   #10 cmd_signals — correct currency symbol per exchange
   #11 check_entry_triggers — CRYPTO filter uses asset_type, covers MEXC
   #12 check_exit_rules_task — CRYPTO filter uses asset_type, covers MEXC
@@ -20,7 +20,7 @@ Covers every bug identified in the comprehensive audit:
   #16 sync_stop_orders — currency symbol matches position currency
   #17 _is_paper — checks both ibkr_paper_mode and crypto_testnet
   #18 check_entry_triggers — portfolio heat FX fallback for null fx_rate
-  #19 cmd_signals — shows exchange label in WhatsApp output
+  #19 cmd_signals — shows exchange label in command output
   #20 Beat schedule — ASX tasks use hour="10-15" + 4pm close entries
   #21 screen_single_ticker — passes currency/base_currency to position size
 """

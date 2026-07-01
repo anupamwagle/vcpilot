@@ -7,7 +7,7 @@ Covers:
     price_in_range) against a real RuleEngine + RuleConfig rows
   - The threshold=0.0-is-falsy edge case (RuleConfig.threshold_for_tier)
   - Wiring into app/trading/order_executor.py::execute_signal_order
-    (the single shared MCP/WhatsApp order-submission choke point)
+    (the single shared MCP/Telegram order-submission choke point)
   - Wiring into app/tasks/screening.py::screen_single_ticker (manual add)
   - Wiring into app/tasks/trading.py::check_entry_triggers (intraday gate)
 
@@ -232,7 +232,7 @@ def test_negative_or_zero_price_returns_no_results(db_session, org_and_account):
 # ===========================================================================
 # Integration — app/trading/order_executor.py::execute_signal_order
 # (Task #5: final defensive gate before order submission, shared by MCP
-#  place_order and the WhatsApp agent)
+#  place_order and the Telegram agent)
 # ===========================================================================
 
 def _make_pending_signal(db, org_id, ticker="BHP.AX", exchange_key="ASX",

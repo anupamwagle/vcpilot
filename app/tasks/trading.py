@@ -1076,7 +1076,7 @@ def sync_stop_orders(self):
                                 f"P&L: {_sym}{_pnl_aud:+.2f}"
                             )
                         except Exception as _ne:
-                            logger.error(f"sync_stop_orders: WhatsApp alert failed for {pos.ticker}: {_ne}")
+                            logger.error(f"sync_stop_orders: notification failed for {pos.ticker}: {_ne}")
                     continue  # equity handled — skip crypto trailing-stop block
 
                 # ── Fetch live price (crypto) ─────────────────────────────
@@ -1146,7 +1146,7 @@ def sync_stop_orders(self):
                                         f"stop was {_csym}{stop_price:.4f} P&L {_csym}{realised_pnl:+.2f}",
                             ))
                             db2.commit()
-                    # WhatsApp alert
+                    # Telegram alert
                     try:
                         notifier = get_notifier(organization_id=org.id)
                         _csym = "USDT " if pos_currency == "USDT" else ("US$" if pos_currency == "USD" else "A$")
@@ -1157,14 +1157,14 @@ def sync_stop_orders(self):
                             f"P&L: {_csym}{realised_pnl:+.2f}"
                         )
                     except Exception as notify_err:
-                        logger.error(f"sync_stop_orders: WhatsApp alert failed for {pos.ticker}: {notify_err}")
+                        logger.error(f"sync_stop_orders: notification failed for {pos.ticker}: {notify_err}")
                         try:
                             with get_db() as _db3:
                                 _db3.add(AuditLog(
                                     action=AuditAction.TASK_ERROR,
                                     organization_id=org.id,
                                     ticker=pos.ticker,
-                                    entity_type="WhatsAppNotification",
+                                    entity_type="TelegramNotification",
                                     message=f"⚠️ Stop-out alert failed to send for {pos.ticker}: {notify_err}",
                                 ))
                         except Exception:
@@ -1546,16 +1546,16 @@ def promote_watchlist_item_task(self, item_id: int, organization_id: int, user_e
         ))
         db.commit()
 
-      # Send WhatsApp notification using the background task (best-effort — never fails the promotion)
+      # Send notification using the background task (best-effort — never fails the promotion)
       try:
-          from app.tasks.reporting import send_whatsapp_message
-          send_whatsapp_message.delay(
+          from app.tasks.reporting import send_notification_message
+          send_notification_message.delay(
               organization_id,
               "send",
               [f"🚀 *Manual Promotion*: {ticker_for_log} has been manually promoted from Watchlist to Signals for entry!"]
           )
       except Exception as e:
-          logger.error(f"Failed to send WhatsApp notification for promotion: {e}")
+          logger.error(f"Failed to send notification for promotion: {e}")
 
     except Exception as exc:
         # Anything going wrong above must NOT leave the watchlist item stuck in SIGNALLED
