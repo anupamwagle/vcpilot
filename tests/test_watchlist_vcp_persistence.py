@@ -111,7 +111,7 @@ def _item(ticker, **kw):
 def test_enrich_fast_path_uses_persisted_without_price_history(db_session, org_and_account):
     """Fresh persisted geometry => pivot/stop/target read straight from the dict;
     NO PriceBar rows exist, proving detect_vcp / history are skipped."""
-    from dashboard.main import _enrich_watchlist_vcp_and_sizing
+    from web.main import _enrich_watchlist_vcp_and_sizing
     org, _acct = org_and_account
     items = [_item(
         "BHP.AX", latest=date(2026, 6, 29),
@@ -129,7 +129,7 @@ def test_enrich_fast_path_uses_persisted_without_price_history(db_session, org_a
 def test_enrich_compute_path_computes_and_writes_back(db_session, org_and_account):
     """Missing geometry + a stale/no computed_date => compute once from price bars
     and write the result back onto the Watchlist row for next time."""
-    from dashboard.main import _enrich_watchlist_vcp_and_sizing
+    from web.main import _enrich_watchlist_vcp_and_sizing
     from app.models.market import PriceBar
 
     org, _acct = org_and_account

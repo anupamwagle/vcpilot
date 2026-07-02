@@ -47,7 +47,7 @@ def test_promote_route_rolls_back_status_when_queueing_fails(db_session, org_and
     what happened. Previously the status stuck at SIGNALLED and the item just
     vanished with zero feedback.
     """
-    from dashboard.main import watchlist_promote
+    from web.main import watchlist_promote
     import app.tasks.trading as trading_module
 
     org, _account = org_and_account
@@ -81,7 +81,7 @@ def test_promote_route_rolls_back_status_when_queueing_fails(db_session, org_and
 
 def test_promote_route_keeps_signalled_status_when_queueing_succeeds(db_session, org_and_account, watching_trx_item, monkeypatch):
     """Sanity check: the happy path must still flip the item to SIGNALLED and queue the task."""
-    from dashboard.main import watchlist_promote
+    from web.main import watchlist_promote
     import app.tasks.trading as trading_module
 
     org, _account = org_and_account

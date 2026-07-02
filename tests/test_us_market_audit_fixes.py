@@ -298,7 +298,7 @@ class TestCmdMarketMultiExchange:
 class TestTemplateAuditFixPresence:
     def test_operations_html_has_us_universe_section(self):
         import os
-        path = os.path.join(os.path.dirname(__file__), "..", "dashboard", "templates", "superadmin", "operations.html")
+        path = os.path.join(os.path.dirname(__file__), "..", "web", "templates", "superadmin", "operations.html")
         if not os.path.exists(path):
             pytest.skip("operations.html not accessible from test runner")
         content = open(path, encoding="utf-8").read()
@@ -308,7 +308,7 @@ class TestTemplateAuditFixPresence:
 
     def test_operations_html_has_universe_us_flash_message(self):
         import os
-        path = os.path.join(os.path.dirname(__file__), "..", "dashboard", "templates", "superadmin", "operations.html")
+        path = os.path.join(os.path.dirname(__file__), "..", "web", "templates", "superadmin", "operations.html")
         if not os.path.exists(path):
             pytest.skip("operations.html not accessible from test runner")
         content = open(path, encoding="utf-8").read()
@@ -316,7 +316,7 @@ class TestTemplateAuditFixPresence:
 
     def test_data_log_html_mentions_us_hours(self):
         import os
-        path = os.path.join(os.path.dirname(__file__), "..", "dashboard", "templates", "admin", "data_log.html")
+        path = os.path.join(os.path.dirname(__file__), "..", "web", "templates", "admin", "data_log.html")
         if not os.path.exists(path):
             pytest.skip("data_log.html not accessible from test runner")
         content = open(path, encoding="utf-8").read()
@@ -324,7 +324,7 @@ class TestTemplateAuditFixPresence:
 
     def test_tasks_html_no_longer_says_asx_universe(self):
         import os
-        path = os.path.join(os.path.dirname(__file__), "..", "dashboard", "templates", "admin", "tasks.html")
+        path = os.path.join(os.path.dirname(__file__), "..", "web", "templates", "admin", "tasks.html")
         if not os.path.exists(path):
             pytest.skip("tasks.html not accessible from test runner")
         content = open(path, encoding="utf-8").read()
@@ -333,7 +333,7 @@ class TestTemplateAuditFixPresence:
 
     def test_main_py_has_superadmin_seed_us_universe_route(self):
         import os
-        path = os.path.join(os.path.dirname(__file__), "..", "dashboard", "main.py")
+        path = os.path.join(os.path.dirname(__file__), "..", "web", "main.py")
         if not os.path.exists(path):
             pytest.skip("main.py not accessible from test runner")
         content = open(path, encoding="utf-8").read()
@@ -342,7 +342,7 @@ class TestTemplateAuditFixPresence:
 
     def test_main_py_has_org_scoped_seed_us_universe_route(self):
         import os
-        path = os.path.join(os.path.dirname(__file__), "..", "dashboard", "main.py")
+        path = os.path.join(os.path.dirname(__file__), "..", "web", "main.py")
         if not os.path.exists(path):
             pytest.skip("main.py not accessible from test runner")
         content = open(path, encoding="utf-8").read()

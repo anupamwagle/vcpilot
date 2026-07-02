@@ -495,7 +495,7 @@ def test_celery_beat_us_universe_schedule():
 def test_health_html_has_us_universe_button():
     """health.html must contain the /action/seed-us-universe button."""
     import pathlib
-    health_html = pathlib.Path(__file__).parent.parent / "dashboard" / "templates" / "admin" / "health.html"
+    health_html = pathlib.Path(__file__).parent.parent / "web" / "templates" / "admin" / "health.html"
     if health_html.exists():
         content = health_html.read_text(encoding="utf-8")
         assert "/action/seed-us-universe" in content

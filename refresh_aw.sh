@@ -31,7 +31,7 @@ echo ""
 # ─── Step 1: Run migrations ────────────────────────────────────────────────────
 step "1/7  Applying migrations & seeding new rules"
 info "Running migrate_saas.py (enables IR exchange, seeds 5 new crypto rules)..."
-docker compose run --rm --no-deps app python -m scripts.migrate_saas 2>&1 | grep -E "(INFO|ERROR|WARNING|✓|migration|seeding|complete|Done|Error)" | head -40
+docker compose run --rm --no-deps migrate python -m scripts.migrate_saas 2>&1 | grep -E "(INFO|ERROR|WARNING|✓|migration|seeding|complete|Done|Error)" | head -40
 ok "Migrations applied"
 
 # ─── Step 2: Verify AW org exists ─────────────────────────────────────────────

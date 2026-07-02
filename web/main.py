@@ -411,7 +411,7 @@ def get_cached_wl_labels(org_id: int, db: Session) -> list[dict]:
     cache.set(cache_key, result, expire_seconds=300)
     return result
 
-templates = Jinja2Templates(directory="/app/dashboard/templates")
+templates = Jinja2Templates(directory="/app/web/templates")
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "changeme")
 
 # ---------------------------------------------------------------------------

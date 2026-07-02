@@ -185,7 +185,7 @@ def test_webhook_telegram_resolves_org_from_any_configured_chat_id(db_session, o
     single chat_id stored verbatim in SystemConfig would match."""
     import asyncio
     from unittest.mock import patch
-    from dashboard.main import webhook_telegram
+    from web.main import webhook_telegram
     from app.models.config import SystemConfig
 
     org, _ = org_and_account
@@ -208,7 +208,7 @@ def test_webhook_telegram_resolves_org_from_any_configured_chat_id(db_session, o
 def test_webhook_telegram_ignores_unknown_chat(db_session, org_and_account):
     import asyncio
     from unittest.mock import patch
-    from dashboard.main import webhook_telegram
+    from web.main import webhook_telegram
     from app.models.config import SystemConfig
 
     org, _ = org_and_account

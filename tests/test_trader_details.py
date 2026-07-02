@@ -1,7 +1,7 @@
 import pytest
 import asyncio
 from unittest.mock import MagicMock
-from dashboard.main import _trader_data_inner
+from web.main import _trader_data_inner
 from app.models.signal import Signal, SignalStatus
 from app.models.market import PriceBar, EntryCheckLog
 from datetime import date, datetime

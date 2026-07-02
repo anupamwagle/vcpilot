@@ -10,7 +10,7 @@ seamless without passing org_id through every tool signature.
 
 Architecture:
   FastAPI app
-    ├─ POST /mcp/oauth/token  (handled by dashboard/main.py router)
+    ├─ POST /mcp/oauth/token  (handled by web/main.py router)
     └─ /mcp                   (mounted Starlette app — this module)
           ├─ AuthMiddleware    → validates Bearer JWT → sets ContextVar
           └─ FastMCP SSE app  → GET /sse, POST /messages

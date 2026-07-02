@@ -1,5 +1,13 @@
 # =============================================================================
-# AstraTrade — Docker Compose (Code mounted from host — restart to pick up changes)
+# AstraTrade — Docker Compose (used for both dev and prod)
+#
+# App code (app/, web/, scripts/, migrations/, tests/) is bind-mounted from the
+# host into every long-running service, so `git pull` on the host is reflected
+# inside the containers immediately with no rebuild. Each service also
+# auto-restarts its own process on code change (uvicorn --reload for the web
+# app + mcp-server, watchmedo auto-restart wrapping Celery worker/beat) — so no
+# `docker compose restart` is needed either. Only a dependency change
+# (requirements.txt) or a Dockerfile edit requires `docker compose up --build`.
 # =============================================================================
 
 x-app-env: &app-env
@@ -81,6 +89,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      - .:/app
     networks:
       - vcpilot-net
     command: sh -c "python -m scripts.init_db && python -m scripts.migrate_saas"
@@ -102,9 +112,14 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    volumes:
+      - .:/app
     networks:
       - vcpilot-net
-    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4 -Q default,reporting,screening_equities,trading_equities
+    # watchmedo restarts the celery process (not the container) whenever a .py
+    # file changes under the bind-mounted /app — so `git pull` on the host is
+    # picked up automatically, no `docker compose restart` needed.
+    command: watchmedo auto-restart --directory=/app --pattern=*.py --recursive -- celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4 -Q default,reporting,screening_equities,trading_equities
     healthcheck:
       test: ["CMD", "celery", "-A", "app.tasks.celery_app", "inspect", "ping"]
       interval: 30s
@@ -128,9 +143,11 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    volumes:
+      - .:/app
     networks:
       - vcpilot-net
-    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2 -Q trading_crypto,screening_crypto
+    command: watchmedo auto-restart --directory=/app --pattern=*.py --recursive -- celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2 -Q trading_crypto,screening_crypto
     healthcheck:
       test: ["CMD", "celery", "-A", "app.tasks.celery_app", "inspect", "ping"]
       interval: 30s
@@ -154,10 +171,13 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    volumes:
+      - .:/app
     networks:
       - vcpilot-net
     command: >
       sh -c "rm -f /tmp/celerybeat.pid &&
+      watchmedo auto-restart --directory=/app --pattern=*.py --recursive --
       celery -A app.tasks.celery_app beat
       --loglevel=info
       --schedule=/tmp/celerybeat-schedule
@@ -165,13 +185,14 @@ services:
       --max-interval=30"
 
   # ---------------------------------------------------------------------------
-  # Dashboard — FastAPI + Jinja2 Admin/Client UI
+  # Web — FastAPI + Jinja2 Admin/Client UI (the whole frontend+API layer; the
+  # "dashboard" is just one page within it, at GET / — see CLAUDE.md)
   # ---------------------------------------------------------------------------
-  dashboard:
+  web:
     build:
       context: .
-      dockerfile: docker/Dockerfile.dashboard
-    container_name: vcpilot-dashboard
+      dockerfile: docker/Dockerfile.web
+    container_name: vcpilot-web
     restart: unless-stopped
     <<: *app-env
     depends_on:
@@ -181,25 +202,25 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    volumes:
+      - .:/app
     ports:
       - "0.0.0.0:${DASHBOARD_PORT:-8501}:8501"
     networks:
       - vcpilot-net
-    command: >
-      sh -c "if [ \"$$APP_ENV\" = \"production\" ]; then
-               uvicorn dashboard.main:app --host 0.0.0.0 --port 8501 --loop asyncio --proxy-headers --forwarded-allow-ips='*';
-             else
-               uvicorn dashboard.main:app --host 0.0.0.0 --port 8501 --loop asyncio --reload --reload-dir /app/dashboard --proxy-headers --forwarded-allow-ips='*';
-             fi"
+    # --reload watches the bind-mounted code and restarts uvicorn's worker
+    # process automatically on change — same command in prod and dev, so a
+    # `git pull` on the host needs no `docker compose restart`.
+    command: ["uvicorn", "web.main:app", "--host", "0.0.0.0", "--port", "8501", "--loop", "asyncio", "--reload", "--reload-dir", "/app", "--proxy-headers", "--forwarded-allow-ips", "*"]
 
   # ---------------------------------------------------------------------------
   # MCP Server — standalone MCP tool-calling surface (/mcp/sse, /mcp/messages)
-  # Additive/opt-in: the dashboard also mounts the same MCP app in-process by
+  # Additive/opt-in: the web app also mounts the same MCP app in-process by
   # default, so this container is available to independently scale/restart MCP
-  # traffic without touching the dashboard. Cutting traffic over to it requires
+  # traffic without touching the web app. Cutting traffic over to it requires
   # a reverse-proxy change — see app/mcp/standalone.py docstring and CLAUDE.md.
   # OAuth token issuance (/mcp/oauth/token) and the /authorize consent page stay
-  # on the dashboard, since they need its login session.
+  # on the web app, since they need its login session.
   # ---------------------------------------------------------------------------
   mcp-server:
     build:
@@ -215,10 +236,13 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    volumes:
+      - .:/app
     ports:
       - "0.0.0.0:${MCP_SERVER_PORT:-8502}:8502"
     networks:
       - vcpilot-net
+    command: ["uvicorn", "app.mcp.standalone:app", "--host", "0.0.0.0", "--port", "8502", "--loop", "asyncio", "--reload", "--reload-dir", "/app", "--proxy-headers", "--forwarded-allow-ips", "*"]
 
   # ---------------------------------------------------------------------------
   # IBKR — Interactive Brokers Gateway (paper by default)

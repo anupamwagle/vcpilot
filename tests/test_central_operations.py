@@ -22,8 +22,8 @@ import pytest
 # Paths
 # ---------------------------------------------------------------------------
 _ROOT = pathlib.Path(__file__).parent.parent
-TEMPLATES_DIR = _ROOT / "dashboard" / "templates"
-MAIN_PY_PATH = _ROOT / "dashboard" / "main.py"
+TEMPLATES_DIR = _ROOT / "web" / "templates"
+MAIN_PY_PATH = _ROOT / "web" / "main.py"
 SCREENING_PY_PATH = _ROOT / "app" / "tasks" / "screening.py"
 
 
@@ -234,7 +234,7 @@ SUPERADMIN_ROUTES = [
 
 
 def _call_sa_route(fn_name, session, form_fields):
-    import dashboard.main as m
+    import web.main as m
     fn = getattr(m, fn_name)
     req = _mock_request(session)
     kwargs = {"request": req}
@@ -262,7 +262,7 @@ def test_superadmin_route_blocks_org_admin(fn_name, form_fields):
 # ---------------------------------------------------------------------------
 
 def test_sa_refresh_universe_org_id_is_none():
-    import dashboard.main as m
+    import web.main as m
     req = _mock_request({"authenticated": True, "user_role": "superadmin",
                          "organization_id": 42})
     captured = {}
@@ -278,7 +278,7 @@ def test_sa_refresh_universe_org_id_is_none():
 
 
 def test_sa_refresh_universe_scope_forwarded():
-    import dashboard.main as m
+    import web.main as m
     req = _mock_request({"authenticated": True, "user_role": "superadmin"})
     captured = {}
     mock_task = MagicMock()
@@ -295,7 +295,7 @@ def test_sa_refresh_universe_scope_forwarded():
 # ---------------------------------------------------------------------------
 
 def test_force_breakout_check_forwards_crypto_exchange():
-    import dashboard.main as m
+    import web.main as m
     req = _mock_request({"authenticated": True, "organization_id": 1})
     captured = {}
     mock_task = MagicMock()
@@ -311,7 +311,7 @@ def test_force_breakout_check_forwards_crypto_exchange():
 
 
 def test_force_breakout_check_forwards_asx():
-    import dashboard.main as m
+    import web.main as m
     req = _mock_request({"authenticated": True, "organization_id": 1})
     captured = {}
     mock_task = MagicMock()
@@ -324,7 +324,7 @@ def test_force_breakout_check_forwards_asx():
 
 
 def test_force_breakout_check_requires_auth():
-    import dashboard.main as m
+    import web.main as m
     resp = _run(m.action_force_breakout_check(request=_mock_request(), exchange="ASX"))
     assert resp.status_code == 302
     assert "/login" in resp.headers["location"]
@@ -335,7 +335,7 @@ def test_force_breakout_check_requires_auth():
 # ---------------------------------------------------------------------------
 
 def test_force_exit_check_forwards_exchange():
-    import dashboard.main as m
+    import web.main as m
     req = _mock_request({"authenticated": True, "organization_id": 1})
     captured = {}
     mock_task = MagicMock()
@@ -350,7 +350,7 @@ def test_force_exit_check_forwards_exchange():
 
 
 def test_force_exit_check_forwards_crypto_exchange():
-    import dashboard.main as m
+    import web.main as m
     req = _mock_request({"authenticated": True, "organization_id": 1})
     captured = {}
     mock_task = MagicMock()
@@ -369,7 +369,7 @@ def test_force_exit_check_forwards_crypto_exchange():
 
 def test_action_refresh_universe_reads_organization_id_from_session():
     """Route must read session['organization_id'], not session['org_id']."""
-    import dashboard.main as m
+    import web.main as m
     req = _mock_request({"authenticated": True, "organization_id": 99})
     captured = {}
     mock_task = MagicMock()
@@ -385,7 +385,7 @@ def test_action_refresh_universe_reads_organization_id_from_session():
 
 
 def test_action_recategorise_labels_reads_organization_id_from_session():
-    import dashboard.main as m
+    import web.main as m
     req = _mock_request({"authenticated": True, "organization_id": 77})
     captured = {}
     mock_recat = MagicMock()

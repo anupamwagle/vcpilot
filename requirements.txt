@@ -58,6 +58,11 @@ ccxt
 mcp[server]>=1.2.0    # Model Context Protocol server (FastMCP + SSE transport)
 PyJWT>=2.8.0          # JWT tokens for MCP OAuth
 
+# --- Live reload (code is bind-mounted from host; watchmedo restarts Celery
+#     worker/beat processes on .py changes so `git pull` needs no container
+#     restart — see docker-compose.yml) ---
+watchdog[watchmedo]==4.0.1
+
 # --- Testing (critical-path regression suite — see tests/) ---
 pytest==8.2.2
 pytest-mock==3.14.0

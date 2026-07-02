@@ -22,7 +22,7 @@ AstraTrade is a production-grade automated trading system. It screens the ASX un
 │  │  └── beat (scheduler — AEST aligned)         │   │
 │  └──────────────────────────────────────────────┘   │
 │  ┌──────────────────────┐   ┌──────────────────────┐  │
-│  │  Dashboard (UI+API)  │   │  MCP Server          │  │
+│  │  Web (UI+API)        │   │  MCP Server          │  │
 │  │  FastAPI + Jinja2    │   │  (independently      │  │
 │  │  → Telegram agent    │   │   deployable, opt-in)│  │
 │  │  port 8501           │   │  port 8502           │  │
@@ -200,8 +200,8 @@ vcpilot/
 │   ├── risk/         # Position sizing, portfolio heat
 │   ├── screener/     # AstraTrade rules, VCP, exit rules
 │   └── tasks/        # Celery tasks
-├── dashboard/        # FastAPI + Jinja2 dashboard (4 trading + 4 admin pages)
-├── docker/           # Dockerfiles (dashboard, workers, MCP server)
+├── web/              # FastAPI + Jinja2 web app (4 trading + 4 admin pages)
+├── docker/           # Dockerfiles (web, workers, MCP server)
 ├── migrations/       # DB schema + TimescaleDB setup
 ├── scripts/          # init_db.py, seed_config.py
 ├── tests/            # pytest regression suite — critical trading paths

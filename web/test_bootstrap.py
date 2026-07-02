@@ -17,7 +17,7 @@ def run_test():
             db.commit()
 
         # Let's import the bootstrap function
-        from dashboard.main import bootstrap_organization_data
+        from web.main import bootstrap_organization_data
         from app.models.config import ConfigValueType
         from app.models.account import OrganizationTier
         

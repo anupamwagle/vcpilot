@@ -11,7 +11,7 @@ THE BUG (must never come back — it broke EVERY request, including order entry)
   replays the body cleanly.
 
 These tests stand up a minimal app that mounts the REAL ActivityLoggerMiddleware
-(imported from dashboard.main) behind SessionMiddleware, drive it with TestClient,
+(imported from web.main) behind SessionMiddleware, drive it with TestClient,
 and assert:
   * a POST whose handler reads the form body succeeds (no RuntimeError) AND the
     handler receives the full, uncorrupted body  ← the core regression
@@ -30,7 +30,7 @@ from starlette.responses import JSONResponse, RedirectResponse, PlainTextRespons
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from dashboard.main import (
+from web.main import (
     ActivityLoggerMiddleware,
     _activity_feature_for,
     _activity_should_skip,

@@ -432,17 +432,17 @@ First signals likely from: BTC-AUD, DOGE-AUD, LINK-AUD, XRP-AUD (closest to 200M
 
 ---
 
-## Services Status (as of 1 Jul 2026)
+## Services Status (as of 2 Jul 2026)
 
 | Service | Status | Notes |
 |---|---|---|
 | `vcpilot-database` | ✅ Healthy | TimescaleDB running, all tables migrated |
 | `vcpilot-redis` | ✅ Healthy | Celery broker ready |
 | `vcpilot-migrate` | ✅ Completed | migrate_saas.py ran successfully — all rules seeded (renamed from `vcpilot-app`) |
-| `vcpilot-worker-equities` | ✅ Running | 5-min P&L refresh + ASX entry/exit checks |
-| `vcpilot-worker-crypto` | ✅ Running | 5-min crypto entry/exit/stop checks |
-| `vcpilot-beat` | ✅ Running | 5-min crypto beat + 4× daily screener active |
-| `vcpilot-dashboard` | ✅ Running | http://localhost:8501 — renamed from `vcpilot-api`, requires `docker compose up -d` to pick up |
+| `vcpilot-worker-equities` | ✅ Running | 5-min P&L refresh + ASX entry/exit checks; now bind-mounts code + `watchmedo auto-restart` so `.py` changes need no rebuild |
+| `vcpilot-worker-crypto` | ✅ Running | 5-min crypto entry/exit/stop checks; same live-reload as worker-equities |
+| `vcpilot-beat` | ✅ Running | 5-min crypto beat + 4× daily screener active; same live-reload |
+| `vcpilot-web` | ✅ Running | http://localhost:8501 — renamed from `vcpilot-dashboard` (2 Jul 2026; folder renamed `dashboard/`→`web/` — see CLAUDE.md). uvicorn `--reload` always on, code bind-mounted — `git pull` needs no restart |
 | `vcpilot-mcp-server` | ⏸ New, opt-in | http://localhost:8502 — not yet started; additive service, see CLAUDE.md Architecture |
 | `vcpilot-ibkr` | ⏸ Not started | Need: `docker compose --profile trading up ibkr -d` |
 

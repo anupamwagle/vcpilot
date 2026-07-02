@@ -23,27 +23,31 @@ Docker Compose (9 services):
   database        TimescaleDB (PostgreSQL 16 + timescaledb extension) — shared data layer
   redis           Redis 7 — cache + Celery broker/result backend
   migrate         One-shot database setup & migration runner — runs init_db + migrate_saas (runs once, exits)
-  dashboard       Frontend + API layer: FastAPI + Jinja2 + Flowbite/Tailwind — port 8501
+  web             Frontend + API layer: FastAPI + Jinja2 + Flowbite/Tailwind — port 8501
+                  (folder: web/ — renamed from "dashboard" since that folder is the whole
+                  web/API layer, not just the dashboard/home page at GET /)
   mcp-server      MCP tool-calling surface (/mcp/sse, /mcp/messages) — port 8502
-                  Additive/opt-in: dashboard also mounts the same MCP app in-process by
+                  Additive/opt-in: web also mounts the same MCP app in-process by
                   default. Independently deployable when you want to scale/restart MCP
-                  traffic without touching the dashboard — see app/mcp/standalone.py.
+                  traffic without touching the web app — see app/mcp/standalone.py.
   worker-equities Celery worker for equities (queues: screening_equities, trading_equities, reporting, default)
   worker-crypto   Celery worker for crypto (queues: trading_crypto, screening_crypto)
   beat            Celery Beat — AEST-aligned schedule
   ibkr            IBKR Gateway (--profile trading only, not started by default)
 ```
 
+All containers except `database`/`redis`/`ibkr`/`novnc` bind-mount the repo root (`.:/app`) and auto-restart their own process on `.py` changes (uvicorn `--reload` for `web`/`mcp-server`; `watchmedo auto-restart` wrapping the Celery `worker-equities`/`worker-crypto`/`beat` commands — see `watchdog[watchmedo]` in `requirements.txt`). A `git pull` on the host is picked up with **no `docker compose restart` and no rebuild** — only a `requirements.txt` or Dockerfile change needs `docker compose up --build`. Same behaviour in prod and dev; there's no separate dev compose file.
+
 **Layering, independent of the compose topology above:**
 | Layer | Where it lives | Notes |
 |---|---|---|
-| Frontend + API | `dashboard/` | Server-rendered FastAPI+Jinja2 — deliberate design (see Key Design Decisions), not a REST-only backend |
+| Frontend + API | `web/` | Server-rendered FastAPI+Jinja2 — deliberate design (see Key Design Decisions), not a REST-only backend. Runs as the `web` docker-compose service (`docker/Dockerfile.web`) |
 | MCP server | `app/mcp/` | Auth (`auth.py`), tool definitions (`tools.py`), Starlette app (`server.py`), standalone entrypoint (`standalone.py`) |
-| Shared domain | `app/models/`, `app/screener/`, `app/risk/`, `app/data/`, `app/broker/`, `app/agent/`, `app/notifications/` | Imported by both `dashboard/` and the Celery workers — this is the "core library" of the monorepo |
+| Shared domain | `app/models/`, `app/screener/`, `app/risk/`, `app/data/`, `app/broker/`, `app/agent/`, `app/notifications/` | Imported by both `web/` and the Celery workers — this is the "core library" of the monorepo |
 | Broker integration | `app/broker/ibkr.py` (ib_insync client), `app/broker/crypto.py` (ccxt client) | Library code called in-process by the equities/crypto workers — not separate network services, since they're just SDK clients around IBKR Gateway / exchange REST APIs |
 | Workers | `app/tasks/` | Celery tasks, split into `worker-equities` and `worker-crypto` containers so each asset class scales/restarts independently |
 | Cache | Redis | Celery broker + result backend + app-level caching (`app/utils/cache.py`) |
-| Database | TimescaleDB/Postgres | Single shared DB across dashboard, workers, and mcp-server — org-scoped via `organization_id`, not per-service schemas |
+| Database | TimescaleDB/Postgres | Single shared DB across web, workers, and mcp-server — org-scoped via `organization_id`, not per-service schemas |
 
 **Data flow:**
 ```
@@ -142,7 +146,11 @@ vcpilot/
 │       └── reporting.py   ← send_daily_report, health_check (heartbeat every 10 min),
 │                             send_notification_message, poll_telegram_updates
 │
-├── dashboard/             ← FastAPI web app (replaces Streamlit — do NOT use Streamlit here)
+├── web/                   ← FastAPI web app (replaces Streamlit — do NOT use Streamlit here)
+│   │                         Runs as the `web` docker-compose service. Named "web", not
+│   │                         "dashboard" — the dashboard/home page (GET /) is just one
+│   │                         route among the many this folder serves (trading, admin,
+│   │                         superadmin, trader terminal).
 │   ├── main.py            ← All FastAPI routes + global context scoping + Super Admin endpoints
 │   └── templates/
 │       ├── base.html      ← Flowbite sidebar layout + CSS variable theming system
@@ -219,7 +227,7 @@ Light default = Flowbite blue/white. Dark = charcoal/emerald. Toggle via `html.d
 
 ### 4. Worker status detection
 ```python
-# dashboard/main.py
+# web/main.py
 def _worker_status(heartbeat_str: str) -> str:
     # "online"   = heartbeat within 15 min
     # "starting" = never received (system just booted, wait ~10 min)
@@ -276,7 +284,7 @@ Classification is layered so every exchange resolves to a usable label, not just
 
 `_get_or_create_sector_label(name, org_id, db)` — looks up label by name, creates with preset colour if missing (sort_order=100). Colour map now covers crypto categories too (Layer 1, Layer 2, Stablecoin, Exchange Token, Meme Coin, Gaming & Metaverse, AI & Data, Oracle & Infra, Privacy Coin, Payments).
 
-19 ASX sector labels seeded per org in `migrate_saas.py` at sort_order 20–38. Health page "🏷 Re-categorise Labels" button now chains `refresh_asx_sector_data` → `recategorise_watchlist_labels` via `celery.chain` (see `/action/recategorise-labels` in `dashboard/main.py`), so every run backfills ASX GICS data before re-labelling.
+19 ASX sector labels seeded per org in `migrate_saas.py` at sort_order 20–38. Health page "🏷 Re-categorise Labels" button now chains `refresh_asx_sector_data` → `recategorise_watchlist_labels` via `celery.chain` (see `/action/recategorise-labels` in `web/main.py`), so every run backfills ASX GICS data before re-labelling.
 
 ### 29. Crypto Universe Bootstrap
 There is no scheduled `refresh_universe` equivalent for crypto — unlike ASX which scrapes Wikipedia weekly. Instead:
@@ -322,8 +330,8 @@ The sidebar is always a slide-in drawer (never fixed to the left of the viewport
 `POST /positions/{pos_id}/close` accepts `exit_reason` (ExitReason enum key) and optional `exit_price`. The positions page renders an inline close form per row with all Minervini exit reasons grouped as Defensive / Offensive. Confirming: marks Position CLOSED, creates Trade record, writes audit, sends Telegram exit alert.
 Exit reasons: `STOP_LOSS`, `TRAILING_STOP`, `TIME_STOP`, `EARNINGS_AVOID`, `MARKET_REGIME`, `PROFIT_TARGET_1`, `PROFIT_TARGET_2`, `CLIMAX_TOP`, `THREE_WEEKS_TIGHT`, `MANUAL`.
 
-### 14. Old Streamlit files still exist
-`dashboard/Home.py` and `dashboard/pages/` still exist (can't delete via sandbox — Windows/WSL permission issue). They are ignored because the Dockerfile runs `uvicorn dashboard.main:app`, not streamlit. Delete them manually from WSL: `rm -rf /mnt/c/vcpilot/dashboard/Home.py /mnt/c/vcpilot/dashboard/pages/`
+### 14. Old Streamlit files — removed
+The legacy `dashboard/Home.py` and `dashboard/pages/` Streamlit files were deleted in the 1 Jul 2026 cleanup session — no longer present. The web app runs via `uvicorn web.main:app` (see `docker/Dockerfile.web`), never streamlit. (Note: the FastAPI web app's folder itself was later renamed from `dashboard/` to `web/` on 2 Jul 2026 — see Session Handoff.)
 
 ### 18. Watchlist Labels (multi-group watchlist)
 `WatchlistLabel` model in `app/models/signal.py` — one row per user-defined label per org. Columns: `id`, `organization_id`, `name`, `color` (hex), `is_default`, `sort_order`. Migration adds `watchlist_labels` table and `label_id` FK on `watchlist`. Default labels seeded per org via `migrate_saas.py`: Favourites (amber `#f59e0b`, is_default=True), High Priority (red), VCP Forming (blue), Under Review (violet). Routes: `GET /watchlist?label={id}` filters by label; `POST /watchlist/labels/create` creates a label; `POST /watchlist/{id}/set-label` assigns a label to a stock. `screen_single_ticker` accepts `label_id` so manual adds land in the right group. `LABEL_COLOUR_PALETTE` in `signal.py` lists the 8 preset hex colours shown in the colour picker.
@@ -401,7 +409,7 @@ To ensure the dashboard remains fast and responsive:
 - `last_market_regime_ASX` / `last_market_regime_NYSE` / `last_market_regime_NASDAQ`
 
 ### 26. Exchange Filter Bar — `_get_exchange_filters()` + `components/exchange_filter.html`
-`_get_exchange_filters(org_id, db)` in `dashboard/main.py` reads `active_exchanges` SystemConfig for the org and returns filter tab options: `[{key, label, flag, asset_type}]`. Always includes "All". Groups NYSE+NASDAQ as "US", all `CRYPTO_*` keys as "Crypto". If only ASX is active, returns only `[{All}]` — no filter bar renders.
+`_get_exchange_filters(org_id, db)` in `web/main.py` reads `active_exchanges` SystemConfig for the org and returns filter tab options: `[{key, label, flag, asset_type}]`. Always includes "All". Groups NYSE+NASDAQ as "US", all `CRYPTO_*` keys as "Crypto". If only ASX is active, returns only `[{All}]` — no filter bar renders.
 
 `_apply_exchange_filter(query, model, exchange_filter)` applies the filter to a SQLAlchemy query:
 - `"ASX"` → `model.exchange_key == "ASX"`
@@ -409,7 +417,7 @@ To ensure the dashboard remains fast and responsive:
 - `"CRYPTO"` → `model.asset_type == "CRYPTO"`
 - `"ALL"` / `""` → no filter (return query unchanged)
 
-The template include `dashboard/templates/components/exchange_filter.html` renders the pill tabs using `exchange_filters`, `active_exchange_filter`, `base_url`, and optional `extra_params`. Included in Watchlist, Signals, and Positions pages. The filter is a `?exchange=` query param.
+The template include `web/templates/components/exchange_filter.html` renders the pill tabs using `exchange_filters`, `active_exchange_filter`, `base_url`, and optional `extra_params`. Included in Watchlist, Signals, and Positions pages. The filter is a `?exchange=` query param.
 
 ### 27. Admin Config — `FIELD_HINTS` Pattern
 `admin_config` GET route in `main.py` defines a `FIELD_HINTS` dict mapping config `key` → UI control metadata:
@@ -544,7 +552,7 @@ All rules have `enabled_globally=True` by default. Admin can toggle any non-mand
 
 ---
 
-## Dashboard Routes
+## Web App Routes
 
 **Client (Trading) Area:**
 - `GET /` — Home: P&L stats, today's signals, open positions, quick actions (scoped to organization)
@@ -660,13 +668,20 @@ This trades individual DMs for one shared thread where everyone sees the same al
 
 ### How it works under the hood
 
-The Telegram webhook (`POST /webhook/telegram` in `dashboard/main.py`) receives every incoming message, resolves the organization by checking whether the sender's `chat_id` is a member of any org's comma-separated `telegram_chat_id` list, then dispatches to `AgentCommandHandler` (scoped to that org) and replies only to the sender's chat via `TelegramNotifier.send(response, chat_id=...)`. A polling fallback (`poll_telegram_updates` Celery task, every 10s) uses the same list-membership check and works without HTTPS, for local/dev use. Outbound alerts (signals, fills, exits, daily reports) call `TelegramNotifier.send(message)` with no explicit `chat_id`, which broadcasts to every chat in the list.
+The Telegram webhook (`POST /webhook/telegram` in `web/main.py`) receives every incoming message, resolves the organization by checking whether the sender's `chat_id` is a member of any org's comma-separated `telegram_chat_id` list, then dispatches to `AgentCommandHandler` (scoped to that org) and replies only to the sender's chat via `TelegramNotifier.send(response, chat_id=...)`. A polling fallback (`poll_telegram_updates` Celery task, every 10s) uses the same list-membership check and works without HTTPS, for local/dev use. Outbound alerts (signals, fills, exits, daily reports) call `TelegramNotifier.send(message)` with no explicit `chat_id`, which broadcasts to every chat in the list.
 
 ---
 
-## Session Handoff — Where We Are (1 Jul 2026)
+## Session Handoff — Where We Are (2 Jul 2026)
 
 **Current operational state (pick up here in next session):**
+
+- **Web layer renamed `dashboard/` → `web/` + live code reload on `git pull` (2 Jul 2026):**
+  - `dashboard/` folder renamed to `web/` (`git mv`, history preserved) — `web/main.py` + `web/templates/`. The old name was misleading: this folder is the entire FastAPI+Jinja2 frontend/API layer (trading + admin + superadmin + trader terminal routes), not just the dashboard/home page served at `GET /`. `app/` is unchanged — it remains the shared domain library (models, screener, risk, broker, tasks, mcp, etc.), separate from the web layer.
+  - docker-compose service `dashboard` → `web` (container `vcpilot-dashboard` → `vcpilot-web`), `docker/Dockerfile.dashboard` → `docker/Dockerfile.web`. `docker/Dockerfile.app` (used by `migrate`/`worker-equities`/`worker-crypto`/`beat`) is untouched — no naming collision, since it was never tied to the `dashboard`/`web` service. `DASHBOARD_PORT`/`DASHBOARD_PASSWORD` env var names kept as-is on purpose, to avoid breaking existing `.env` files.
+  - Updated all `dashboard.main` imports/path strings across ~10 test files (`test_central_operations.py`, `test_multi_org_membership.py`, `test_watchlist_promotion.py`, `test_watchlist_vcp_persistence.py`, `test_telegram.py`, `test_sync_all_rules.py`, `test_trader_details.py`, `test_superadmin_activity.py`, `test_activity_logging.py`, `test_asx_universe_and_labels.py`, `test_us_market_audit_fixes.py`, `test_us_equity_universe.py`) and `web/test_bootstrap.py` → `web.main` / `web/templates` / `web/main.py`.
+  - **Live code reload — `git pull` needs no restart, same behaviour in prod and dev:** every long-running service (`web`, `mcp-server`, `worker-equities`, `worker-crypto`, `beat`, `migrate`) now bind-mounts the repo root (`.:/app`) instead of only baking code into the image at build time. `web`/`mcp-server` run uvicorn with `--reload --reload-dir /app` unconditionally (previously `--reload` was only enabled outside `APP_ENV=production` — now always on, since one compose file serves both). Celery has no native hot-reload, so `worker-equities`/`worker-crypto`/`beat` commands are wrapped in `watchmedo auto-restart --directory=/app --pattern=*.py --recursive --` (new `watchdog[watchmedo]==4.0.1` dependency in `requirements.txt`), which restarts the celery process itself (not the container) on any `.py` change. Net effect: pulling latest code on the host is picked up automatically everywhere — `deploy.sh`'s build/restart is now only needed after a `requirements.txt` or Dockerfile change (see the header comment in `docker-compose.yml`).
+  - `docker-compose-nas.yml` was already deleted from the working tree (uncommitted) before this session — not touched here; apply the same `dashboard`→`web` rename to it if/when it's restored.
 
 - **Enterprise-grade refactor: WhatsApp removed, mobile app removed, Telegram multi-user fix, MCP server made independently deployable (1 Jul 2026):**
   - **WhatsApp/WAHA fully removed** — `WhatsAppNotifier`, the `/webhook/whatsapp` + `/admin/whatsapp` routes, the WAHA docker-compose service, and all associated SystemConfig keys/seeding are gone. `get_notifier()` (`app/notifications/__init__.py`) now always returns `TelegramNotifier` — Telegram is the sole notification/remote-control channel.
@@ -769,7 +784,8 @@ Before the next session can begin trading, complete ALL of:
 > IR crypto pipeline fully fixed: live prices, TV charts, exchange-scoped universe (purges non-IR coins on re-seed). MEXC integrated.
 > WhatsApp fully removed — Telegram is the sole channel, now supports multiple org users via comma-separated telegram_chat_id.
 > Mobile app removed. MCP server now independently deployable (opt-in, see mcp-server compose service).
-> ⚠️ Action needed: (1) apply the api→dashboard rename + waha-data removal to docker-compose-nas.yml manually (file was locked all session), (2) rotate APP_SECRET_KEY (a leaked env.txt was removed from git), (3) go to Health page → 'Re-seed Crypto Universe' to purge NEAR/LOOM/STRK/PYUSD from DB, (4) there's a separate flagged task investigating a large block of duplicate/dead routes in dashboard/main.py — check its status.
+> The web app's folder was renamed `dashboard/` → `web/` and the docker-compose service `dashboard` → `web` on 2 Jul 2026; code is now bind-mounted with live reload so `git pull` needs no restart — see Session Handoff above.
+> ⚠️ Action needed: (1) apply the `dashboard`→`web` rename (this repo now uses `web`, not the older `api`/`dashboard` names) + waha-data removal to docker-compose-nas.yml manually if/when that file is restored (it was deleted from the working tree), (2) rotate APP_SECRET_KEY (a leaked env.txt was removed from git), (3) go to Health page → 'Re-seed Crypto Universe' to purge NEAR/LOOM/STRK/PYUSD from DB, (4) there's a separate flagged task investigating a large block of duplicate/dead routes in web/main.py — check its status.
 > Then: `get_portfolio_stats()` and `get_market_regime('CRYPTO_INDEPENDENTRESERVE')` to review state."
 
 ### Recovery Watchlist (when to expect first signals)

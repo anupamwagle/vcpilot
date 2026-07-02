@@ -11,13 +11,13 @@ the active one:
       - UNIQUE(user_id, organization_id) guard
       - User.is_member_of / organization_ids helpers
 
-  * dashboard routes (import dashboard.main lazily inside each test, matching the
+  * dashboard routes (import web.main lazily inside each test, matching the
     rest of the suite — these run in the app container):
       - POST /switch-org allows a member, denies a non-member
       - org creation with an existing admin email ADDS a membership (no 400)
       - superadmin user-create with an existing email ADDS a membership (no 400)
 
-The route tests import `dashboard.main` *inside* the test body so test collection
+The route tests import `web.main` *inside* the test body so test collection
 never fails in environments where the heavy web dependencies aren't installed.
 """
 from types import SimpleNamespace
@@ -171,7 +171,7 @@ def test_user_can_access_respects_membership(db_session, homed_user, three_orgs)
 
 def test_switch_org_allows_a_member(db_session, homed_user, three_orgs):
     import asyncio
-    from dashboard.main import switch_org
+    from web.main import switch_org
 
     backfill_memberships(db_session)
     add_user_to_org(db_session, homed_user, three_orgs[1].id)
@@ -186,7 +186,7 @@ def test_switch_org_allows_a_member(db_session, homed_user, three_orgs):
 
 def test_switch_org_denies_a_non_member(db_session, homed_user, three_orgs):
     import asyncio
-    from dashboard.main import switch_org
+    from web.main import switch_org
 
     backfill_memberships(db_session)  # only home org (Alpha)
     db_session.commit()
@@ -204,7 +204,7 @@ def test_org_create_with_existing_email_adds_membership_no_400(db_session, homed
     """Creating a new org with an admin email that already exists must attach the
     existing account to the new org (302 member_added) — not return a 400."""
     import asyncio
-    from dashboard.main import superadmin_organizations_create
+    from web.main import superadmin_organizations_create
 
     # an "Organisation Admin" role exists in a seeded DB; create one for the test
     db_session.add(Role(name="Organisation Admin", description="org admin"))
@@ -228,7 +228,7 @@ def test_org_create_with_existing_email_adds_membership_no_400(db_session, homed
 
 def test_superadmin_user_create_existing_email_adds_membership(db_session, homed_user, three_orgs):
     import asyncio
-    from dashboard.main import superadmin_users_create
+    from web.main import superadmin_users_create
 
     role = Role(name="Trader", description="trader")
     db_session.add(role)

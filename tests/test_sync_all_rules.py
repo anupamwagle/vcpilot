@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from dashboard.main import superadmin_rules_sync_all
+from web.main import superadmin_rules_sync_all
 
 
 def _mock_request(session=None, query_params=None):

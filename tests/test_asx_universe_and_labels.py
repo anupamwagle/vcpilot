@@ -703,8 +703,8 @@ class TestDashboardActionRoutes:
 
         # Read the actual route source to verify the key is correct post-fix
         import inspect
-        from dashboard import main as dashboard_main
-        src = inspect.getsource(dashboard_main.action_refresh_universe)
+        from web import main as web_main
+        src = inspect.getsource(web_main.action_refresh_universe)
         assert correct_key in src, (
             f"action_refresh_universe must use session.get('{correct_key}'), "
             f"not session.get('{wrong_key}')"
@@ -720,8 +720,8 @@ class TestDashboardActionRoutes:
         wrong_key = "org_id"
 
         import inspect
-        from dashboard import main as dashboard_main
-        src = inspect.getsource(dashboard_main.action_recategorise_labels)
+        from web import main as web_main
+        src = inspect.getsource(web_main.action_recategorise_labels)
         assert correct_key in src, (
             f"action_recategorise_labels must use session.get('{correct_key}')"
         )

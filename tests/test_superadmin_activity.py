@@ -18,7 +18,7 @@ from app.models.auth import User, Role, hash_password
 from app.models.account import Organization
 from app.models.signal import Watchlist, WatchlistStatus
 from app.models.audit import AuditLog, AuditAction
-from dashboard.main import (
+from web.main import (
     superadmin_activity,
     login_post,
     logout,
