@@ -201,7 +201,7 @@ def execute_signal_order(
                 broker_name = result.get("broker", "ccxt")
         else:
             from app.broker.ibkr import IBKRBroker
-            ibkr = IBKRBroker()
+            ibkr = IBKRBroker(organization_id=organization_id)
             result = ibkr.submit_bracket_order(
                 ticker=ticker,
                 action="BUY",

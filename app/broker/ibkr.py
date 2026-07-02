@@ -34,14 +34,19 @@ class IBKRBroker:
         self._ib: Optional[object] = None
         self._connected = False
         self.last_error: str = ""
-        
+        # Set True below only when an org-scoped broker resolves its OWN
+        # explicit ibkr_account. Gates connect() — see the comment there for
+        # why this can't just be "self.account is set", since self.account
+        # defaults to the shared settings.ibkr_account below.
+        self._org_account_ready = organization_id is None
+
         # Load credentials dynamically based on organization
         self.host = settings.ibkr_host
         self.port = settings.ibkr_port
         self.client_id = settings.ibkr_client_id
         self.account = settings.ibkr_account
         self.paper_mode = settings.ibkr_paper_mode
-        
+
         if organization_id:
             try:
                 from app.database import SessionLocal
@@ -50,15 +55,16 @@ class IBKRBroker:
                 try:
                     def cfg(key):
                         c = db.query(SystemConfig).filter(
-                            SystemConfig.key == key, 
+                            SystemConfig.key == key,
                             SystemConfig.organization_id == organization_id
                         ).first()
                         return c.value if c else None
-                        
+
                     acc_val = cfg("ibkr_account")
                     if acc_val:
                         self.account = acc_val
-                        
+                        self._org_account_ready = True
+
                     paper_val = cfg("ibkr_paper_mode")
                     if paper_val is not None:
                         self.paper_mode = paper_val.lower() in ("true", "1", "yes")
@@ -79,6 +85,28 @@ class IBKRBroker:
 
 
     def connect(self) -> bool:
+        # SAFETY: an org-scoped broker with no explicit ibkr_account of its own
+        # must never silently fall back to the shared settings.ibkr_account —
+        # the gateway holds ONE real login, so "falling back" means resolving
+        # to whichever account a DIFFERENT org actually owns. This bit the AW
+        # org on 2 Jul 2026: a brand-new org with no ibkr_account configured
+        # showed another org's real IBKR position and open orders as if they
+        # were its own (see CLAUDE.md #cross-org-ibkr-account-fallback). That
+        # incident was first patched only inside sync_ibkr_positions_task, but
+        # every other caller (open-orders panel, order submission) shared the
+        # same unguarded fallback in __init__ — so the check belongs here,
+        # once, instead of duplicated (and inevitably missed) per call site.
+        if self.organization_id is not None and not self._org_account_ready:
+            self.last_error = (
+                "no ibkr_account configured for this organisation — refusing to "
+                "connect using the shared gateway's default account (set "
+                "ibkr_account in Admin → Config first)"
+            )
+            logger.warning(
+                f"IBKR connect refused for org {self.organization_id}: {self.last_error}"
+            )
+            return False
+
         if settings.ibkr_simulate or not IB_AVAILABLE:
             self.last_error = (
                 "IBKR_SIMULATE is on" if settings.ibkr_simulate
