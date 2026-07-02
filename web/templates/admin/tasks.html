@@ -198,192 +198,194 @@
 
 {% block extra_scripts %}
 <script>
-const POLL_MS  = 3000;
-const MAX_ROWS = 300;
+(function() {
+  const POLL_MS  = 3000;
+  const MAX_ROWS = 300;
 
-const ACTION_COLOURS = {
-  SCREENER_RUN:'var(--t-accent)',SCREENER_TICKER:'var(--text-subtle)',
-  MARKET_REGIME_CHANGE:'var(--warn)',SIGNAL_GENERATED:'var(--pos)',
-  ORDER_PLACED:'var(--pos)',ORDER_FILLED:'var(--pos)',ORDER_SUBMITTED:'var(--pos)',
-  POSITION_CLOSED:'var(--neg)',TRADING_PAUSED:'var(--warn)',TRADING_RESUMED:'var(--pos)',
-  RULE_TOGGLED:'var(--a-accent)',RULE_THRESHOLD_SET:'var(--a-accent)',
-  CONFIG_CHANGED:'var(--a-accent)',MANUAL_OVERRIDE:'var(--a-accent)',
-  SYSTEM_STARTED:'var(--text-muted)',HEALTH_CHECK:'var(--text-subtle)',
-  TASK_RUN:'var(--t-accent)',TASK_ERROR:'var(--neg)',
-};
+  const ACTION_COLOURS = {
+    SCREENER_RUN:'var(--t-accent)',SCREENER_TICKER:'var(--text-subtle)',
+    MARKET_REGIME_CHANGE:'var(--warn)',SIGNAL_GENERATED:'var(--pos)',
+    ORDER_PLACED:'var(--pos)',ORDER_FILLED:'var(--pos)',ORDER_SUBMITTED:'var(--pos)',
+    POSITION_CLOSED:'var(--neg)',TRADING_PAUSED:'var(--warn)',TRADING_RESUMED:'var(--pos)',
+    RULE_TOGGLED:'var(--a-accent)',RULE_THRESHOLD_SET:'var(--a-accent)',
+    CONFIG_CHANGED:'var(--a-accent)',MANUAL_OVERRIDE:'var(--a-accent)',
+    SYSTEM_STARTED:'var(--text-muted)',HEALTH_CHECK:'var(--text-subtle)',
+    TASK_RUN:'var(--t-accent)',TASK_ERROR:'var(--neg)',
+  };
 
-function msgColour(action, msg) {
-  if (action === 'SCREENER_TICKER' || action === 'TASK_RUN') {
-    if (!msg) return 'var(--text-subtle)';
-    if (msg.startsWith('✅')||msg.startsWith('🟢')) return 'var(--pos)';
-    if (msg.startsWith('❌')||msg.startsWith('🔴')||msg.startsWith('⚠')) return 'var(--neg)';
-    if (msg.startsWith('🔵')) return 'var(--t-accent)';
-    if (msg.startsWith('🟡')) return 'var(--warn)';
-  }
-  return ACTION_COLOURS[action] || 'var(--text-muted)';
-}
-
-function buildDetailHtml(detail) {
-  if (!detail || !Object.keys(detail).length) return '';
-  let h = '<div class="log-detail" style="display:none;padding:.625rem 1rem .75rem;background:var(--surface-alt);border-top:1px solid var(--border)">';
-  if (detail.rules && typeof detail.rules === 'object' && !Array.isArray(detail.rules)) {
-    h += '<div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.5rem">';
-    for (const [rid, rd] of Object.entries(detail.rules)) {
-      const p   = rd.passed;
-      const col = p ? 'var(--pos)' : 'var(--neg)';
-      const bg  = p ? 'var(--pos-bg)' : 'var(--neg-bg)';
-      const bdr = p ? 'var(--bull-border)' : 'var(--bear-border)';
-      const msg = (rd.message||'').replace(/</g,'&lt;');
-      h += `<span style="font-size:.65rem;padding:.15rem .5rem;border-radius:.3rem;font-weight:600;font-family:'SF Mono',monospace;background:${bg};color:${col};border:1px solid ${bdr}" title="${msg}">${p?'✓':'✗'} ${rid.replace(/_/g,' ')}: ${msg}</span>`;
+  function msgColour(action, msg) {
+    if (action === 'SCREENER_TICKER' || action === 'TASK_RUN') {
+      if (!msg) return 'var(--text-subtle)';
+      if (msg.startsWith('✅')||msg.startsWith('🟢')) return 'var(--pos)';
+      if (msg.startsWith('❌')||msg.startsWith('🔴')||msg.startsWith('⚠')) return 'var(--neg)';
+      if (msg.startsWith('🔵')) return 'var(--t-accent)';
+      if (msg.startsWith('🟡')) return 'var(--warn)';
     }
-    h += '</div>';
+    return ACTION_COLOURS[action] || 'var(--text-muted)';
   }
-  h += `<pre style="font-size:.62rem;color:var(--text-subtle);white-space:pre-wrap;margin:0;line-height:1.4;font-family:'SF Mono',monospace">${JSON.stringify(detail,null,2)}</pre>`;
-  h += '</div>';
-  return h;
-}
 
-function rowHtml(log) {
-  const col     = msgColour(log.action, log.message);
-  const isTick  = log.action === 'SCREENER_TICKER';
-  const hasDet  = log.detail && Object.keys(log.detail).length > 0;
-  const bgStyle = isTick ? 'background:var(--surface-alt);' : '';
-  const cur     = hasDet ? 'cursor:pointer;' : '';
-  const msg     = (log.message||'').replace(/</g,'&lt;');
-  let h = `<div class="log-row" style="border-bottom:1px solid var(--border);${bgStyle}animation:fadeIn .25s ease">`;
-  h    += `<div class="log-header" style="display:grid;grid-template-columns:11rem 10rem 5rem 1fr auto;gap:.4rem .75rem;padding:.45rem 1rem;align-items:center;${cur}">`;
-  h    += `<span style="color:var(--text-subtle);font-size:.7rem;font-family:'SF Mono',monospace">${log.time}</span>`;
-  h    += `<span style="font-weight:700;color:${col};font-size:.7rem;font-family:'SF Mono',monospace">${log.action}</span>`;
-  h    += `<span style="color:var(--text-muted);font-size:.7rem;font-family:'SF Mono',monospace">${log.ticker||'—'}</span>`;
-  h    += `<span style="color:${col};font-size:.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'SF Mono',monospace" title="${msg}">${msg}</span>`;
-  h    += `<span class="chev" style="color:var(--text-subtle);font-size:.65rem;flex-shrink:0">${hasDet?'▶':''}</span>`;
-  h    += '</div>';
-  if (hasDet) h += buildDetailHtml(log.detail);
-  h    += '</div>';
-  return h;
-}
-
-function toggleRow(headerEl) {
-  const row  = headerEl.closest('.log-row');
-  const det  = row && row.querySelector('.log-detail');
-  const chev = headerEl.querySelector('.chev');
-  if (!det) return;
-  const open = det.style.display !== 'none';
-  det.style.display = open ? 'none' : 'block';
-  if (chev) chev.textContent = open ? '▶' : '▼';
-}
-
-// Wire seed rows on load
-document.addEventListener('DOMContentLoaded', () => {
-  document.querySelectorAll('.log-header').forEach(hdr => {
-    if (hdr.style.cursor === 'pointer') hdr.addEventListener('click', () => toggleRow(hdr));
-  });
-});
-
-let paused=false, newCount=0, lastId={{ last_log_id }};
-const feed=document.getElementById('log-feed');
-const cntBadge=document.getElementById('event-count');
-
-async function poll() {
-  if (paused) return;
-  try {
-    const res  = await fetch(`/admin/tasks/poll?after=${lastId}`);
-    if (!res.ok) return;
-    const data = await res.json();
-    if (data.counts) {
-      document.getElementById('cnt-stocks').textContent    = data.counts.stocks;
-      document.getElementById('cnt-bars').textContent      = Number(data.counts.bars).toLocaleString();
-      document.getElementById('cnt-signals').textContent   = data.counts.signals;
-      document.getElementById('cnt-watchlist').textContent = data.counts.watchlist;
-    }
-    if (data.logs && data.logs.length) {
-      document.getElementById('empty-state')?.remove();
-      const frag = document.createDocumentFragment();
-      for (const log of data.logs) {
-        const wrap = document.createElement('div');
-        wrap.innerHTML = rowHtml(log);
-        const node = wrap.firstChild;
-        const hdr  = node.querySelector('.log-header');
-        if (hdr && node.querySelector('.log-detail')) hdr.addEventListener('click', () => toggleRow(hdr));
-        // Apply exchange filter to new rows
-        if (!tickerMatchesExchange(log.ticker || '—', activeExchange, log.message || '')) node.style.display = 'none';
-        frag.appendChild(node);
-        lastId = Math.max(lastId, log.id);
+  function buildDetailHtml(detail) {
+    if (!detail || !Object.keys(detail).length) return '';
+    let h = '<div class="log-detail" style="display:none;padding:.625rem 1rem .75rem;background:var(--surface-alt);border-top:1px solid var(--border)">';
+    if (detail.rules && typeof detail.rules === 'object' && !Array.isArray(detail.rules)) {
+      h += '<div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.5rem">';
+      for (const [rid, rd] of Object.entries(detail.rules)) {
+        const p   = rd.passed;
+        const col = p ? 'var(--pos)' : 'var(--neg)';
+        const bg  = p ? 'var(--pos-bg)' : 'var(--neg-bg)';
+        const bdr = p ? 'var(--bull-border)' : 'var(--bear-border)';
+        const msg = (rd.message||'').replace(/</g,'&lt;');
+        h += `<span style="font-size:.65rem;padding:.15rem .5rem;border-radius:.3rem;font-weight:600;font-family:'SF Mono',monospace;background:${bg};color:${col};border:1px solid ${bdr}" title="${msg}">${p?'✓':'✗'} ${rid.replace(/_/g,' ')}: ${msg}</span>`;
       }
-      feed.insertBefore(frag, feed.firstChild);
-      newCount += data.logs.length;
-      const rows = feed.querySelectorAll('.log-row');
-      for (let i = MAX_ROWS; i < rows.length; i++) rows[i].remove();
-      cntBadge.textContent   = `+${newCount} new`;
-      cntBadge.style.color   = 'var(--t-accent)';
-      cntBadge.style.borderColor = 'var(--t-accent)';
+      h += '</div>';
     }
-  } catch(e) { console.warn('Poll err:',e); }
-}
+    h += `<pre style="font-size:.62rem;color:var(--text-subtle);white-space:pre-wrap;margin:0;line-height:1.4;font-family:'SF Mono',monospace">${JSON.stringify(detail,null,2)}</pre>`;
+    h += '</div>';
+    return h;
+  }
 
-function togglePause() {
-  paused = !paused;
-  document.getElementById('pause-btn').textContent = paused ? '▶ Resume' : '⏸ Pause';
-  const b = document.getElementById('stream-badge');
-  b.style.background  = paused ? 'var(--warn-bg)'  : 'var(--pos-bg)';
-  b.style.color       = paused ? 'var(--warn)'     : 'var(--pos)';
-  b.style.borderColor = paused ? 'var(--caution-border)' : 'var(--bull-border)';
-  b.querySelector('span').style.background = paused ? 'var(--warn)' : 'var(--pos)';
-  b.childNodes[1].textContent = paused ? ' Paused' : ' Live';
-}
+  function rowHtml(log) {
+    const col     = msgColour(log.action, log.message);
+    const isTick  = log.action === 'SCREENER_TICKER';
+    const hasDet  = log.detail && Object.keys(log.detail).length > 0;
+    const bgStyle = isTick ? 'background:var(--surface-alt);' : '';
+    const cur     = hasDet ? 'cursor:pointer;' : '';
+    const msg     = (log.message||'').replace(/</g,'&lt;');
+    let h = `<div class="log-row" style="border-bottom:1px solid var(--border);${bgStyle}animation:fadeIn .25s ease">`;
+    h    += `<div class="log-header" style="display:grid;grid-template-columns:11rem 10rem 5rem 1fr auto;gap:.4rem .75rem;padding:.45rem 1rem;align-items:center;${cur}">`;
+    h    += `<span style="color:var(--text-subtle);font-size:.7rem;font-family:'SF Mono',monospace">${log.time}</span>`;
+    h    += `<span style="font-weight:700;color:${col};font-size:.7rem;font-family:'SF Mono',monospace">${log.action}</span>`;
+    h    += `<span style="color:var(--text-muted);font-size:.7rem;font-family:'SF Mono',monospace">${log.ticker||'—'}</span>`;
+    h    += `<span style="color:${col};font-size:.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'SF Mono',monospace" title="${msg}">${msg}</span>`;
+    h    += `<span class="chev" style="color:var(--text-subtle);font-size:.65rem;flex-shrink:0">${hasDet?'▶':''}</span>`;
+    h    += '</div>';
+    if (hasDet) h += buildDetailHtml(log.detail);
+    h    += '</div>';
+    return h;
+  }
 
-function clearView() {
-  feed.querySelectorAll('.log-row').forEach(r => r.remove());
-  newCount = 0;
-  cntBadge.textContent = '0 new';
-  cntBadge.style.color = 'var(--text-muted)';
-  cntBadge.style.borderColor = 'var(--border)';
-  feed.innerHTML = '<div id="empty-state" style="padding:3rem 1rem;text-align:center;color:var(--text-subtle);font-size:.8125rem">Cleared. New events will appear here.</div>';
-}
+  function toggleRow(headerEl) {
+    const row  = headerEl.closest('.log-row');
+    const det  = row && row.querySelector('.log-detail');
+    const chev = headerEl.querySelector('.chev');
+    if (!det) return;
+    const open = det.style.display !== 'none';
+    det.style.display = open ? 'none' : 'block';
+    if (chev) chev.textContent = open ? '▶' : '▼';
+  }
 
-// ── Exchange stream filter ───────────────────────────────────────────────
-let activeExchange = 'ALL';
+  // Wire seed rows on load
+  document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.log-header').forEach(hdr => {
+      if (hdr.style.cursor === 'pointer') hdr.addEventListener('click', () => toggleRow(hdr));
+    });
+  });
 
-function tickerMatchesExchange(ticker, exc, message) {
-  if (exc === 'ALL') return true;
-  // Entries with no ticker: classify by message prefix written by tasks
-  if (!ticker || ticker === '—') {
-    const msg = (message || '').toUpperCase();
-    if (exc === 'CRYPTO') return msg.includes('[CRYPTO') || msg.includes('CRYPTO_');
-    if (exc === 'ASX')    return !msg.includes('[CRYPTO') && !msg.includes('[NYSE') && !msg.includes('[NASDAQ') && !msg.includes('CRYPTO_');
-    if (exc === 'US')     return msg.includes('[NYSE') || msg.includes('[NASDAQ');
+  let paused=false, newCount=0, lastId={{ last_log_id }};
+  const feed=document.getElementById('log-feed');
+  const cntBadge=document.getElementById('event-count');
+
+  async function poll() {
+    if (paused) return;
+    try {
+      const res  = await fetch(`/admin/tasks/poll?after=${lastId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.counts) {
+        document.getElementById('cnt-stocks').textContent    = data.counts.stocks;
+        document.getElementById('cnt-bars').textContent      = Number(data.counts.bars).toLocaleString();
+        document.getElementById('cnt-signals').textContent   = data.counts.signals;
+        document.getElementById('cnt-watchlist').textContent = data.counts.watchlist;
+      }
+      if (data.logs && data.logs.length) {
+        document.getElementById('empty-state')?.remove();
+        const frag = document.createDocumentFragment();
+        for (const log of data.logs) {
+          const wrap = document.createElement('div');
+          wrap.innerHTML = rowHtml(log);
+          const node = wrap.firstChild;
+          const hdr  = node.querySelector('.log-header');
+          if (hdr && node.querySelector('.log-detail')) hdr.addEventListener('click', () => toggleRow(hdr));
+          // Apply exchange filter to new rows
+          if (!tickerMatchesExchange(log.ticker || '—', activeExchange, log.message || '')) node.style.display = 'none';
+          frag.appendChild(node);
+          lastId = Math.max(lastId, log.id);
+        }
+        feed.insertBefore(frag, feed.firstChild);
+        newCount += data.logs.length;
+        const rows = feed.querySelectorAll('.log-row');
+        for (let i = MAX_ROWS; i < rows.length; i++) rows[i].remove();
+        cntBadge.textContent   = `+${newCount} new`;
+        cntBadge.style.color   = 'var(--t-accent)';
+        cntBadge.style.borderColor = 'var(--t-accent)';
+      }
+    } catch(e) { console.warn('Poll err:',e); }
+  }
+
+  window.togglePause = function() {
+    paused = !paused;
+    document.getElementById('pause-btn').textContent = paused ? '▶ Resume' : '⏸ Pause';
+    const b = document.getElementById('stream-badge');
+    b.style.background  = paused ? 'var(--warn-bg)'  : 'var(--pos-bg)';
+    b.style.color       = paused ? 'var(--warn)'     : 'var(--pos)';
+    b.style.borderColor = paused ? 'var(--caution-border)' : 'var(--bull-border)';
+    b.querySelector('span').style.background = paused ? 'var(--warn)' : 'var(--pos)';
+    b.childNodes[1].textContent = paused ? ' Paused' : ' Live';
+  };
+
+  window.clearView = function() {
+    feed.querySelectorAll('.log-row').forEach(r => r.remove());
+    newCount = 0;
+    cntBadge.textContent = '0 new';
+    cntBadge.style.color = 'var(--text-muted)';
+    cntBadge.style.borderColor = 'var(--border)';
+    feed.innerHTML = '<div id="empty-state" style="padding:3rem 1rem;text-align:center;color:var(--text-subtle);font-size:.8125rem">Cleared. New events will appear here.</div>';
+  };
+
+  // ── Exchange stream filter ───────────────────────────────────────────────
+  let activeExchange = 'ALL';
+
+  function tickerMatchesExchange(ticker, exc, message) {
+    if (exc === 'ALL') return true;
+    // Entries with no ticker: classify by message prefix written by tasks
+    if (!ticker || ticker === '—') {
+      const msg = (message || '').toUpperCase();
+      if (exc === 'CRYPTO') return msg.includes('[CRYPTO') || msg.includes('CRYPTO_');
+      if (exc === 'ASX')    return !msg.includes('[CRYPTO') && !msg.includes('[NYSE') && !msg.includes('[NASDAQ') && !msg.includes('CRYPTO_');
+      if (exc === 'US')     return msg.includes('[NYSE') || msg.includes('[NASDAQ');
+      return true;
+    }
+    if (exc === 'ASX')    return ticker.endsWith('.AX');
+    if (exc === 'CRYPTO') return ticker.includes('-');
+    if (exc === 'US')     return !ticker.endsWith('.AX') && !ticker.includes('-');
     return true;
   }
-  if (exc === 'ASX')    return ticker.endsWith('.AX');
-  if (exc === 'CRYPTO') return ticker.includes('-');
-  if (exc === 'US')     return !ticker.endsWith('.AX') && !ticker.includes('-');
-  return true;
-}
 
-function applyStreamExchangeFilter() {
-  feed.querySelectorAll('.log-row').forEach(row => {
-    const tickerEl  = row.querySelector('.log-header span:nth-child(3)');
-    const msgEl     = row.querySelector('.log-header span:nth-child(4)');
-    const ticker    = tickerEl ? tickerEl.textContent.trim() : '';
-    const message   = msgEl   ? msgEl.textContent.trim()   : '';
-    row.style.display = tickerMatchesExchange(ticker, activeExchange, message) ? '' : 'none';
-  });
-}
+  function applyStreamExchangeFilter() {
+    feed.querySelectorAll('.log-row').forEach(row => {
+      const tickerEl  = row.querySelector('.log-header span:nth-child(3)');
+      const msgEl     = row.querySelector('.log-header span:nth-child(4)');
+      const ticker    = tickerEl ? tickerEl.textContent.trim() : '';
+      const message   = msgEl   ? msgEl.textContent.trim()   : '';
+      row.style.display = tickerMatchesExchange(ticker, activeExchange, message) ? '' : 'none';
+    });
+  }
 
-function setStreamExchange(exc) {
-  activeExchange = exc;
-  // Update pill styles
-  document.querySelectorAll('[id^="exc-"]').forEach(btn => {
-    const active = btn.id === 'exc-' + exc;
-    btn.style.background    = active ? 'var(--t-accent)' : 'transparent';
-    btn.style.color         = active ? '#fff' : 'var(--text-muted)';
-    btn.style.borderColor   = active ? 'var(--t-accent)' : 'var(--border)';
-  });
-  applyStreamExchangeFilter();
-}
+  window.setStreamExchange = function(exc) {
+    activeExchange = exc;
+    // Update pill styles
+    document.querySelectorAll('[id^="exc-"]').forEach(btn => {
+      const active = btn.id === 'exc-' + exc;
+      btn.style.background    = active ? 'var(--t-accent)' : 'transparent';
+      btn.style.color         = active ? '#fff' : 'var(--text-muted)';
+      btn.style.borderColor   = active ? 'var(--t-accent)' : 'var(--border)';
+    });
+    applyStreamExchangeFilter();
+  };
 
-document.head.insertAdjacentHTML('beforeend','<style>@keyframes fadeIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}</style>');
-vcInterval(poll, POLL_MS);
-poll();
+  document.head.insertAdjacentHTML('beforeend','<style>@keyframes fadeIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}</style>');
+  vcInterval(poll, POLL_MS);
+  poll();
+})();
 </script>
 {% endblock %}

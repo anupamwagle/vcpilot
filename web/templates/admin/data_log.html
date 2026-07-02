@@ -316,82 +316,84 @@ document.querySelectorAll('.log-row').forEach(tr => {
   });
 });
 
-// ── Auto-refresh via poll endpoint ────────────────────────────────────────
-let maxId = {{ rows[0].id if rows else 0 }};
-const indicator = document.getElementById('refresh-indicator');
-const lastRefreshEl = document.getElementById('last-refresh');
+(function() {
+  // ── Auto-refresh via poll endpoint ────────────────────────────────────────
+  let maxId = {{ rows[0].id if rows else 0 }};
+  const indicator = document.getElementById('refresh-indicator');
+  const lastRefreshEl = document.getElementById('last-refresh');
 
-function formatTime(isoStr) {
-  const d = new Date(isoStr);
-  return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-}
-
-function buildRow(r) {
-  const pctColor = r.price_vs_pivot >= 0 ? 'var(--pos)' : 'var(--neg)';
-  const volColor = r.vol_ratio >= 1.5 ? 'var(--pos)' : r.vol_ratio >= 1.0 ? 'var(--warn)' : 'var(--neg)';
-  const srcLabel = r.data_source === 'ibkr' ? '⚡ IBKR Live' :
-                   r.data_source === 'eod_fallback' ? '📉 EOD Close' :
-                   `🕐 ~${r.delay_mins||20}min delay`;
-  const srcColor = r.data_source === 'ibkr' ? 'var(--pos-bg)' : 'var(--warn-bg)';
-  const srcText  = r.data_source === 'ibkr' ? 'var(--pos)' : 'var(--warn)';
-  const verdictHtml = r.breakout_confirmed
-    ? `<span class="badge text-xs font-bold" style="background:var(--pos-bg);color:var(--pos);border:1px solid var(--pos)">✅ CONFIRMED</span>`
-    : `<span class="badge text-xs" style="background:var(--surface-alt);color:var(--text-subtle)">Watching</span>`;
-  const ruleBadges = Object.entries(r.rule_results||{}).map(([rid, rd]) =>
-    `<span class="rule-badge text-xs px-2 py-0.5 rounded font-mono"
-       style="background:${rd.passed?'var(--pos-bg)':'var(--neg-bg)'};color:${rd.passed?'var(--pos)':'var(--neg)'};border:1px solid ${rd.passed?'var(--pos)':'var(--neg)'}">
-       ${rd.passed?'✓':'✗'} ${rid.replace(/_/g,' ')}
-     </span>`
-  ).join('');
-
-  return `<tr class="log-row" data-id="${r.id}"
-             style="border-bottom:1px solid var(--border);${r.breakout_confirmed?'background:rgba(5,150,105,.05)':''}">
-    <td class="p-3 whitespace-nowrap text-xs" style="color:var(--text-muted)">${formatTime(r.checked_at)}</td>
-    <td class="p-3"><span class="font-mono font-bold text-sm" style="color:var(--t-accent)">${r.ticker}</span></td>
-    <td class="p-3 text-right font-mono text-sm font-semibold" style="color:var(--text)">${r.price_current ? '$'+r.price_current.toFixed(3) : '—'}</td>
-    <td class="p-3 text-right font-mono text-sm" style="color:var(--text-muted)">${r.price_pivot ? '$'+r.price_pivot.toFixed(3) : '—'}</td>
-    <td class="p-3 text-right font-mono text-xs font-semibold"><span style="color:${pctColor}">${r.price_vs_pivot != null ? (r.price_vs_pivot>0?'+':'')+r.price_vs_pivot.toFixed(2)+'%' : '—'}</span></td>
-    <td class="p-3 text-right font-mono text-xs font-semibold"><span style="color:${volColor}">${r.vol_ratio != null ? r.vol_ratio.toFixed(2)+'×' : '—'}</span></td>
-    <td class="p-3 text-right font-mono text-xs" style="color:var(--text-muted)">—</td>
-    <td class="p-3 text-right font-mono text-xs" style="color:var(--text-muted)">—</td>
-    <td class="p-3 text-right font-mono text-xs">—</td>
-    <td class="p-3"><div class="flex flex-wrap gap-1">${ruleBadges || '<span style="color:var(--text-subtle)" class="text-xs">—</span>'}</div></td>
-    <td class="p-3 whitespace-nowrap"><span class="text-xs px-2 py-0.5 rounded" style="background:${srcColor};color:${srcText}">${srcLabel}</span></td>
-    <td class="p-3">${verdictHtml}</td>
-  </tr>`;
-}
-
-async function pollNewRows() {
-  try {
-    indicator.textContent = '⟳ Refreshing…';
-    const res = await fetch(`/admin/data-log/poll?after_id=${maxId}&exchange={{ active_exchange_filter }}&ticker={{ ticker }}&only_confirmed={{ 'true' if only_confirmed else 'false' }}`);
-    if (!res.ok) return;
-    const data = await res.json();
-    if (data.rows && data.rows.length > 0) {
-      const tbody = document.getElementById('log-tbody');
-      const html = data.rows.map(buildRow).join('');
-      tbody.insertAdjacentHTML('afterbegin', html);
-      maxId = Math.max(maxId, ...data.rows.map(r => r.id));
-      // Re-bind click listeners for new rows
-      document.querySelectorAll('.log-row').forEach(tr => {
-        if (!tr.dataset.bound) {
-          tr.dataset.bound = '1';
-          tr.addEventListener('click', () => {
-            const detail = document.getElementById('detail-' + tr.dataset.id);
-            if (detail) detail.style.display = detail.style.display === 'none' ? '' : 'none';
-          });
-        }
-      });
-    }
-    indicator.textContent = '⟳ Auto-refresh';
-    lastRefreshEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
-  } catch (e) {
-    indicator.textContent = '⟳ Auto-refresh';
+  function formatTime(isoStr) {
+    const d = new Date(isoStr);
+    return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
   }
-}
 
-// Poll every 30 seconds
-vcInterval(pollNewRows, 30000);
-lastRefreshEl.textContent = 'Loaded ' + new Date().toLocaleTimeString();
+  function buildRow(r) {
+    const pctColor = r.price_vs_pivot >= 0 ? 'var(--pos)' : 'var(--neg)';
+    const volColor = r.vol_ratio >= 1.5 ? 'var(--pos)' : r.vol_ratio >= 1.0 ? 'var(--warn)' : 'var(--neg)';
+    const srcLabel = r.data_source === 'ibkr' ? '⚡ IBKR Live' :
+                     r.data_source === 'eod_fallback' ? '📉 EOD Close' :
+                     `🕐 ~${r.delay_mins||20}min delay`;
+    const srcColor = r.data_source === 'ibkr' ? 'var(--pos-bg)' : 'var(--warn-bg)';
+    const srcText  = r.data_source === 'ibkr' ? 'var(--pos)' : 'var(--warn)';
+    const verdictHtml = r.breakout_confirmed
+      ? `<span class="badge text-xs font-bold" style="background:var(--pos-bg);color:var(--pos);border:1px solid var(--pos)">✅ CONFIRMED</span>`
+      : `<span class="badge text-xs" style="background:var(--surface-alt);color:var(--text-subtle)">Watching</span>`;
+    const ruleBadges = Object.entries(r.rule_results||{}).map(([rid, rd]) =>
+      `<span class="rule-badge text-xs px-2 py-0.5 rounded font-mono"
+         style="background:${rd.passed?'var(--pos-bg)':'var(--neg-bg)'};color:${rd.passed?'var(--pos)':'var(--neg)'};border:1px solid ${rd.passed?'var(--pos)':'var(--neg)'}">
+         ${rd.passed?'✓':'✗'} ${rid.replace(/_/g,' ')}
+       </span>`
+    ).join('');
+
+    return `<tr class="log-row" data-id="${r.id}"
+               style="border-bottom:1px solid var(--border);${r.breakout_confirmed?'background:rgba(5,150,105,.05)':''}">
+      <td class="p-3 whitespace-nowrap text-xs" style="color:var(--text-muted)">${formatTime(r.checked_at)}</td>
+      <td class="p-3"><span class="font-mono font-bold text-sm" style="color:var(--t-accent)">${r.ticker}</span></td>
+      <td class="p-3 text-right font-mono text-sm font-semibold" style="color:var(--text)">${r.price_current ? '$'+r.price_current.toFixed(3) : '—'}</td>
+      <td class="p-3 text-right font-mono text-sm" style="color:var(--text-muted)">${r.price_pivot ? '$'+r.price_pivot.toFixed(3) : '—'}</td>
+      <td class="p-3 text-right font-mono text-xs font-semibold"><span style="color:${pctColor}">${r.price_vs_pivot != null ? (r.price_vs_pivot>0?'+':'')+r.price_vs_pivot.toFixed(2)+'%' : '—'}</span></td>
+      <td class="p-3 text-right font-mono text-xs font-semibold"><span style="color:${volColor}">${r.vol_ratio != null ? r.vol_ratio.toFixed(2)+'×' : '—'}</span></td>
+      <td class="p-3 text-right font-mono text-xs" style="color:var(--text-muted)">—</td>
+      <td class="p-3 text-right font-mono text-xs" style="color:var(--text-muted)">—</td>
+      <td class="p-3 text-right font-mono text-xs">—</td>
+      <td class="p-3"><div class="flex flex-wrap gap-1">${ruleBadges || '<span style="color:var(--text-subtle)" class="text-xs">—</span>'}</div></td>
+      <td class="p-3 whitespace-nowrap"><span class="text-xs px-2 py-0.5 rounded" style="background:${srcColor};color:${srcText}">${srcLabel}</span></td>
+      <td class="p-3">${verdictHtml}</td>
+    </tr>`;
+  }
+
+  async function pollNewRows() {
+    try {
+      indicator.textContent = '⟳ Refreshing…';
+      const res = await fetch(`/admin/data-log/poll?after_id=${maxId}&exchange={{ active_exchange_filter }}&ticker={{ ticker }}&only_confirmed={{ 'true' if only_confirmed else 'false' }}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.rows && data.rows.length > 0) {
+        const tbody = document.getElementById('log-tbody');
+        const html = data.rows.map(buildRow).join('');
+        tbody.insertAdjacentHTML('afterbegin', html);
+        maxId = Math.max(maxId, ...data.rows.map(r => r.id));
+        // Re-bind click listeners for new rows
+        document.querySelectorAll('.log-row').forEach(tr => {
+          if (!tr.dataset.bound) {
+            tr.dataset.bound = '1';
+            tr.addEventListener('click', () => {
+              const detail = document.getElementById('detail-' + tr.dataset.id);
+              if (detail) detail.style.display = detail.style.display === 'none' ? '' : 'none';
+            });
+          }
+        });
+      }
+      indicator.textContent = '⟳ Auto-refresh';
+      lastRefreshEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
+    } catch (e) {
+      indicator.textContent = '⟳ Auto-refresh';
+    }
+  }
+
+  // Poll every 30 seconds
+  vcInterval(pollNewRows, 30000);
+  lastRefreshEl.textContent = 'Loaded ' + new Date().toLocaleTimeString();
+})();
 </script>
 {% endblock %}
