@@ -518,11 +518,43 @@ if (checked) {
     }
   }
 
-  // Load page 1 immediately (Redis cache = <5ms)
-  fetch('/watchlist/rows?page=1' + (baseParams ? '&' + baseParams : ''), { credentials: 'same-origin' })
-    .then(r => r.text())
-    .then(html => appendCards(html, true))
-    .catch(() => { /* keep skeleton */ });
+  // Load page 1 immediately (Redis cache = <5ms). A hard 20s timeout plus an
+  // explicit error state means a slow/failed backend shows something
+  // actionable instead of leaving the skeleton spinning forever with no
+  // feedback (that silent-failure UX was the actual watchlist "stuck
+  // loading" bug — the skeleton looked identical whether the fetch was
+  // merely slow or had already failed).
+  function loadFirstPage() {
+    if (skeleton) skeleton.style.display = 'flex';
+    const errBox = document.getElementById('wl-load-error');
+    if (errBox) errBox.remove();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    fetch('/watchlist/rows?page=1' + (baseParams ? '&' + baseParams : ''), {
+      credentials: 'same-origin', signal: controller.signal,
+    })
+      .then(r => {
+        if (!r.ok) throw new Error('Server returned ' + r.status);
+        return r.text();
+      })
+      .then(html => { clearTimeout(timeoutId); appendCards(html, true); })
+      .catch(err => {
+        clearTimeout(timeoutId);
+        const msg = err && err.name === 'AbortError'
+          ? 'Timed out loading the watchlist.'
+          : 'Failed to load the watchlist.';
+        const box = document.createElement('div');
+        box.id = 'wl-load-error';
+        box.className = 'card p-6 text-center';
+        box.innerHTML = '<p style="color:var(--neg);font-size:.85rem;margin-bottom:.5rem">' + msg + '</p>' +
+          '<button onclick="document.getElementById(\'wl-load-error\').remove();window.__wlRetryLoad()" ' +
+          'style="padding:.35rem .9rem;border-radius:.375rem;background:var(--t-accent);color:#fff;font-size:.8rem;border:none;cursor:pointer">Retry</button>';
+        if (skeleton) skeleton.style.display = 'none';
+        container.appendChild(box);
+      });
+  }
+  window.__wlRetryLoad = loadFirstPage;
+  loadFirstPage();
 
   // Loads the next page of whatever's currently active — the normal feed,
   // OR (if a search is active) the next page of search results. Either way

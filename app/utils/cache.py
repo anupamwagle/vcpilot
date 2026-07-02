@@ -9,8 +9,16 @@ class RedisCache:
         self.enabled = False
         self._client = None
         try:
-            # Initialize Redis connection
-            self._client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+            # Initialize Redis connection. socket_timeout/socket_connect_timeout are
+            # required — without them a slow/unresponsive Redis (not fully down, just
+            # hanging) blocks the calling request forever, since these calls are made
+            # synchronously from inside async FastAPI routes with no thread offloading.
+            # That hang looked exactly like a page stuck loading its skeleton forever
+            # (e.g. /watchlist/rows calls cache.get_raw() as its very first step).
+            self._client = redis.Redis.from_url(
+                settings.redis_url, decode_responses=True,
+                socket_connect_timeout=3, socket_timeout=3,
+            )
             # Test connection
             self._client.ping()
             self.enabled = True

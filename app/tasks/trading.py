@@ -1627,6 +1627,29 @@ def sync_ibkr_positions_task(self, organization_id: int | None = None):
         for org in orgs:
             summary = {"imported": 0, "closed": 0, "updated": 0, "matched": 0}
             try:
+                # SAFETY: only reconcile orgs that have EXPLICITLY configured their
+                # own ibkr_account. IBKRBroker silently falls back to the global
+                # .env IBKR_ACCOUNT default when an org hasn't set one — which
+                # means a brand-new org (no ibkr_account yet) would otherwise
+                # resolve to whichever account a DIFFERENT org actually owns on
+                # the shared gateway, and this task would then "reconcile" that
+                # other org's real IBKR holdings into its own Position table.
+                # This bit the AW org (id=10) on 2 Jul 2026 — a new org showed an
+                # open position that actually belonged to a different org.
+                from app.models.config import SystemConfig as _SC
+                _own_account_cfg = db.query(_SC).filter(
+                    _SC.key == "ibkr_account", _SC.organization_id == org.id,
+                ).first()
+                if not (_own_account_cfg and (_own_account_cfg.value or "").strip()):
+                    db.add(AuditLog(
+                        action=AuditAction.TASK_RUN, organization_id=org.id,
+                        message="IBKR position sync skipped — no ibkr_account configured for this org "
+                                "(refusing to reconcile against the shared gateway's default account)",
+                        detail={"source": "ibkr_sync", "reason": "no_org_ibkr_account"},
+                    ))
+                    db.commit()
+                    continue
+
                 # --- Pull live IBKR positions for this org's account ---
                 broker = IBKRBroker(organization_id=org.id)
                 broker.connect()
