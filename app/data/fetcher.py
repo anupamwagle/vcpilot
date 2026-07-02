@@ -148,11 +148,22 @@ def get_fx_rate(from_currency: str = "AUD", to_currency: str = "USD") -> float:
         if (now - fetched_at).total_seconds() < _FX_CACHE_TTL:
             return rate
 
-    # Try Redis cache first
+    # Try Redis cache first. socket_connect_timeout/socket_timeout are required —
+    # this opens its own raw redis client instead of going through the shared
+    # app.utils.cache.RedisCache singleton (which already got this fix), so a
+    # slow/unresponsive Redis here would otherwise block the calling request
+    # forever. This function is called synchronously from inside async web
+    # routes (via calculate_position_size) with no thread offloading, and the
+    # web container runs a single uvicorn worker (--reload forces one process),
+    # so a single hung call here freezes every page for every user — not just
+    # this request — until it resolves.
     try:
         import redis as _redis
         from app.config import settings as _s
-        r = _redis.from_url(_s.redis_url, decode_responses=True)
+        r = _redis.from_url(
+            _s.redis_url, decode_responses=True,
+            socket_connect_timeout=3, socket_timeout=3,
+        )
         cached_rate = r.get(f"fx_rate:{pair_key}")
         if cached_rate:
             rate = float(cached_rate)
@@ -161,17 +172,21 @@ def get_fx_rate(from_currency: str = "AUD", to_currency: str = "USD") -> float:
     except Exception:
         pass
 
-    # Try different symbols
+    # Try different symbols. Explicit timeout on every yfinance call for the
+    # same reason as above — an unresponsive Yahoo Finance endpoint must fail
+    # fast, not hang the single web worker indefinitely (unlike the requests.get()
+    # calls elsewhere in this file, yfinance's own HTTP calls have no timeout by
+    # default).
     symbols_to_try = [
         f"{from_currency}{to_currency}=X",  # Fiat format
         f"{from_currency}-{to_currency}",   # Crypto format (e.g., BNB-USD)
     ]
-    
+
     rate = None
     for yf_symbol in symbols_to_try:
         try:
             ticker = yf.Ticker(yf_symbol)
-            hist = ticker.history(period="2d", interval="1d")
+            hist = ticker.history(period="2d", interval="1d", timeout=8)
             if hist is not None and not hist.empty:
                 rate = float(hist["Close"].iloc[-1])
                 break
@@ -187,7 +202,7 @@ def get_fx_rate(from_currency: str = "AUD", to_currency: str = "USD") -> float:
         for yf_symbol in inverse_symbols:
             try:
                 ticker = yf.Ticker(yf_symbol)
-                hist = ticker.history(period="2d", interval="1d")
+                hist = ticker.history(period="2d", interval="1d", timeout=8)
                 if hist is not None and not hist.empty:
                     inv_rate = float(hist["Close"].iloc[-1])
                     if inv_rate > 0:
@@ -210,7 +225,10 @@ def get_fx_rate(from_currency: str = "AUD", to_currency: str = "USD") -> float:
     if rate is not None:
         _FX_CACHE[pair_key] = (rate, now)
         try:
-            r = _redis.from_url(_s.redis_url, decode_responses=True)
+            r = _redis.from_url(
+                _s.redis_url, decode_responses=True,
+                socket_connect_timeout=3, socket_timeout=3,
+            )
             r.set(f"fx_rate:{pair_key}", str(rate), ex=_FX_CACHE_TTL)
         except Exception:
             pass
