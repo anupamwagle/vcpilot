@@ -3186,6 +3186,9 @@ async def watchlist_rows(
     if not _auth(request):
         return HTMLResponse("", status_code=403)
     org_id = request.session.get("organization_id")
+    from loguru import logger as _wl_log
+    import time as _time
+    _t0 = _time.monotonic()
 
     _tier_filter = (tier or "").upper() if tier in ("A", "B", "C") else None
     _search_term = (q or "").strip().lower()
@@ -3198,6 +3201,7 @@ async def watchlist_rows(
     if not _search_term:
         _cached_html = cache.get_raw(_html_ck)
         if _cached_html:
+            _wl_log.debug(f"watchlist/rows cache hit for org={org_id} exchange={_af} label={_lbl_key} tier={_tier_key} page={page} ({(_time.monotonic()-_t0)*1000:.0f}ms)")
             return HTMLResponse(_cached_html)
 
     from app.models.signal import Watchlist, WatchlistStatus, WatchlistLabel
@@ -3436,6 +3440,11 @@ async def watchlist_rows(
     # Search results are never cached (see _search_term check above).
     if not _search_term:
         cache.set_raw(_html_ck, _html_out, expire_seconds=300)
+    _elapsed_ms = (_time.monotonic() - _t0) * 1000
+    if _elapsed_ms > 2000:
+        _wl_log.warning(f"watchlist/rows SLOW ({_elapsed_ms:.0f}ms) org={org_id} exchange={_af} label={_lbl_key} tier={_tier_key} page={page} n={len(watchlist_data)} need_vcp={len([w for w in watchlist_data if not w.get('pivot')])}")
+    else:
+        _wl_log.debug(f"watchlist/rows ({_elapsed_ms:.0f}ms) org={org_id} exchange={_af} page={page} n={len(watchlist_data)}")
     return HTMLResponse(_html_out)
 
 

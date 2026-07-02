@@ -460,43 +460,34 @@ if (checked) {
 // ── Watchlist cards — load page 1 from Redis cache immediately ───────────────
 (function() {
   const container = document.getElementById('wl-cards');
-  const skeleton  = document.getElementById('wl-skeleton');
-  const sentinel  = document.getElementById('wl-sentinel');
-  const loading   = document.getElementById('wl-loading');
   if (!container) return;
 
   const urlParams = new URLSearchParams(window.location.search);
   urlParams.delete('page');
-  // Ensure effective exchange is always in the params (tab default may not be in URL)
   if (!urlParams.get('exchange')) urlParams.set('exchange', '{{ _eff_exchange }}');
   const baseParams = urlParams.toString();
 
-  // Read pagination state from the meta div appended by the partial
   function readMeta() {
     const m = container.querySelector('[data-wl-meta]');
-    if (m && m.dataset.total !== undefined) {
-      const tc = document.getElementById('wl-total-count');
-      if (tc) tc.textContent = '(' + m.dataset.total + ')';
-    }
     return m ? { hasMore: m.dataset.hasMore === 'true', page: parseInt(m.dataset.page || '1') } : { hasMore: false, page: 1 };
   }
 
   let state = { hasMore: false, page: 1 };
   let fetching = false;
   let observer = null;
-  let currentSearchTerm = ''; // '' = normal feed; non-empty = active search
+  let currentSearchTerm = '';
+  let abortController = null;
 
   function appendCards(html, replace) {
     const tmp = document.createElement('div');
     tmp.innerHTML = html;
     if (replace) {
-      // First page — replace skeleton with real content
       container.innerHTML = '';
     } else {
       const oldMeta = container.querySelector('[data-wl-meta]');
       if (oldMeta) oldMeta.remove();
     }
-    let delay = replace ? 0 : 0;
+    let delay = 0;
     Array.from(tmp.childNodes).forEach(n => {
       if (n.nodeType === 1 && n.classList && n.classList.contains('card')) {
         n.style.animationDelay = delay + 'ms';
@@ -505,52 +496,93 @@ if (checked) {
       container.appendChild(n);
     });
     state = readMeta();
+    const sentinel = document.getElementById('wl-sentinel');
     if (state.hasMore && sentinel) {
       sentinel.style.display = 'block';
       if (!observer) {
-        observer = new IntersectionObserver(entries => {
-          if (entries[0].isIntersecting) loadNext();
-        }, { rootMargin: '300px' });
+        observer = new IntersectionObserver(entries => { if (entries[0].isIntersecting) loadNext(); }, { rootMargin: '300px' });
       }
       observer.observe(sentinel);
-    } else {
-      if (sentinel) sentinel.style.display = 'none';
+    } else if (sentinel) {
+      sentinel.style.display = 'none';
     }
+    const tc = document.getElementById('wl-total-count');
+    const m = container.querySelector('[data-wl-meta]');
+    if (tc && m) tc.textContent = '(' + m.dataset.total + ')';
   }
 
-  // Load page 1 immediately (Redis cache = <5ms). A hard 20s timeout plus an
-  // explicit error state means a slow/failed backend shows something
-  // actionable instead of leaving the skeleton spinning forever with no
-  // feedback (that silent-failure UX was the actual watchlist "stuck
-  // loading" bug — the skeleton looked identical whether the fetch was
-  // merely slow or had already failed).
+
   function loadFirstPage() {
-    if (skeleton) skeleton.style.display = 'flex';
-    const errBox = document.getElementById('wl-load-error');
-    if (errBox) errBox.remove();
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    // Abort any in-flight fetch so we don't have two concurrent fetches.
+    // The old catch will see ctrl !== abortController and bail silently.
+    if (abortController) abortController.abort();
+    abortController = new AbortController();
+    const ctrl = abortController; // capture for this fetch's closures
+
+    // Remove stale error box if present
+    const prevErr = document.getElementById('wl-load-error');
+    if (prevErr) prevErr.remove();
+
+    const sk = document.getElementById('wl-skeleton');
+    if (sk) sk.style.display = 'flex';
+
+    // Register the 30-second abort timeout in __vcpilotTimers so that
+    // htmx's htmx:beforeSwap handler (which calls clearInterval on every
+    // tracked timer ID — clearInterval is safe to call on setTimeout IDs)
+    // cancels it automatically when the user navigates away. Without this,
+    // the timeout fires after navigation, calls ctrl.abort() on the OLD
+    // AbortController, the fetch rejects, and the catch tries to append
+    // the error box to the OLD (now-detached) container — silent failure.
+    const timeoutId = setTimeout(() => ctrl.abort(), 30000);
+    window.__vcpilotTimers = window.__vcpilotTimers || [];
+    window.__vcpilotTimers.push(timeoutId);
+
     fetch('/watchlist/rows?page=1' + (baseParams ? '&' + baseParams : ''), {
-      credentials: 'same-origin', signal: controller.signal,
+      credentials: 'same-origin', signal: ctrl.signal,
     })
-      .then(r => {
-        if (!r.ok) throw new Error('Server returned ' + r.status);
-        return r.text();
+      .then(r => { if (!r.ok) throw new Error('Server error ' + r.status); return r.text(); })
+      .then(html => {
+        clearTimeout(timeoutId);
+        // Check if the captured `container` is still in the live document.
+        // If htmx has swapped the body since this fetch started, getElementById
+        // will return a DIFFERENT element (the new page's wl-cards) — in that
+        // case we bail so the old detached container is not updated silently.
+        if (document.getElementById('wl-cards') !== container) return;
+        appendCards(html, true);
       })
-      .then(html => { clearTimeout(timeoutId); appendCards(html, true); })
       .catch(err => {
         clearTimeout(timeoutId);
-        const msg = err && err.name === 'AbortError'
-          ? 'Timed out loading the watchlist.'
-          : 'Failed to load the watchlist.';
-        const box = document.createElement('div');
-        box.id = 'wl-load-error';
-        box.className = 'card p-6 text-center';
-        box.innerHTML = '<p style="color:var(--neg);font-size:.85rem;margin-bottom:.5rem">' + msg + '</p>' +
-          '<button onclick="document.getElementById(\'wl-load-error\').remove();window.__wlRetryLoad()" ' +
-          'style="padding:.35rem .9rem;border-radius:.375rem;background:var(--t-accent);color:#fff;font-size:.8rem;border:none;cursor:pointer">Retry</button>';
-        if (skeleton) skeleton.style.display = 'none';
-        container.appendChild(box);
+        // If a newer loadFirstPage() call has already started (e.g. Retry was
+        // clicked or htmx re-ran the IIFE), ctrl is no longer the current
+        // controller — this is a superseded fetch; stay silent.
+        if (ctrl !== abortController) return;
+        // If body was swapped since this fetch started, nothing to show.
+        // Use identity check: if getElementById returns a DIFFERENT element,
+        // the old container is detached and appending there would be silent.
+        if (document.getElementById('wl-cards') !== container) return;
+        const liveContainer = container; // confirmed still in the live document
+        const liveSkeleton = document.getElementById('wl-skeleton');
+        if (liveSkeleton) liveSkeleton.style.display = 'none';
+        if (err && err.name === 'AbortError') {
+          // Genuine 30-second timeout — show actionable message.
+          console.warn('[watchlist] rows fetch timed out (>30s)');
+          const box = document.createElement('div');
+          box.id = 'wl-load-error';
+          box.className = 'card p-6 text-center';
+          box.innerHTML = '<p style="color:var(--neg);font-size:.85rem;margin-bottom:.5rem">Watchlist timed out loading (&gt;30s). The server may be computing data for new stocks — try again in a moment.</p>' +
+            '<button onclick="this.parentElement.remove();window.__wlRetryLoad()" ' +
+            'style="padding:.35rem .9rem;border-radius:.375rem;background:var(--t-accent);color:#fff;font-size:.8rem;border:none;cursor:pointer">Retry</button>';
+          liveContainer.appendChild(box);
+        } else {
+          console.error('[watchlist] rows fetch failed:', err);
+          const box = document.createElement('div');
+          box.id = 'wl-load-error';
+          box.className = 'card p-6 text-center';
+          box.innerHTML = '<p style="color:var(--neg);font-size:.85rem;margin-bottom:.5rem">Failed to load watchlist (' + (err && err.message || 'network error') + ').</p>' +
+            '<button onclick="this.parentElement.remove();window.__wlRetryLoad()" ' +
+            'style="padding:.35rem .9rem;border-radius:.375rem;background:var(--t-accent);color:#fff;font-size:.8rem;border:none;cursor:pointer">Retry</button>';
+          liveContainer.appendChild(box);
+        }
       });
   }
   window.__wlRetryLoad = loadFirstPage;
@@ -563,17 +595,19 @@ if (checked) {
   function loadNext() {
     if (fetching || !state.hasMore) return;
     fetching = true;
-    if (loading) loading.style.display = 'block';
+    const ld = document.getElementById('wl-loading');
+    if (ld) ld.style.display = 'block';
     const qParam = currentSearchTerm ? '&q=' + encodeURIComponent(currentSearchTerm) : '';
     const url = '/watchlist/rows?page=' + (state.page + 1) + (baseParams ? '&' + baseParams : '') + qParam;
     fetch(url, { credentials: 'same-origin' })
       .then(r => r.text())
       .then(html => {
-        if (loading) loading.style.display = 'none';
+        const ld2 = document.getElementById('wl-loading');
+        if (ld2) ld2.style.display = 'none';
         appendCards(html, false);
         fetching = false;
       })
-      .catch(() => { fetching = false; if (loading) loading.style.display = 'none'; });
+      .catch(() => { fetching = false; const ld3 = document.getElementById('wl-loading'); if (ld3) ld3.style.display = 'none'; });
   }
 
   // ── Server-side search ────────────────────────────────────────────────────
