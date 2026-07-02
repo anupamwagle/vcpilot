@@ -161,6 +161,272 @@ function _ssBaseChartOpts(){
     dataLabels:{enabled:false},legend:{labels:{colors:muted}}};
 }
 
+window.renderVcpChart = function(containerSelector, data) {
+  const el = document.querySelector(containerSelector);
+  if (!el) return;
+
+  const ticker = data.ticker || '';
+  const seriesData = data.series || [];
+  const pivot = data.pivot;
+  const stop = data.stop;
+  const target = data.target || data.target1;
+  const contractions = data.contractions || [];
+  const swingHighs = data.swing_highs || [];
+  const swingLows = data.swing_lows || [];
+
+  const acc = _ssVar(['--t-accent', '--accent'], '#1d4ed8');
+  const pos = _ssVar(['--pos', '--up'], '#10b981');
+  const neg = _ssVar(['--neg', '--down'], '#ef4444');
+  const muted = _ssVar(['--text-subtle', '--text-muted', '--muted'], '#94a3b8');
+  const border = _ssVar(['--border'], '#22223a');
+
+  // Formatters & helpers
+  const formatterNum = window._ssNum || (v => v != null ? v.toLocaleString() : '—');
+  const escStr = window._ssEsc || (s => s == null ? '' : String(s));
+  const isDark = window._ssIsDark ? window._ssIsDark() : true;
+
+  // Map series to price and volume
+  const priceSeries = seriesData.map(x => ({
+    x: new Date(x.date).getTime(),
+    y: x.close
+  }));
+
+  const volumeSeries = seriesData.map(x => ({
+    x: new Date(x.date).getTime(),
+    y: x.volume,
+    vol_ratio: x.vol_ratio,
+    fillColor: (x.vol_ratio != null && x.vol_ratio >= 150) ? '#4ade80' : '#6b7280'
+  }));
+
+  // Build annotations (contractions + swing points)
+  const pts = [];
+  contractions.forEach((c, i) => {
+    if (c.high_date && c.high != null) {
+      pts.push({
+        x: new Date(c.high_date).getTime(),
+        y: c.high,
+        marker: { size: 6, fillColor: '#f59e0b', strokeColor: '#fff', strokeWidth: 1.5 },
+        label: {
+          text: `Contraction ${i+1} (T${i+1}) -${c.pct != null ? Number(c.pct).toFixed(0) : '?'}%`,
+          borderColor: '#f59e0b',
+          style: { background: '#f59e0b', color: '#fff', fontSize: '9px', fontWeight: 'bold' }
+        }
+      });
+    }
+    if (c.low_date && c.low != null) {
+      pts.push({
+        x: new Date(c.low_date).getTime(),
+        y: c.low,
+        marker: { size: 5, fillColor: neg, strokeColor: '#fff', strokeWidth: 1 }
+      });
+    }
+  });
+
+  // Swing points that are not already contraction peaks or troughs
+  const contractionDates = new Set();
+  contractions.forEach(c => {
+    if (c.high_date) contractionDates.add(c.high_date);
+    if (c.low_date) contractionDates.add(c.low_date);
+  });
+
+  swingHighs.forEach(dStr => {
+    if (contractionDates.has(dStr)) return;
+    const pt = seriesData.find(x => x.date === dStr);
+    if (pt) {
+      pts.push({
+        x: new Date(dStr).getTime(),
+        y: pt.high || pt.close,
+        marker: { size: 4, fillColor: '#ffb300', strokeColor: '#fff', strokeWidth: 1 },
+        label: {
+          text: 'Swing High',
+          borderColor: '#ffb300',
+          style: { background: '#ffb300', color: '#000', fontSize: '8px' }
+        }
+      });
+    }
+  });
+
+  swingLows.forEach(dStr => {
+    if (contractionDates.has(dStr)) return;
+    const pt = seriesData.find(x => x.date === dStr);
+    if (pt) {
+      pts.push({
+        x: new Date(dStr).getTime(),
+        y: pt.low || pt.close,
+        marker: { size: 4, fillColor: '#ffb300', strokeColor: '#fff', strokeWidth: 1, opacity: 0.8 },
+        label: {
+          text: 'Swing Low',
+          borderColor: '#ffb300',
+          style: { background: '#ffb300', color: '#000', fontSize: '8px' }
+        }
+      });
+    }
+  });
+
+  // Reference lines on y-axis
+  const yann = [];
+  if (pivot) {
+    yann.push({
+      y: pivot,
+      borderColor: '#f97316',
+      strokeDashArray: 5,
+      label: {
+        text: `Pivot $${pivot.toFixed(3)}`,
+        style: { background: '#f97316', color: '#fff', fontSize: '9px', fontWeight: 'bold' }
+      }
+    });
+  }
+  if (stop) {
+    yann.push({
+      y: stop,
+      borderColor: neg,
+      strokeDashArray: 5,
+      label: {
+        text: `Stop $${stop.toFixed(3)}`,
+        style: { background: neg, color: '#fff', fontSize: '9px', fontWeight: 'bold' }
+      }
+    });
+  }
+  if (target) {
+    yann.push({
+      y: target,
+      borderColor: pos,
+      strokeDashArray: 5,
+      label: {
+        text: `T1 $${target.toFixed(3)}`,
+        style: { background: pos, color: '#fff', fontSize: '9px', fontWeight: 'bold' }
+      }
+    });
+  }
+
+  const opts = {
+    chart: {
+      type: 'line',
+      height: 280,
+      toolbar: { show: false },
+      zoom: { enabled: false },
+      fontFamily: 'inherit',
+      foreColor: muted,
+      background: 'transparent'
+    },
+    grid: {
+      borderColor: border,
+      strokeDashArray: 3
+    },
+    theme: { mode: isDark ? 'dark' : 'light' },
+    stroke: {
+      width: [2.5, 0],
+      curve: 'straight'
+    },
+    colors: ['#22d3ee', '#6b7280'],
+    series: [
+      {
+        name: 'Price',
+        type: 'line',
+        data: priceSeries
+      },
+      {
+        name: 'Volume',
+        type: 'column',
+        data: volumeSeries
+      }
+    ],
+    xaxis: {
+      type: 'datetime',
+      labels: { style: { colors: muted } }
+    },
+    yaxis: [
+      {
+        seriesName: 'Price',
+        labels: {
+          formatter: v => typeof _ssNum !== 'undefined' ? _ssNum(v) : (v != null ? v.toFixed(2) : ''),
+          style: { colors: muted }
+        }
+      },
+      {
+        seriesName: 'Volume',
+        opposite: true,
+        max: function(max) { return max * 4; },
+        labels: { show: false },
+        axisTicks: { show: false },
+        axisBorder: { show: false }
+      }
+    ],
+    annotations: {
+      yaxis: yann,
+      points: pts
+    },
+    tooltip: {
+      theme: isDark ? 'dark' : 'light',
+      shared: true,
+      intersect: false,
+      custom: function({ series, seriesIndex, dataPointIndex, w }) {
+        const dateVal = w.globals.labels[dataPointIndex];
+        const dateStr = new Date(dateVal).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+        
+        const price = w.globals.series[0][dataPointIndex];
+        const volume = w.globals.series[1][dataPointIndex];
+        
+        const priceStr = price != null ? '$' + price.toFixed(3) : '—';
+        const volRatio = volumeSeries[dataPointIndex] ? volumeSeries[dataPointIndex].vol_ratio : null;
+        const ratioStr = volRatio != null ? ` (${volRatio.toFixed(0)}% of avg)` : '';
+        const volumeStr = volume != null ? formatterNum(volume) + ratioStr : '—';
+        
+        let specialLabel = '';
+        const currDateStr = seriesData[dataPointIndex] ? seriesData[dataPointIndex].date : '';
+        
+        contractions.forEach((c, idx) => {
+          if (c.high_date === currDateStr) {
+            specialLabel = `<div style="color:#f59e0b;font-weight:bold;margin-top:4px">Contraction ${idx+1} High (T${idx+1})</div>`;
+          } else if (c.low_date === currDateStr) {
+            specialLabel = `<div style="color:${neg};font-weight:bold;margin-top:4px">Contraction ${idx+1} Low</div>`;
+          }
+        });
+        
+        if (!specialLabel) {
+          if (swingHighs.includes(currDateStr)) {
+            specialLabel = `<div style="color:#ffb300;font-weight:bold;margin-top:4px">Swing High</div>`;
+          } else if (swingLows.includes(currDateStr)) {
+            specialLabel = `<div style="color:#ffb300;font-weight:bold;margin-top:4px;opacity:0.8">Swing Low</div>`;
+          }
+        }
+        
+        return `
+          <div style="padding: 8px 12px; font-size: 12px; line-height: 1.4; border-radius: 4px; background: rgba(15, 23, 42, 0.95); border: 1px solid ${border}; color: ${muted}">
+            <div style="font-weight: bold; color: #fff; margin-bottom: 4px">${dateStr}</div>
+            <div style="display: flex; justify-content: space-between; gap: 16px;">
+              <span>Price:</span>
+              <span style="font-weight: bold; color: #22d3ee">${priceStr}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; gap: 16px;">
+              <span>Volume:</span>
+              <span style="font-weight: bold; color: #fff">${volumeStr}</span>
+            </div>
+            ${specialLabel}
+          </div>
+        `;
+      }
+    },
+    plotOptions: {
+      bar: {
+        columnWidth: '60%',
+        borderRadius: 1
+      }
+    },
+    dataLabels: { enabled: false },
+    legend: { show: false }
+  };
+
+  try {
+    const ch = new ApexCharts(el, opts);
+    ch.render();
+    if (window._ssCharts) window._ssCharts.push(ch);
+    return ch;
+  } catch (e) {
+    console.error('ApexCharts render failed:', e);
+  }
+};
+
 window.openStockStory=async function(ticker,label){
   const ov=document.getElementById('ss-overlay');
   if(!ov){console.warn('Stock Story modal not present on this page');return;}
@@ -501,31 +767,9 @@ function _ssMountCharts(d,cur,code){
     _ssChart('#ss-perf',o2);
   }
 
-  /* VCP base chart — price line with contraction-leg markers + pivot/stop lines */
+  /* VCP base chart — price line with contraction-leg markers + pivot/stop lines + volume */
   if(d.vcp&&d.vcp.available&&d.vcp.series&&d.vcp.series.length>1){
-    const s=d.vcp.series;
-    const pts=[];
-    (d.vcp.contractions||[]).forEach((c,i)=>{
-      if(c.high_date&&c.high!=null)pts.push({x:new Date(c.high_date).getTime(),y:c.high,
-        marker:{size:5,fillColor:acc,strokeColor:'#fff',strokeWidth:1},
-        label:{text:'T'+(i+1)+' −'+(c.pct!=null?Number(c.pct).toFixed(0):'?')+'%',
-               borderColor:acc,style:{background:acc,color:'#fff',fontSize:'9px'}}});
-      if(c.low_date&&c.low!=null)pts.push({x:new Date(c.low_date).getTime(),y:c.low,
-        marker:{size:4,fillColor:neg,strokeColor:'#fff',strokeWidth:1}});
-    });
-    const yann=[];
-    if(d.vcp.pivot)yann.push({y:d.vcp.pivot,borderColor:'#f97316',strokeDashArray:5,
-      label:{text:'Pivot '+_ssNum(d.vcp.pivot),style:{background:'#f97316',color:'#fff',fontSize:'9px'}}});
-    if(d.vcp.stop)yann.push({y:d.vcp.stop,borderColor:neg,strokeDashArray:5,
-      label:{text:'Stop '+_ssNum(d.vcp.stop),style:{background:neg,color:'#fff',fontSize:'9px'}}});
-    const ov=Object.assign(_ssBaseChartOpts(),{
-      chart:Object.assign(_ssBaseChartOpts().chart,{type:'line',height:280}),
-      series:[{name:code,data:s.map(x=>[new Date(x.date).getTime(),x.close])}],
-      xaxis:{type:'datetime',labels:{style:{colors:muted}}},
-      yaxis:{labels:{formatter:v=>_ssNum(v),style:{colors:muted}}},
-      stroke:{width:2,curve:'straight'},colors:[acc],
-      annotations:{yaxis:yann,points:pts}});
-    _ssChart('#ss-vcp',ov);
+    window.renderVcpChart('#ss-vcp', d.vcp);
   }
 
   if(d.earnings_history&&d.earnings_history.length){

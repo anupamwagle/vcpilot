@@ -58,7 +58,7 @@ def detect_vcp(
     rule_results: dict[str, RuleResult] = {}
     vcp = VCPResult()
 
-    if len(df) < 60:
+    if len(df) < 15:
         return vcp, rule_results
 
     # Thresholds from config
@@ -80,8 +80,9 @@ def detect_vcp(
     lows  = window["low"].values
 
     # Identify local swing highs (peaks) and lows (troughs)
-    pivot_highs = _find_pivots(highs, direction="high", window=5)
-    pivot_lows  = _find_pivots(lows,  direction="low",  window=5)
+    win = 3 if len(df) < 60 else 5
+    pivot_highs = _find_pivots(highs, direction="high", window=win)
+    pivot_lows  = _find_pivots(lows,  direction="low",  window=win)
 
     if len(pivot_highs) < 2 or len(pivot_lows) < 2:
         rule_results["vcp_min_contractions"] = RuleResult(

@@ -110,7 +110,7 @@ def test_find_pivots_flat_returns_empty():
 # --- detect_vcp: insufficient data ---
 
 def test_detect_vcp_returns_empty_for_short_df():
-    vcp, rules = detect_vcp("BHP.AX", _flat_df(rows=30), Eng())
+    vcp, rules = detect_vcp("BHP.AX", _flat_df(rows=10), Eng())
     assert not vcp.detected
     assert rules == {}
 

@@ -2067,10 +2067,10 @@ def _build_vcp_analysis(ticker: str, exchange_key: str, asset_type: str,
             .filter(PriceBar.ticker == ticker)
             .order_by(PriceBar.date.asc())
             .limit(450).all())
-    if len(rows) < 60:
+    if len(rows) < 15:
         return {"available": False,
                 "reason": f"Only {len(rows)} days of price history stored — the VCP "
-                          f"detector needs at least 60. It will populate as daily data accrues."}
+                          f"detector needs at least 15. It will populate as daily data accrues."}
 
     df = _pd.DataFrame([{
         "date": r[0], "open": float(r[1]) if r[1] is not None else None,
@@ -2095,8 +2095,30 @@ def _build_vcp_analysis(ticker: str, exchange_key: str, asset_type: str,
     vcp, vcp_rules = detect_vcp(ticker, df, engine, avg_vol_50)
 
     # Chart series — last ~252 sessions is plenty to frame the base.
-    series = [{"date": str(r[0]), "close": float(r[4])}
-              for r in rows[-252:] if r[4] is not None]
+    series = [{
+        "date": str(r[0]),
+        "close": float(r[4]) if r[4] is not None else None,
+        "high": float(r[2]) if r[2] is not None else None,
+        "low": float(r[3]) if r[3] is not None else None,
+        "volume": float(r[5]) if r[5] is not None else 0.0,
+        "vol_ratio": float(r[6]) if r[6] is not None else None,
+    } for r in rows[-252:] if r[4] is not None]
+
+    swing_highs = []
+    swing_lows = []
+    try:
+        import numpy as _np
+        from app.screener.vcp import _find_pivots
+        sliced_rows = rows[-252:]
+        highs = _np.array([float(r[2]) if r[2] is not None else float(r[4]) for r in sliced_rows])
+        lows = _np.array([float(r[3]) if r[3] is not None else float(r[4]) for r in sliced_rows])
+        win = 3 if len(sliced_rows) < 60 else 5
+        for idx in _find_pivots(highs, direction="high", window=win):
+            swing_highs.append(str(sliced_rows[idx][0]))
+        for idx in _find_pivots(lows, direction="low", window=win):
+            swing_lows.append(str(sliced_rows[idx][0]))
+    except Exception as _ex:
+        logger.warning(f"Failed to find swing points in _build_vcp_analysis: {_ex}")
 
     rules = []
     for rid, rr in vcp_rules.items():
@@ -2111,6 +2133,7 @@ def _build_vcp_analysis(ticker: str, exchange_key: str, asset_type: str,
         "detected": bool(vcp.detected),
         "pivot": vcp.pivot_price,
         "stop": vcp.stop_price,
+        "target1": vcp.pivot_price * 1.20 if vcp.pivot_price else None,
         "contraction_count": vcp.contraction_count,
         "base_weeks": vcp.base_weeks,
         "volume_dried_up": bool(vcp.volume_dried_up),
@@ -2119,6 +2142,8 @@ def _build_vcp_analysis(ticker: str, exchange_key: str, asset_type: str,
         "series": series,
         "rules": rules,
         "min_contractions": int(engine.threshold("vcp_min_contractions") or 3),
+        "swing_highs": swing_highs,
+        "swing_lows": swing_lows,
     }
 
 
@@ -2517,6 +2542,7 @@ async def signals_items(request: Request, db: Session = Depends(get_db),
         )
         for _hb in _hist_rows:
             _chart_bars_by_ticker.setdefault(_hb.ticker, []).append({
+                "date":      str(_hb.date),
                 "close":     float(_hb.close or 0),
                 "high":      float(_hb.high or _hb.close or 0),
                 "low":       float(_hb.low or _hb.close or 0),
@@ -2654,6 +2680,52 @@ async def signals_items(request: Request, db: Session = Depends(get_db),
         else:
             _s_tier = "C"
 
+        _vcp_json = None
+        _bars = _chart_bars_by_ticker.get(s.ticker, [])
+        if _bars:
+            _swing_highs = []
+            _swing_lows = []
+            _contractions = []
+            try:
+                import pandas as _pd
+                import numpy as _np
+                import json
+                from app.screener.vcp import detect_vcp, _find_pivots
+                from app.screener.rules import RuleEngine
+                from app.models.account import Organization as _Org
+
+                _df = _pd.DataFrame(_bars)
+                _df["date"] = _pd.to_datetime(_df["date"])
+                
+                _org = db.query(_Org).get(org_id) if org_id else None
+                _tier = _org.tier.value if (_org and _org.tier) else "BRONZE"
+                _engine = RuleEngine(organization_id=org_id, tier=_tier, asset_type=s.asset_type or "EQUITY")
+                
+                _vcp_res, _ = detect_vcp(s.ticker, _df, _engine)
+                _contractions = (_vcp_res.detail or {}).get("contractions", [])
+                
+                _highs = _df["high"].values
+                _lows = _df["low"].values
+                _win = 3 if len(_bars) < 60 else 5
+                for _idx in _find_pivots(_np.array(_highs), direction="high", window=_win):
+                    _swing_highs.append(_bars[_idx]["date"])
+                for _idx in _find_pivots(_np.array(_lows), direction="low", window=_win):
+                    _swing_lows.append(_bars[_idx]["date"])
+                
+                _vcp_chart_data = {
+                    "ticker": s.ticker,
+                    "series": _bars,
+                    "pivot": float(s.pivot_price or 0) or None,
+                    "stop": float(s.stop_price or 0) or None,
+                    "target": float(s.target_price_1 or 0) or None,
+                    "contractions": _contractions,
+                    "swing_highs": _swing_highs,
+                    "swing_lows": _swing_lows,
+                }
+                _vcp_json = json.dumps(_vcp_chart_data)
+            except Exception as _ex:
+                logger.error(f"Failed to calculate interactive VCP chart details for {s.ticker}: {_ex}")
+
         sig_data.append({
             "id": s.id, "ticker": s.ticker,
             "exchange_key":  ek,
@@ -2691,6 +2763,7 @@ async def signals_items(request: Request, db: Session = Depends(get_db),
                 float(s.stop_price or 0),
                 float(s.target_price_1 or 0),
             ),
+            "vcp_chart_json": _vcp_json,
         })
 
     _status_order = {"PENDING": 0, "TRIGGERED": 1, "SKIPPED": 2}
@@ -6005,7 +6078,6 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
         "data":        {"icon": "📡",  "title": "Data Sources"},
         "risk":        {"icon": "🛡️",  "title": "Risk Management"},
         "crypto":      {"icon": "₿",   "title": "Crypto Exchange"},
-        "system":      {"icon": "🔧",  "title": "System (Super Admin)"},
         "reporting":   {"icon": "📊",  "title": "Reporting"},
     }
 
@@ -6091,7 +6163,10 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
 
     configs = db.query(SystemConfig).filter(SystemConfig.organization_id == org_id).order_by(SystemConfig.group, SystemConfig.key).all()
     by_group: dict = {}
-    HIDDEN_GROUPS = {"system"} if request.session.get("user_role") != "superadmin" else set()
+    # "system" holds auto-calculated telemetry (market regime, worker heartbeat) and
+    # settings whose real edit surface is elsewhere (noVNC/VNC password live on
+    # Super Admin -> Org Detail). Never show it here, even for superadmins.
+    HIDDEN_GROUPS = {"system"}
     for c in configs:
         if c.group in HIDDEN_GROUPS:
             continue
