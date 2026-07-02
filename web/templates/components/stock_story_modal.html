@@ -202,9 +202,11 @@ window.renderVcpChart = function(containerSelector, data) {
   const pts = [];
   contractions.forEach((c, i) => {
     if (c.high_date && c.high != null) {
+      const pt = seriesData.find(x => x.date === c.high_date);
+      const yVal = pt ? pt.close : c.high;
       pts.push({
         x: new Date(c.high_date).getTime(),
-        y: c.high,
+        y: yVal,
         marker: { size: 6, fillColor: '#f59e0b', strokeColor: '#fff', strokeWidth: 1.5 },
         label: {
           text: `Contraction ${i+1} (T${i+1}) -${c.pct != null ? Number(c.pct).toFixed(0) : '?'}%`,
@@ -214,9 +216,11 @@ window.renderVcpChart = function(containerSelector, data) {
       });
     }
     if (c.low_date && c.low != null) {
+      const pt = seriesData.find(x => x.date === c.low_date);
+      const yVal = pt ? pt.close : c.low;
       pts.push({
         x: new Date(c.low_date).getTime(),
-        y: c.low,
+        y: yVal,
         marker: { size: 5, fillColor: neg, strokeColor: '#fff', strokeWidth: 1 }
       });
     }
@@ -235,7 +239,7 @@ window.renderVcpChart = function(containerSelector, data) {
     if (pt) {
       pts.push({
         x: new Date(dStr).getTime(),
-        y: pt.high || pt.close,
+        y: pt.close,
         marker: { size: 4, fillColor: '#ffb300', strokeColor: '#fff', strokeWidth: 1 },
         label: {
           text: 'Swing High',
@@ -252,7 +256,7 @@ window.renderVcpChart = function(containerSelector, data) {
     if (pt) {
       pts.push({
         x: new Date(dStr).getTime(),
-        y: pt.low || pt.close,
+        y: pt.close,
         marker: { size: 4, fillColor: '#ffb300', strokeColor: '#fff', strokeWidth: 1, opacity: 0.8 },
         label: {
           text: 'Swing Low',
@@ -298,6 +302,16 @@ window.renderVcpChart = function(containerSelector, data) {
       }
     });
   }
+
+  // Ensure the y-axis spans to cover pivot, stop, and target reference lines if present
+  const priceValues = priceSeries.map(p => p.y).filter(v => v != null && !isNaN(v));
+  if (pivot != null && !isNaN(pivot)) priceValues.push(pivot);
+  if (stop != null && !isNaN(stop)) priceValues.push(stop);
+  if (target != null && !isNaN(target)) priceValues.push(target);
+  
+  const minPrice = priceValues.length ? Math.min(...priceValues) : null;
+  const maxPrice = priceValues.length ? Math.max(...priceValues) : null;
+  const pricePadding = (minPrice != null && maxPrice != null) ? (maxPrice - minPrice) * 0.05 || 0.01 : 0.01;
 
   const opts = {
     chart: {
@@ -350,6 +364,8 @@ window.renderVcpChart = function(containerSelector, data) {
     yaxis: [
       {
         seriesName: 'Price',
+        min: minPrice != null ? minPrice - pricePadding : undefined,
+        max: maxPrice != null ? maxPrice + pricePadding : undefined,
         labels: {
           formatter: v => typeof _ssNum !== 'undefined' ? _ssNum(v) : (v != null ? v.toFixed(2) : ''),
           style: { colors: muted }
