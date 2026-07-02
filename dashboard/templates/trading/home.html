@@ -311,7 +311,7 @@ function runScreener() {
       _swLastId = data.last_id;
       lbl.textContent = 'Screening…';
       clearInterval(_swPollTimer);
-      _swPollTimer = setInterval(_swPoll, 2000);
+      _swPollTimer = vcInterval(_swPoll, 2000);
     })
     .catch(function(e) {
       lbl.textContent = 'Run Screener';

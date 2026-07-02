@@ -59,7 +59,7 @@
       <div class="action-row">
         <!-- Label picker -->
         <form method="post" action="/watchlist/{{ w.id }}/set-label" style="display:inline">
-          <select name="label_id" onchange="this.form.submit()" class="input" style="height:1.8rem;font-size:.7rem;padding:.1rem .4rem;min-width:90px;width:auto">
+          <select name="label_id" onchange="this.form.requestSubmit()" class="input" style="height:1.8rem;font-size:.7rem;padding:.1rem .4rem;min-width:90px;width:auto">
             <option value="">No label</option>
             {% for lbl in labels %}
             <option value="{{ lbl.id }}" {% if w.label and w.label.id == lbl.id %}selected{% endif %}>{{ lbl.name }}</option>

@@ -391,7 +391,7 @@ async function pollNewRows() {
 }
 
 // Poll every 30 seconds
-setInterval(pollNewRows, 30000);
+vcInterval(pollNewRows, 30000);
 lastRefreshEl.textContent = 'Loaded ' + new Date().toLocaleTimeString();
 </script>
 {% endblock %}

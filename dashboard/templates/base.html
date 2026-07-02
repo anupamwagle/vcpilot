@@ -6,6 +6,9 @@
   <title>{% block title %}Dashboard{% endblock %} · AstraTrade</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.3.0/flowbite.min.css"/>
+  <!-- htmx: boosts in-app <a>/<form> navigation into AJAX swaps of <body>, so
+       moving between pages no longer does a full browser reload/blink. -->
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231d4ed8' stroke-width='2.5'><path d='M3 17c1.5-1 2.5-3 4-3s2.5 1.5 4 1.5 2-2 3.5-2 1.5.5 2.5.5L21 9M21 9h-4M21 9v4' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 
   <style>
@@ -533,7 +536,13 @@
   </style>
 </head>
 
-<body>
+<body hx-boost="true">
+
+<!-- Boosted-navigation progress bar — replaces the browser's full-reload blink
+     with a lightweight cue that a page transition is in flight. -->
+<div id="htmx-progress-bar"
+     style="position:fixed;top:0;left:0;height:2px;width:0%;background:var(--t-accent);
+            z-index:9999;opacity:0;transition:width .3s ease,opacity .3s ease;pointer-events:none"></div>
 
 <!-- Theme init — runs before render to prevent flash -->
 <script>
@@ -614,11 +623,11 @@
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
       Watchlist
     </a>
-    <a href="/trader/watchlist" onclick="closeIfMobile()" class="nav-link {% if path == '/trader/watchlist' %}active-t{% endif %}">
+    <a href="/trader/watchlist" hx-boost="false" onclick="closeIfMobile()" class="nav-link {% if path == '/trader/watchlist' %}active-t{% endif %}">
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
       ⚡ Trader Watchlist
     </a>
-    <a href="/trader" onclick="closeIfMobile()" class="nav-link {% if path == '/trader' %}active-t{% endif %}">
+    <a href="/trader" hx-boost="false" onclick="closeIfMobile()" class="nav-link {% if path == '/trader' %}active-t{% endif %}">
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
       ⚡ Trader Terminal
     </a>
@@ -768,7 +777,7 @@
         <!-- Org Selector (Super Admins) -->
         {% if user_role == 'superadmin' and all_orgs %}
         <form action="/superadmin/switch-org" method="post">
-          <select name="organization_id" onchange="this.form.submit()"
+          <select name="organization_id" onchange="this.form.requestSubmit()"
                   class="input py-1 px-2 text-xs font-semibold"
                   style="max-width:140px;background:var(--surface);color:var(--text);border-color:var(--border);border-radius:.375rem">
             {% for org in all_orgs %}
@@ -779,7 +788,7 @@
         {# Org Selector (regular users who belong to more than one org) #}
         {% elif user_role != 'superadmin' and user_orgs and user_orgs|length > 1 %}
         <form action="/switch-org" method="post" title="Switch organisation">
-          <select name="organization_id" onchange="this.form.submit()"
+          <select name="organization_id" onchange="this.form.requestSubmit()"
                   class="input py-1 px-2 text-xs font-semibold"
                   style="max-width:140px;background:var(--surface);color:var(--text);border-color:var(--border);border-radius:.375rem">
             {% for org in user_orgs %}
@@ -814,7 +823,7 @@
                style="background:{% if user_role == 'superadmin' %}var(--a-accent){% else %}var(--t-accent){% endif %}">
             {{ user_name[0]|upper if user_name else '?' }}
           </div>
-          <a href="/logout" title="Sign out" class="p-1 rounded-lg transition"
+          <a href="/logout" hx-boost="false" title="Sign out" class="p-1 rounded-lg transition"
              style="color:var(--text-subtle)"
              onmouseover="this.style.color='var(--neg)'" onmouseout="this.style.color='var(--text-subtle)'">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -910,18 +919,58 @@
   function closeSidebar() { if (isMobile()) _mobileClose(); }
   function closeIfMobile() { if (isMobile()) _mobileClose(); }
 
-  // Close mobile drawer on Escape
-  document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape' && isMobile()) _mobileClose();
-  });
+  // Window/document-level listeners only need to be attached once — this
+  // whole script block re-runs on every boosted navigation (it's part of the
+  // swapped <body> content), but window/document themselves persist across
+  // swaps, so re-attaching here would pile up duplicate listeners over time.
+  if (!window.__vcpilotBaseInit) {
+    window.__vcpilotBaseInit = true;
 
-  // On resize: close mobile overlay if switching to desktop
-  window.addEventListener('resize', function() {
-    if (!isMobile()) {
-      document.getElementById('sidebar-overlay').style.display = 'none';
-      document.body.style.overflow = '';
-    }
-  });
+    // Close mobile drawer on Escape
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && isMobile()) _mobileClose();
+    });
+
+    // On resize: close mobile overlay if switching to desktop
+    window.addEventListener('resize', function() {
+      if (!isMobile()) {
+        document.getElementById('sidebar-overlay').style.display = 'none';
+        document.body.style.overflow = '';
+      }
+    });
+
+    // Boosted-navigation progress bar
+    document.addEventListener('htmx:beforeRequest', function() {
+      var bar = document.getElementById('htmx-progress-bar');
+      if (bar) { bar.style.opacity = '1'; bar.style.width = '70%'; }
+    });
+    document.addEventListener('htmx:afterRequest', function() {
+      var bar = document.getElementById('htmx-progress-bar');
+      if (bar) {
+        bar.style.width = '100%';
+        setTimeout(function() { bar.style.opacity = '0'; bar.style.width = '0%'; }, 200);
+      }
+    });
+
+    // Pages register their setInterval polling timers into window.__vcpilotTimers
+    // (via the vcInterval() helper below) so they can be torn down here — without
+    // this, a poll started on e.g. /signals would keep firing forever in the
+    // background after a boosted navigation away, since swapping <body> content
+    // doesn't stop JS timers the way a full page reload would.
+    document.addEventListener('htmx:beforeSwap', function() {
+      (window.__vcpilotTimers || []).forEach(function(id) { clearInterval(id); });
+      window.__vcpilotTimers = [];
+    });
+  }
+
+  // Register a setInterval so it gets cleared automatically on the next
+  // boosted navigation. Use this instead of raw setInterval() in page scripts.
+  function vcInterval(fn, ms) {
+    window.__vcpilotTimers = window.__vcpilotTimers || [];
+    var id = setInterval(fn, ms);
+    window.__vcpilotTimers.push(id);
+    return id;
+  }
 
   /* ── Theme toggle ────────────────────────────────────────────── */
   function toggleTheme() {
@@ -936,21 +985,17 @@
   }
   updateIcons(document.getElementById('html-root').classList.contains('dark'));
 
-  /* ── Filter persistence — nav link helpers ───────────────────── */
+  /* ── Filter persistence — nav link helpers ─────────────────────
+     Rewrite the href in place (rather than preventDefault + location.href)
+     so the click still goes through as a normal anchor navigation — which
+     htmx's hx-boost (set on <body>) intercepts into an AJAX swap either way. */
   function navToHome(e) {
     var saved = localStorage.getItem('home_wl_filters');
-    if (saved) {
-      e.preventDefault();
-      window.location.href = '/?' + saved;
-    }
-    // else let default href="/" navigate normally
+    if (saved) { e.currentTarget.setAttribute('href', '/?' + saved); }
   }
   function navToWatchlist(e) {
     var saved = localStorage.getItem('wl_filters');
-    if (saved) {
-      e.preventDefault();
-      window.location.href = '/watchlist?' + saved;
-    }
+    if (saved) { e.currentTarget.setAttribute('href', '/watchlist?' + saved); }
   }
 </script>
 

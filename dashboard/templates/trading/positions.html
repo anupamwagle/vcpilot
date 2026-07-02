@@ -221,7 +221,7 @@ async function loadOpenOrders(){
   }
 }
 loadOpenOrders();
-setInterval(loadOpenOrders, 20000);
+vcInterval(loadOpenOrders, 20000);
 
 async function cancelOpenOrder(orderId) {
   if (!confirm("Are you sure you want to cancel this order on IBKR?")) return;

@@ -155,7 +155,7 @@
       <label class="toggle-wrap">
         <input type="checkbox" class="toggle-inp"
                {% if (cfg.value or '').lower() == 'true' %}checked{% endif %}
-               onchange="document.getElementById('val-{{ cfg.id }}').value = this.checked ? 'true' : 'false'; this.form.submit();"/>
+               onchange="document.getElementById('val-{{ cfg.id }}').value = this.checked ? 'true' : 'false'; this.form.requestSubmit();"/>
         <div class="toggle-track"></div>
         <div class="toggle-thumb"></div>
       </label>

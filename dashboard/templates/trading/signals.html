@@ -263,7 +263,7 @@ function togglePassingRules(sigId) {
     } catch(e) { /* silent */ }
   }
 
-  setInterval(pollChecks, 30000);
+  vcInterval(pollChecks, 30000);
 })();
 
 // ── Signals search ────────────────────────────────────────────────────────

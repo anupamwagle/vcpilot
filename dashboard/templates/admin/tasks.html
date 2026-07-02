@@ -383,7 +383,7 @@ function setStreamExchange(exc) {
 }
 
 document.head.insertAdjacentHTML('beforeend','<style>@keyframes fadeIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}</style>');
-setInterval(poll, POLL_MS);
+vcInterval(poll, POLL_MS);
 poll();
 </script>
 {% endblock %}

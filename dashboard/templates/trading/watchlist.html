@@ -182,7 +182,7 @@
 
   function startTimer() {
     clearInterval(_timer);
-    _timer = setInterval(() => clRefresh(true), 60000);
+    _timer = vcInterval(() => clRefresh(true), 60000);
   }
 
   clRefresh(true);
@@ -599,7 +599,7 @@ if (checked) {
   // Start polling after cards have loaded (give 2s for first fetch)
   setTimeout(() => {
     pollPrices();
-    setInterval(pollPrices, 15000);
+    vcInterval(pollPrices, 15000);
   }, 2000);
 })();
 
