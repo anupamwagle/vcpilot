@@ -8,6 +8,10 @@
 # app + mcp-server, watchmedo auto-restart wrapping Celery worker/beat) — so no
 # `docker compose restart` is needed either. Only a dependency change
 # (requirements.txt) or a Dockerfile edit requires `docker compose up --build`.
+#
+# Bind mounts below use a relative "." path, resolved against the directory
+# this file lives in — run `docker compose` from that directory (the repo
+# root) and it resolves correctly regardless of machine.
 # =============================================================================
 
 x-app-env: &app-env
@@ -16,6 +20,8 @@ x-app-env: &app-env
     - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB}
     #- DATABASE_URL=${DATABASE_URL}
     - REDIS_URL=${REDIS_URL}
+
+x-repo-volume: &repo-volume .:/app
 
 networks:
   vcpilot-net:
@@ -90,7 +96,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - .:/app
+      - *repo-volume
     networks:
       - vcpilot-net
     command: sh -c "python -m scripts.init_db && python -m scripts.migrate_saas"
@@ -113,7 +119,7 @@ services:
       migrate:
         condition: service_completed_successfully
     volumes:
-      - .:/app
+      - *repo-volume
     networks:
       - vcpilot-net
     # watchmedo restarts the celery process (not the container) whenever a .py
@@ -144,7 +150,7 @@ services:
       migrate:
         condition: service_completed_successfully
     volumes:
-      - .:/app
+      - *repo-volume
     networks:
       - vcpilot-net
     command: watchmedo auto-restart --directory=/app --pattern=*.py --recursive -- celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2 -Q trading_crypto,screening_crypto
@@ -172,7 +178,7 @@ services:
       migrate:
         condition: service_completed_successfully
     volumes:
-      - .:/app
+      - *repo-volume
     networks:
       - vcpilot-net
     command: >
@@ -203,7 +209,7 @@ services:
       migrate:
         condition: service_completed_successfully
     volumes:
-      - .:/app
+      - *repo-volume
     ports:
       - "0.0.0.0:${DASHBOARD_PORT:-8501}:8501"
     networks:
@@ -237,7 +243,7 @@ services:
       migrate:
         condition: service_completed_successfully
     volumes:
-      - .:/app
+      - *repo-volume
     ports:
       - "0.0.0.0:${MCP_SERVER_PORT:-8502}:8502"
     networks:
