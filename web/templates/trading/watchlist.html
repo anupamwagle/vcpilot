@@ -309,7 +309,7 @@
           <svg style="position:absolute;left:.5rem;top:50%;transform:translateY(-50%);width:.75rem;height:.75rem;color:var(--text-subtle);pointer-events:none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           <input type="text" id="wl-search" placeholder="Search…" autocomplete="off"
                  style="padding:.3rem .5rem .3rem 1.7rem;border:1px solid var(--border);border-radius:.375rem;background:var(--surface-alt);color:var(--text);font-size:.75rem;width:160px;outline:none"
-                 oninput="wlSearch(this.value)" onkeydown="if(event.key===\'Escape\'){this.value=\'\';wlSearch(\'\')}">
+                 oninput="wlSearch(this.value)" onkeydown="if(event.key==='Escape'){this.value='';wlSearch('')}">
         </div>
       </div>
     </div>
@@ -675,14 +675,16 @@ if (checked) {
 // cards happen to already be loaded in the DOM via infinite scroll. Ticker
 // matches (exact > prefix > contains) are ranked above company-name matches
 // server-side, for both equities (MIN.AX) and crypto (BTC-USD) tickers.
-let _wlSearchTimer = null;
-function wlSearch(q) {
-  const term = q.trim();
-  clearTimeout(_wlSearchTimer);
-  _wlSearchTimer = setTimeout(function() {
-    if (window.__wlSearch) window.__wlSearch(term);
-  }, 250);
-}
+(function() {
+  var _wlSearchTimer = null;
+  window.wlSearch = function(q) {
+    const term = q.trim();
+    clearTimeout(_wlSearchTimer);
+    _wlSearchTimer = setTimeout(function() {
+      if (window.__wlSearch) window.__wlSearch(term);
+    }, 250);
+  };
+})();
 
 // Save current watchlist filters so sidebar nav link can restore them
 (function() {
