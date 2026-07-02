@@ -455,7 +455,7 @@ async function cancelOpenOrder(orderId) {
         {# ── Exit Checks — collapsible; most-recent check always visible in the summary row ── #}
         <tr style="background:var(--surface-alt)">
           <td colspan="14" style="padding:0;border-top:none;border-bottom:1px solid var(--border)">
-            <details class="card-toggle">
+            <details class="card-toggle" ontoggle="if(this.open) renderInteractiveChart('{{ p.id }}')">
               <summary style="border-top:none">
                 <span style="text-transform:uppercase;letter-spacing:.04em">⏱ Exit Checks</span>
                 {% if p.exit_checks %}
@@ -478,30 +478,49 @@ async function cancelOpenOrder(orderId) {
                 {% endif %}
               </summary>
 
-              {% if p.exit_checks %}
-              <div style="padding:.5rem 1.25rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem">
-                <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
-                  {% for chk in p.exit_checks %}
-                  <div style="display:inline-flex;align-items:center;gap:.375rem;padding:.25rem .6rem;border-radius:.375rem;
-                              background:{% if chk.result == 'exit_triggered' %}var(--neg-bg){% elif chk.result == 'error' %}rgba(251,146,60,.08){% elif chk.result == 'skipped' %}rgba(156,163,175,.06){% else %}var(--surface){% endif %};
-                              border:1px solid {% if chk.result == 'exit_triggered' %}var(--bear-border){% elif chk.result == 'error' %}rgba(251,146,60,.4){% else %}var(--border){% endif %};
-                              font-size:.7rem;color:var(--text-subtle)">
-                    <span style="font-weight:600;color:{% if chk.result == 'exit_triggered' %}var(--neg){% elif chk.result == 'error' %}#f97316{% elif chk.result == 'skipped' %}var(--text-subtle){% else %}var(--text-muted){% endif %}">
-                      {% if chk.result == 'exit_triggered' %}🚨{% elif chk.result == 'error' %}⚠️{% elif chk.result == 'skipped' %}⏭{% else %}⏱{% endif %} {{ chk.time }}
-                    </span>
-                    <span style="color:var(--border)">│</span>
-                    {% if chk.close %}<span class="mono" style="font-size:.65rem">${{ "%.3f"|format(chk.close) }}</span>{% endif %}
-                    {% if chk.pnl_pct is not none %}<span style="font-size:.65rem;font-weight:600;color:{% if chk.pnl_pct >= 0 %}var(--pos){% else %}var(--neg){% endif %}">{{ "{:+.1f}".format(chk.pnl_pct) }}%</span>{% endif %}
-                    {% if chk.reason %}<span style="color:var(--border)">│</span><span style="font-size:.65rem;font-style:italic">{{ chk.reason }}</span>{% endif %}
+              <div style="padding:1rem 1.25rem">
+                {# Exit checks list if present #}
+                {% if p.exit_checks %}
+                <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem;margin-bottom:1rem">
+                  <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+                    {% for chk in p.exit_checks %}
+                    <div style="display:inline-flex;align-items:center;gap:.375rem;padding:.25rem .6rem;border-radius:.375rem;
+                                background:{% if chk.result == 'exit_triggered' %}var(--neg-bg){% elif chk.result == 'error' %}rgba(251,146,60,.08){% elif chk.result == 'skipped' %}rgba(156,163,175,.06){% else %}var(--surface){% endif %};
+                                border:1px solid {% if chk.result == 'exit_triggered' %}var(--bear-border){% elif chk.result == 'error' %}rgba(251,146,60,.4){% else %}var(--border){% endif %};
+                                font-size:.7rem;color:var(--text-subtle)">
+                      <span style="font-weight:600;color:{% if chk.result == 'exit_triggered' %}var(--neg){% elif chk.result == 'error' %}#f97316{% elif chk.result == 'skipped' %}var(--text-subtle){% else %}var(--text-muted){% endif %}">
+                        {% if chk.result == 'exit_triggered' %}🚨{% elif chk.result == 'error' %}⚠️{% elif chk.result == 'skipped' %}⏭{% else %}⏱{% endif %} {{ chk.time }}
+                      </span>
+                      <span style="color:var(--border)">│</span>
+                      {% if chk.close %}<span class="mono" style="font-size:.65rem">${{ "%.3f"|format(chk.close) }}</span>{% endif %}
+                      {% if chk.pnl_pct is not none %}<span style="font-size:.65rem;font-weight:600;color:{% if chk.pnl_pct >= 0 %}var(--pos){% else %}var(--neg){% endif %}">{{ "{:+.1f}".format(chk.pnl_pct) }}%</span>{% endif %}
+                      {% if chk.reason %}<span style="color:var(--border)">│</span><span style="font-size:.65rem;font-style:italic">{{ chk.reason }}</span>{% endif %}
+                    </div>
+                    {% endfor %}
                   </div>
-                  {% endfor %}
+                  <form method="post" action="/action/positions/{{ p.id }}/clear-checks" style="margin:0">
+                    <button type="submit" class="btn-ghost text-xs" style="padding:.15rem .5rem;border-radius:.3rem;color:var(--neg);border-color:var(--border);font-size:.65rem">Clear Log</button>
+                  </form>
                 </div>
-                <form method="post" action="/action/positions/{{ p.id }}/clear-checks" style="margin:0">
-                  <button type="submit" class="btn-ghost text-xs" style="padding:.15rem .5rem;border-radius:.3rem;color:var(--neg);border-color:var(--border);font-size:.65rem">Clear Log</button>
-                </form>
+                {% endif %}
+
+                {# VCP Base Chart #}
+                {% if p.vcp_chart_json %}
+                <div style="margin:0 auto; max-width:680px; background:var(--surface-alt);border:1px solid var(--border);border-radius:8px;padding:.75rem;position:relative">
+                  <div id="vcp-chart-{{ p.id }}" data-vcp="{{ p.vcp_chart_json | forceescape }}" style="min-height: 280px;"></div>
+                </div>
+                <p style="font-size:.68rem;color:var(--text-subtle);text-align:center;margin-top:.4rem;font-style:italic">
+                  Volatility Contraction Pattern Base Chart ·
+                  <span style="color:#f97316">— Pivot</span> · <span style="color:#ef4444">— Stop</span> · <span style="color:#10b981">— Target 1</span> ·
+                  green volume = ≥150% of average · amber dots = detected swing points
+                </p>
+                {% else %}
+                <p class="text-center text-xs" style="color:var(--text-subtle); font-style:italic">VCP base chart not available for this position</p>
+                {% endif %}
               </div>
-              {% endif %}
             </details>
+          </td>
+        </tr>
           </td>
         </tr>
 
@@ -604,6 +623,34 @@ async function cancelOpenOrder(orderId) {
 </div>
 
 <script>
+window.renderInteractiveChart = function(sigId) {
+  const el = document.getElementById('vcp-chart-' + sigId);
+  if (!el || el.dataset.rendered === 'true') return;
+  
+  const rawData = el.getAttribute('data-vcp');
+  if (!rawData) return;
+  
+  let data;
+  try {
+    data = JSON.parse(rawData);
+  } catch(e) {
+    console.error('Failed to parse VCP JSON for position ' + sigId, e);
+    return;
+  }
+  
+  el.dataset.rendered = 'true';
+  
+  if (typeof window.renderVcpChart !== 'undefined') {
+    window.renderVcpChart('#vcp-chart-' + sigId, data);
+  } else {
+    setTimeout(() => {
+      if (typeof window.renderVcpChart !== 'undefined') {
+        window.renderVcpChart('#vcp-chart-' + sigId, data);
+      }
+    }, 100);
+  }
+};
+
 // ── Positions search ──────────────────────────────────────────────────────
 function posSearch(q) {
   const term = q.trim().toLowerCase();

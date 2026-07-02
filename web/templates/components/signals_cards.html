@@ -248,7 +248,7 @@
     {# ── VCP price/volume chart — real PriceBar data for this ticker ───── #}
     {% if s.vcp_chart_json %}
     <div style="padding:.85rem 1rem;border-bottom:1px solid var(--border)">
-      <div style="margin:0;background:var(--surface-alt);border:1px solid var(--border);border-radius:8px;padding:.75rem;position:relative">
+      <div style="margin:0 auto;max-width:680px;background:var(--surface-alt);border:1px solid var(--border);border-radius:8px;padding:.75rem;position:relative">
         <div id="vcp-chart-{{ s.id }}" data-vcp="{{ s.vcp_chart_json | forceescape }}" style="min-height: 280px;"></div>
       </div>
       <p style="font-size:.68rem;color:var(--text-subtle);text-align:center;margin-top:.4rem;font-style:italic">

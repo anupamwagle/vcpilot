@@ -209,7 +209,7 @@ window.renderVcpChart = function(containerSelector, data) {
         label: {
           text: `Contraction ${i+1} (T${i+1}) -${c.pct != null ? Number(c.pct).toFixed(0) : '?'}%`,
           borderColor: '#f59e0b',
-          style: { background: '#f59e0b', color: '#fff', fontSize: '9px', fontWeight: 'bold' }
+          style: { background: isDark ? '#b45309' : '#fef3c7', color: isDark ? '#fff' : '#b45309', fontSize: '9px', fontWeight: 'bold' }
         }
       });
     }
@@ -240,7 +240,7 @@ window.renderVcpChart = function(containerSelector, data) {
         label: {
           text: 'Swing High',
           borderColor: '#ffb300',
-          style: { background: '#ffb300', color: '#000', fontSize: '8px' }
+          style: { background: isDark ? '#78350f' : '#fef3c7', color: isDark ? '#fef3c7' : '#78350f', fontSize: '8px' }
         }
       });
     }
@@ -257,7 +257,7 @@ window.renderVcpChart = function(containerSelector, data) {
         label: {
           text: 'Swing Low',
           borderColor: '#ffb300',
-          style: { background: '#ffb300', color: '#000', fontSize: '8px' }
+          style: { background: isDark ? '#78350f' : '#fef3c7', color: isDark ? '#fef3c7' : '#78350f', fontSize: '8px' }
         }
       });
     }

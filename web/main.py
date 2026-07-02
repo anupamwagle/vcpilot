@@ -1506,6 +1506,7 @@ async def positions(request: Request, db: Session = Depends(get_db),
     # Bulk PriceBar lookup for setup_tier (RS + vol_ratio)
     _pos_tickers = list({p.ticker for p in positions})
     _pos_bar_map: dict[str, dict] = {}
+    _chart_bars_by_ticker: dict[str, list[dict]] = {}
     if _pos_tickers:
         from sqlalchemy import func as _pfunc
         from app.models.market import PriceBar as _PB
@@ -1520,6 +1521,27 @@ async def positions(request: Request, db: Session = Depends(get_db),
                 "rs": float(_pb.rs_rating or 0),
                 "vol_ratio": float(_pb.vol_ratio) if _pb.vol_ratio is not None else None,
             }
+
+        # Bulk-fetch historical bars for the per-position VCP chart
+        from datetime import timedelta
+        _chart_cutoff = get_current_date() - timedelta(days=240)
+        _hist_rows = (
+            db.query(_PB)
+            .filter(_PB.ticker.in_(_pos_tickers), _PB.date >= _chart_cutoff)
+            .order_by(_PB.ticker, _PB.date.asc())
+            .all()
+        )
+        for _hb in _hist_rows:
+            _chart_bars_by_ticker.setdefault(_hb.ticker, []).append({
+                "date":      str(_hb.date),
+                "close":     float(_hb.close or 0),
+                "high":      float(_hb.high or _hb.close or 0),
+                "low":       float(_hb.low or _hb.close or 0),
+                "volume":    float(_hb.volume or 0),
+                "vol_ratio": float(_hb.vol_ratio) if _hb.vol_ratio is not None else None,
+            })
+        for _tkr in list(_chart_bars_by_ticker.keys()):
+            _chart_bars_by_ticker[_tkr] = _chart_bars_by_ticker[_tkr][-150:]
 
     pos_data = []
     total_risk = 0.0
@@ -1600,6 +1622,52 @@ async def positions(request: Request, db: Session = Depends(get_db),
             "B" if _p_rs >= 70 else
             "C"
         )
+        _vcp_json = None
+        _bars = _chart_bars_by_ticker.get(p.ticker, [])
+        if _bars:
+            _swing_highs = []
+            _swing_lows = []
+            _contractions = []
+            try:
+                import pandas as _pd
+                import numpy as _np
+                import json
+                from app.screener.vcp import detect_vcp, _find_pivots
+                from app.screener.rules import RuleEngine
+                from app.models.account import Organization as _Org
+
+                _df = _pd.DataFrame(_bars)
+                _df["date"] = _pd.to_datetime(_df["date"])
+                
+                _org = db.query(_Org).get(org_id) if org_id else None
+                _tier = _org.tier.value if (_org and _org.tier) else "BRONZE"
+                _engine = RuleEngine(organization_id=org_id, tier=_tier, asset_type=at)
+                
+                _vcp_res, _ = detect_vcp(p.ticker, _df, _engine)
+                _contractions = (_vcp_res.detail or {}).get("contractions", [])
+                
+                _highs = _df["high"].values
+                _lows = _df["low"].values
+                _win = 3 if len(_bars) < 60 else 5
+                for _idx in _find_pivots(_np.array(_highs), direction="high", window=_win):
+                    _swing_highs.append(_bars[_idx]["date"])
+                for _idx in _find_pivots(_np.array(_lows), direction="low", window=_win):
+                    _swing_lows.append(_bars[_idx]["date"])
+                
+                _vcp_chart_data = {
+                    "ticker": p.ticker,
+                    "series": _bars,
+                    "pivot": float(p.entry_price or 0) or None,
+                    "stop": float(p.current_stop or 0) or None,
+                    "target": float(p.target_1 or 0) or None,
+                    "contractions": _contractions,
+                    "swing_highs": _swing_highs,
+                    "swing_lows": _swing_lows,
+                }
+                _vcp_json = json.dumps(_vcp_chart_data)
+            except Exception as _ex:
+                logger.error(f"Failed to calculate interactive VCP chart details for position {p.ticker}: {_ex}")
+
         pos_data.append({
             "id": p.id, "ticker": p.ticker,
             "exchange_key":  ek,
@@ -1620,6 +1688,7 @@ async def positions(request: Request, db: Session = Depends(get_db),
             "is_paper": p.is_paper,
             "exit_checks": exit_checks,
             "setup_tier": _p_tier,
+            "vcp_chart_json": _vcp_json,
         })
 
     # Closed trades — also filter by exchange if selected
