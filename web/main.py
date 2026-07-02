@@ -3682,6 +3682,54 @@ async def close_position(
     return RedirectResponse("/positions?msg=closed", 302)
 
 
+@app.post("/positions/{pos_id}/purge")
+async def purge_phantom_position(
+    request: Request,
+    pos_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Superadmin-only: hard-delete a Position row that was never a real trade for
+    this org — e.g. one imported by the cross-org IBKR account fallback bug
+    (see IBKRBroker.connect() and CLAUDE.md). Unlike /positions/{pos_id}/close,
+    this does NOT create a Trade record — a phantom position was never actually
+    opened or closed by this org, so recording a "closed trade" for it would
+    put a fake entry in the org's own P&L/CGT history. Positions has no
+    incoming foreign keys, so a hard delete is safe.
+    """
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    if request.session.get("user_role") != "superadmin":
+        return RedirectResponse("/positions?msg=forbidden", 302)
+
+    from app.models.trade import Position
+    from app.models.audit import AuditLog, AuditAction
+
+    org_id = request.session.get("organization_id")
+    pos = db.query(Position).filter(Position.id == pos_id, Position.organization_id == org_id).first()
+    if not pos:
+        return RedirectResponse("/positions?msg=not_found", 302)
+
+    detail = {
+        "ticker": pos.ticker, "qty": float(pos.qty or 0),
+        "entry_price": float(pos.entry_price or 0), "entry_date": str(pos.entry_date),
+        "is_paper": pos.is_paper, "status": pos.status.value if pos.status else None,
+    }
+    db.add(AuditLog(
+        action=AuditAction.MANUAL_OVERRIDE,
+        organization_id=org_id,
+        user_id=request.session.get("user_id"),
+        ticker=pos.ticker,
+        message=f"Phantom position purged (not a real trade for this org) — {pos.ticker} qty={detail['qty']}",
+        detail=detail,
+        actor=request.session.get("email", "superadmin"),
+    ))
+    db.delete(pos)
+    db.commit()
+
+    return RedirectResponse("/positions?msg=purged", 302)
+
+
 @app.post("/watchlist/add")
 async def watchlist_add(
     request: Request,

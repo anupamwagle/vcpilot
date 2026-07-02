@@ -146,6 +146,13 @@ details.why-exit .why-det{display:block;font-size:.7rem;line-height:1.45;color:v
 </div>
 {% elif msg == 'not_found' %}
 <div class="alert-danger mb-4">Position not found or already closed.</div>
+{% elif msg == 'purged' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  Phantom position purged (no trade record was created).
+</div>
+{% elif msg == 'forbidden' %}
+<div class="alert-danger mb-4">Only a Super Admin can purge a position.</div>
 {% elif msg == 'checks_cleared' %}
 <div class="alert-success mb-4">
   <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
@@ -371,6 +378,15 @@ async function cancelOpenOrder(orderId) {
                     class="btn-ghost text-xs py-0.5 px-2" style="color:var(--neg);border-color:var(--neg);font-size:.72rem">
               Close
             </button>
+            {% if user_role == 'superadmin' %}
+            <form method="post" action="/positions/{{ p.id }}/purge" style="display:inline"
+                  onsubmit="return confirm('Purge {{ p.ticker }}? This hard-deletes the position with NO trade record — only use this for phantom/erroneous data, e.g. the cross-org IBKR account fallback bug. Cannot be undone.')">
+              <button type="submit" class="btn-ghost text-xs py-0.5 px-2" title="Superadmin only — hard-delete, no Trade record (use for phantom/erroneous positions)"
+                      style="color:var(--text-subtle);border-color:var(--border);font-size:.72rem;margin-left:.25rem">
+                Purge
+              </button>
+            </form>
+            {% endif %}
           </td>
         </tr>
 
