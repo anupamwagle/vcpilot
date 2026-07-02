@@ -244,3 +244,78 @@ def test_execute_signal_order_broker_exception(db_session, org_and_account, monk
     )
     assert result["ok"] is False
     assert "broker" in result["error"].lower() or "failed" in result["error"].lower()
+
+
+# --- IBKRBroker.connect() must actually be called for equity orders ---
+
+def test_execute_signal_order_equity_calls_connect(db_session, org_and_account, monkeypatch):
+    """
+    Regression test: the equity branch previously built a bare IBKRBroker()
+    and called submit_bracket_order() directly with no connect() call, so
+    is_connected was always False and every equity order silently simulated
+    regardless of whether IBKR Gateway was actually up. Assert connect() is
+    now actually invoked (via the `with IBKRBroker(...) as ibkr:` context
+    manager, matching the crypto branch's pattern).
+    """
+    from app.trading.order_executor import execute_signal_order
+    from app.risk.manager import SizingResult
+    org, _ = org_and_account
+    sig = _make_pending_signal(db_session, org.id)
+
+    sizing = SizingResult(10, 10, 455.0, 420.0, 35.0, 350.0, 42.0, 45.5, "AUD", 1.0, "OK")
+    monkeypatch.setattr("app.risk.manager.calculate_position_size", lambda **kw: sizing)
+
+    from app.broker.ibkr import IBKRBroker
+    connect_calls = []
+    monkeypatch.setattr(IBKRBroker, "connect", lambda self: (connect_calls.append(1), False)[1])
+    monkeypatch.setattr(
+        IBKRBroker, "submit_bracket_order",
+        lambda self, **kw: {"status": "simulated", "broker": "simulation", "ibkr_parent_id": None, "raw": []},
+    )
+    monkeypatch.setattr("app.notifications.get_notifier", lambda organization_id=None: MagicMock())
+
+    result = execute_signal_order(
+        signal_id=sig.id, organization_id=org.id, force_entry_price=45.5,
+    )
+    assert result["ok"] is True
+    assert len(connect_calls) == 1
+
+
+# --- Broker rejection (status=error) must NOT create a Position ---
+
+def test_execute_signal_order_broker_rejection_no_position_created(db_session, org_and_account, monkeypatch):
+    """
+    Regression test: submit_bracket_order() catches its own exceptions and
+    returns {"status": "error", ...} on rejection instead of raising — this
+    does NOT hit the `except Exception` around the broker call, so previously
+    execution fell straight through to Position creation and a Telegram
+    "Order Placed" confirmation for an order the broker never actually
+    accepted. Assert this now short-circuits with ok=False and no Position.
+    """
+    from app.trading.order_executor import execute_signal_order
+    from app.models.trade import Position
+    from app.risk.manager import SizingResult
+    org, _ = org_and_account
+    sig = _make_pending_signal(db_session, org.id)
+
+    sizing = SizingResult(10, 10, 450.0, 420.0, 30.0, 300.0, 42.0, 45.0, "AUD", 1.0, "OK")
+    monkeypatch.setattr("app.risk.manager.calculate_position_size", lambda **kw: sizing)
+
+    from app.broker.ibkr import IBKRBroker
+    monkeypatch.setattr(IBKRBroker, "connect", lambda self: True)
+    monkeypatch.setattr(IBKRBroker, "is_connected", property(lambda self: True))
+    monkeypatch.setattr(
+        IBKRBroker, "submit_bracket_order",
+        lambda self, **kw: {"status": "error", "error": "contract not qualified", "ticker": kw.get("ticker")},
+    )
+
+    result = execute_signal_order(
+        signal_id=sig.id, organization_id=org.id, force_entry_price=45.0
+    )
+    assert result["ok"] is False
+    assert "rejected" in result["error"].lower()
+
+    pos = db_session.query(Position).filter(
+        Position.organization_id == org.id, Position.ticker == "BHP.AX"
+    ).first()
+    assert pos is None

@@ -61,10 +61,25 @@ def fake_broker(monkeypatch):
     return _FakeBroker
 
 
+def _set_ibkr_account(db, org, value="DU123"):
+    """
+    sync_ibkr_positions_task refuses to reconcile any org without its own
+    explicit ibkr_account SystemConfig row (see the cross-org account fallback
+    guard in app/tasks/trading.py and app/broker/ibkr.py) — otherwise it would
+    silently resolve to whichever account the shared gateway happens to be
+    logged into, which is exactly the bug that guard exists to prevent. Tests
+    exercising the reconciliation logic itself must set this explicitly.
+    """
+    from app.models.config import SystemConfig
+    db.add(SystemConfig(key="ibkr_account", organization_id=org.id, value=value))
+    db.commit()
+
+
 def test_sync_imports_closes_updates_and_skips_crypto(
     db_session, org_and_account, open_crypto_position, fake_broker
 ):
     org, account = org_and_account
+    _set_ibkr_account(db_session, org)
 
     # DB pre-state: an orphan equity, a drifting equity, plus the crypto position.
     orphan = _make_equity_pos(db_session, org, account, "CSL.AX", qty=20)
@@ -116,6 +131,10 @@ def test_sync_imports_closes_updates_and_skips_crypto(
 
 def test_sync_skips_when_gateway_not_connected(db_session, org_and_account, monkeypatch):
     org, account = org_and_account
+    # Must set this explicitly (see _set_ibkr_account) so this test actually
+    # exercises the "gateway unreachable" skip path, not the (also-skipping,
+    # but different) "no ibkr_account configured" guard from earlier in the task.
+    _set_ibkr_account(db_session, org)
     orphan = _make_equity_pos(db_session, org, account, "CSL.AX", qty=20)
 
     class _Offline(_FakeBroker):
@@ -131,3 +150,36 @@ def test_sync_skips_when_gateway_not_connected(db_session, org_and_account, monk
     db_session.refresh(orphan)
     assert orphan.status == TradeStatus.OPEN
     assert db_session.query(Trade).count() == 0
+
+
+def test_sync_skips_org_with_no_ibkr_account_configured(db_session, org_and_account, fake_broker):
+    """
+    An org with no ibkr_account SystemConfig row must never reconcile at all —
+    not even a call to broker.connect() — because IBKRBroker would otherwise
+    resolve to the shared gateway's default account, which may belong to a
+    different org entirely (this bit AW org id=10 in production).
+    """
+    org, account = org_and_account
+    orphan = _make_equity_pos(db_session, org, account, "CSL.AX", qty=20)
+
+    fake_broker.ACCOUNT = "DU123"
+    fake_broker.POSITIONS = [
+        {"ticker": "BHP", "exchange": "ASX", "currency": "AUD", "qty": 50,
+         "avg_cost": 40.0, "account": "DU123"},
+    ]
+
+    trading.sync_ibkr_positions_task.run(organization_id=org.id)
+    db_session.expire_all()
+
+    # No import, no auto-close — the org was skipped before ever calling connect().
+    assert db_session.query(Position).filter(Position.ticker == "BHP.AX").first() is None
+    db_session.refresh(orphan)
+    assert orphan.status == TradeStatus.OPEN
+    assert db_session.query(Trade).count() == 0
+
+    from app.models.audit import AuditLog
+    skip_log = db_session.query(AuditLog).filter(
+        AuditLog.organization_id == org.id,
+        AuditLog.message.ilike("%no ibkr_account configured%"),
+    ).first()
+    assert skip_log is not None

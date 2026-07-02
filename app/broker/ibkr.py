@@ -409,6 +409,7 @@ class IBKRBroker:
             logger.info(f"Bracket accepted for {ticker}: parent status={pstatus}")
             return {
                 "status": "submitted",
+                "broker": "ibkr",
                 "ticker": ticker,
                 "qty": qty,
                 "entry_price": entry_price,
@@ -577,6 +578,7 @@ def _simulate_order(ticker, action, qty, entry_price, stop_price, order_ref) -> 
     )
     return {
         "status": "simulated",
+        "broker": "simulation",
         "ticker": ticker,
         "qty": qty,
         "entry_price": entry_price,

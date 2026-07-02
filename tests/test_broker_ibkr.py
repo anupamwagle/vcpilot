@@ -31,6 +31,52 @@ def test_ibkr_broker_with_org_id_loads_from_db(db_session, org_and_account):
     assert b is not None
 
 
+# --- cross-org account fallback guard ---
+# An org-scoped broker with no explicit ibkr_account of its own must refuse to
+# connect rather than silently falling back to settings.ibkr_account (the
+# shared gateway's default account, which may belong to a DIFFERENT org). See
+# CLAUDE.md / the commit fixing this — it bit AW org id=10 in production.
+
+def test_ibkr_connect_refuses_org_with_no_account_configured(db_session, org_and_account):
+    from app.broker.ibkr import IBKRBroker
+    org, _ = org_and_account
+    b = IBKRBroker(organization_id=org.id)  # no ibkr_account SystemConfig row exists
+    assert b._org_account_ready is False
+    result = b.connect()
+    assert result is False
+    assert b.is_connected is False
+    assert "no ibkr_account configured" in b.last_error
+
+
+def test_ibkr_connect_proceeds_past_guard_when_org_account_configured(db_session, org_and_account):
+    from app.broker.ibkr import IBKRBroker
+    from app.models.config import SystemConfig
+    org, _ = org_and_account
+    db_session.add(SystemConfig(key="ibkr_account", organization_id=org.id, value="DU456"))
+    db_session.commit()
+
+    b = IBKRBroker(organization_id=org.id)
+    assert b._org_account_ready is True
+    assert b.account == "DU456"
+    # Falls through to the ibkr_simulate/IB_AVAILABLE check next (no live
+    # gateway in the test environment) — the point here is only that it got
+    # PAST the cross-org guard, not that a real connection succeeds.
+    b.connect()
+    assert "no ibkr_account configured" not in (b.last_error or "")
+
+
+def test_ibkr_connect_org_agnostic_broker_unaffected_by_guard():
+    """organization_id=None (e.g. app.trading.order_executor's crypto-agnostic
+    callers, tests) must keep working exactly as before — the guard only
+    applies to org-scoped brokers."""
+    from app.broker.ibkr import IBKRBroker
+    b = IBKRBroker()
+    assert b._org_account_ready is True
+    result = b.connect()
+    assert result is False  # no live gateway / simulate mode in tests
+    assert "no ibkr_account configured" not in (b.last_error or "")
+
+
 # --- connect / is_connected ---
 
 def test_ibkr_connect_without_ib_insync_returns_false():

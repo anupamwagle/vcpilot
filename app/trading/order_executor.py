@@ -201,21 +201,44 @@ def execute_signal_order(
                 broker_name = result.get("broker", "ccxt")
         else:
             from app.broker.ibkr import IBKRBroker
-            ibkr = IBKRBroker(organization_id=organization_id)
-            result = ibkr.submit_bracket_order(
-                ticker=ticker,
-                action="BUY",
-                qty=int(qty),
-                entry_price=entry_price,
-                stop_price=stop_price,
-                target_price=target_1 or entry_price * 1.20,
-                exchange_key=exchange_key,
-                order_ref=order_ref,
-            )
-            broker_name = result.get("broker", "ibkr")
+            # Must connect() before submit_bracket_order() — it checks
+            # self.is_connected and silently falls through to a simulated fill
+            # otherwise (see _simulate_order in app/broker/ibkr.py). The crypto
+            # branch above gets this via get_crypto_broker_for_org()'s __enter__;
+            # this branch previously built a bare IBKRBroker() and called
+            # submit_bracket_order() directly with no connect() at all, so every
+            # equity order silently simulated regardless of whether IBKR Gateway
+            # was actually up and configured.
+            with IBKRBroker(organization_id=organization_id) as ibkr:
+                result = ibkr.submit_bracket_order(
+                    ticker=ticker,
+                    action="BUY",
+                    qty=int(qty),
+                    entry_price=entry_price,
+                    stop_price=stop_price,
+                    target_price=target_1 or entry_price * 1.20,
+                    exchange_key=exchange_key,
+                    order_ref=order_ref,
+                )
+                broker_name = result.get("broker", "ibkr")
     except Exception as oe:
         logger.error(f"execute_signal_order: broker submit failed — {oe}")
         return {"ok": False, "error": f"Broker order submission failed: {oe}"}
+
+    # submit_bracket_order() on both brokers catches its own exceptions and
+    # returns {"status": "error", "error": ...} instead of raising — so a
+    # rejected/unqualified/stuck order does NOT hit the except above. Without
+    # this check, a broker-side rejection would fall straight through to
+    # step 5 and create an OPEN Position for an order that was never actually
+    # accepted, with a Telegram "Order Placed" confirmation to match.
+    if result.get("status") == "error":
+        logger.error(f"execute_signal_order: broker rejected order for {ticker} — {result.get('error')}")
+        return {
+            "ok": False,
+            "error": f"Broker rejected the order: {result.get('error', 'unknown error')}",
+            "ticker": ticker,
+            "broker": broker_name,
+        }
 
     # ── 5. Create Position record ────────────────────────────────────────────
     try:
