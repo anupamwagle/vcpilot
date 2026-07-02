@@ -22,7 +22,7 @@ RUN(){ $D exec -u root vcpilot-worker-equities sh -c "cd /app && python -c \"$1\
 
 - [ ] Gateway healthy: `$D ps | grep vcpilot-ibkr` shows `Up`.
 - [ ] Confirm paper mode: `$D inspect vcpilot-ibkr --format '{{range .Config.Env}}{{println .}}{{end}}' | grep TRADING_MODE` → `paper`.
-- [ ] Confirm app paper port: `$D exec vcpilot-api env | grep IBKR_PORT` → `4002`.
+- [ ] Confirm app paper port: `$D exec vcpilot-dashboard env | grep IBKR_PORT` → `4002`.
 - [ ] Trading not paused: dashboard → Admin → Config → `trading_paused = false` (or set `true` while you test manually so the scheduler stays out of your way).
 - [ ] Note current open positions (so you can tell your test order apart):
   dashboard → Positions, or via DB.
