@@ -67,13 +67,13 @@ services:
       retries: 5
 
   # ---------------------------------------------------------------------------
-  # App — Database setup & migration runner
+  # Migrate — one-shot database setup & migration runner (runs once, exits)
   # ---------------------------------------------------------------------------
-  app:
+  migrate:
     build:
       context: .
       dockerfile: docker/Dockerfile.app
-    container_name: vcpilot-app
+    container_name: vcpilot-migrate
     restart: "no"
     <<: *app-env
     depends_on:
@@ -100,7 +100,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      app:
+      migrate:
         condition: service_completed_successfully
     networks:
       - vcpilot-net
@@ -126,7 +126,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      app:
+      migrate:
         condition: service_completed_successfully
     networks:
       - vcpilot-net
@@ -152,7 +152,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      app:
+      migrate:
         condition: service_completed_successfully
     networks:
       - vcpilot-net
@@ -179,7 +179,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      app:
+      migrate:
         condition: service_completed_successfully
     ports:
       - "0.0.0.0:${DASHBOARD_PORT:-8501}:8501"
@@ -213,7 +213,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      app:
+      migrate:
         condition: service_completed_successfully
     ports:
       - "0.0.0.0:${MCP_SERVER_PORT:-8502}:8502"

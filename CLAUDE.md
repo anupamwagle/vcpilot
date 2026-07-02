@@ -22,7 +22,7 @@ AstraTrade is a modular monorepo: one shared codebase and one Postgres DB, but e
 Docker Compose (9 services):
   database        TimescaleDB (PostgreSQL 16 + timescaledb extension) — shared data layer
   redis           Redis 7 — cache + Celery broker/result backend
-  app             Database setup & migration runner — runs init_db + migrate_saas (runs once, exits)
+  migrate         One-shot database setup & migration runner — runs init_db + migrate_saas (runs once, exits)
   dashboard       Frontend + API layer: FastAPI + Jinja2 + Flowbite/Tailwind — port 8501
   mcp-server      MCP tool-calling surface (/mcp/sse, /mcp/messages) — port 8502
                   Additive/opt-in: dashboard also mounts the same MCP app in-process by

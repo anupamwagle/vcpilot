@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 echo "==> Pulling latest code..."
 git pull
 
-SERVICES="${1:-dashboard worker-equities worker-crypto beat mcp-server}"
+SERVICES="${1:-dashboard worker-equities worker-crypto beat mcp-server migrate}"
 
 if [ "$1" = "--all" ]; then
   echo "==> Rebuilding all services..."
@@ -22,12 +22,14 @@ else
 fi
 
 echo "==> Restarting containers..."
-docker compose up -d
+# --remove-orphans clears out containers for services renamed/removed in docker-compose.yml
+# (e.g. the old 'api'/'whatsapp' services) so they don't hold ports the new ones need.
+docker compose up -d --remove-orphans
 
 echo "==> Running migrations..."
-docker compose start app 2>/dev/null || true
+docker compose start migrate 2>/dev/null || true
 sleep 3
-docker compose logs --tail=20 app
+docker compose logs --tail=20 migrate
 
 echo "==> Done. Dashboard logs:"
 docker compose logs --tail=10 dashboard

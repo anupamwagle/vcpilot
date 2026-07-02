@@ -438,7 +438,7 @@ First signals likely from: BTC-AUD, DOGE-AUD, LINK-AUD, XRP-AUD (closest to 200M
 |---|---|---|
 | `vcpilot-database` | ✅ Healthy | TimescaleDB running, all tables migrated |
 | `vcpilot-redis` | ✅ Healthy | Celery broker ready |
-| `vcpilot-app` | ✅ Completed | migrate_saas.py ran successfully — all rules seeded |
+| `vcpilot-migrate` | ✅ Completed | migrate_saas.py ran successfully — all rules seeded (renamed from `vcpilot-app`) |
 | `vcpilot-worker-equities` | ✅ Running | 5-min P&L refresh + ASX entry/exit checks |
 | `vcpilot-worker-crypto` | ✅ Running | 5-min crypto entry/exit/stop checks |
 | `vcpilot-beat` | ✅ Running | 5-min crypto beat + 4× daily screener active |
