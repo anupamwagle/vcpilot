@@ -30,6 +30,7 @@ from urllib.parse import parse_qs as _parse_qs
 _FEATURE_MAP = [
     ("/superadmin/activity",      "User Activity Console"),
     ("/superadmin/organizations", "Organisations"),
+    ("/superadmin/phantom-positions", "Phantom Positions"),
     ("/superadmin/operations",    "Central Operations"),
     ("/superadmin/exchanges",     "Exchanges"),
     ("/superadmin/rules",         "Global Rules"),
@@ -3690,12 +3691,19 @@ async def purge_phantom_position(
 ):
     """
     Superadmin-only: hard-delete a Position row that was never a real trade for
-    this org — e.g. one imported by the cross-org IBKR account fallback bug
+    its org — e.g. one imported by the cross-org IBKR account fallback bug
     (see IBKRBroker.connect() and CLAUDE.md). Unlike /positions/{pos_id}/close,
     this does NOT create a Trade record — a phantom position was never actually
-    opened or closed by this org, so recording a "closed trade" for it would
+    opened or closed by that org, so recording a "closed trade" for it would
     put a fake entry in the org's own P&L/CGT history. Positions has no
     incoming foreign keys, so a hard delete is safe.
+
+    Looked up by position ID alone (not restricted to the session's currently
+    active org) — this is the cleanup action for the cross-org phantom-import
+    bug, where the whole point is a superadmin can purge affected positions
+    across every org from one report (see /superadmin/phantom-positions)
+    without switching active org context for each one. Still superadmin-gated,
+    so this doesn't widen access — a non-superadmin can never reach this route.
     """
     if not _auth(request):
         return RedirectResponse("/login", 302)
@@ -3705,8 +3713,7 @@ async def purge_phantom_position(
     from app.models.trade import Position
     from app.models.audit import AuditLog, AuditAction
 
-    org_id = request.session.get("organization_id")
-    pos = db.query(Position).filter(Position.id == pos_id, Position.organization_id == org_id).first()
+    pos = db.query(Position).filter(Position.id == pos_id).first()
     if not pos:
         return RedirectResponse("/positions?msg=not_found", 302)
 
@@ -3717,7 +3724,7 @@ async def purge_phantom_position(
     }
     db.add(AuditLog(
         action=AuditAction.MANUAL_OVERRIDE,
-        organization_id=org_id,
+        organization_id=pos.organization_id,
         user_id=request.session.get("user_id"),
         ticker=pos.ticker,
         message=f"Phantom position purged (not a real trade for this org) — {pos.ticker} qty={detail['qty']}",
@@ -3727,7 +3734,9 @@ async def purge_phantom_position(
     db.delete(pos)
     db.commit()
 
-    return RedirectResponse("/positions?msg=purged", 302)
+    referer = request.headers.get("referer", "/positions")
+    sep = "&" if "?" in referer else "?"
+    return RedirectResponse(f"{referer}{sep}msg=purged", 303)
 
 
 @app.post("/watchlist/add")
@@ -8203,6 +8212,91 @@ async def superadmin_operations(request: Request, db: Session = Depends(get_db))
         "seeded_crypto_count": seeded_crypto_count,
     })
     return templates.TemplateResponse("superadmin/operations.html", ctx)
+
+
+@app.get("/superadmin/phantom-positions", response_class=HTMLResponse)
+async def superadmin_phantom_positions(request: Request, db: Session = Depends(get_db)):
+    """
+    Cross-org report of every OPEN Position that was created by
+    sync_ibkr_positions_task's import branch (message "IBKR sync: imported...",
+    detail.source == "ibkr_sync") — the only durable signal, since Position
+    itself carries no "imported" marker.
+
+    Before the cross-org account fallback was closed (see IBKRBroker.connect()
+    and CLAUDE.md), any org with no ibkr_account of its own resolved to the
+    shared gateway's default account, so every such org independently imported
+    a COPY of that one real account's holdings as if they were its own. This
+    is why positions can look "the same regardless of which org you pick" —
+    they're not cached or mis-scoped, they're genuinely separate rows with
+    identical ticker/qty/price because they all came from the one shared
+    account. This report finds every affected org in one pass instead of
+    clicking through each org's Positions page individually.
+
+    An org whose CURRENT ibkr_account happens to equal the account these were
+    imported from is very likely the real, legitimate owner — flagged as
+    "has own account" rather than "likely phantom", but still shown since a
+    human should make the final call, not this heuristic.
+    """
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    if not _is_superadmin(request):
+        return RedirectResponse("/?error=access_denied", 302)
+
+    from app.models.trade import Position, TradeStatus
+    from app.models.audit import AuditLog, AuditAction
+    from app.models.account import Organization
+    from app.models.config import SystemConfig
+
+    ctx = _global(request, db)
+    msg = request.query_params.get("msg", "")
+
+    # One AuditLog per import — organization_id + ticker identifies the Position.
+    import_logs = db.query(AuditLog).filter(
+        AuditLog.action == AuditAction.POSITION_OPENED,
+        AuditLog.message.ilike("IBKR sync: imported%"),
+    ).order_by(desc(AuditLog.created_at)).all()
+
+    org_names = {o.id: o.name for o in db.query(Organization).all()}
+    org_has_account = {
+        r.organization_id
+        for r in db.query(SystemConfig).filter(
+            SystemConfig.key == "ibkr_account", SystemConfig.value.isnot(None), SystemConfig.value != "",
+        ).all()
+    }
+
+    rows = []
+    seen = set()
+    for log in import_logs:
+        key = (log.organization_id, log.ticker)
+        if key in seen:
+            continue  # keep only the most recent import event per org+ticker
+        seen.add(key)
+
+        pos = db.query(Position).filter(
+            Position.organization_id == log.organization_id,
+            Position.ticker == log.ticker,
+            Position.status == TradeStatus.OPEN,
+        ).first()
+        if not pos:
+            continue  # already closed/purged since the import
+
+        rows.append({
+            "position_id": pos.id,
+            "org_id": log.organization_id,
+            "org_name": org_names.get(log.organization_id, f"Org #{log.organization_id}"),
+            "ticker": pos.ticker,
+            "qty": float(pos.qty or 0),
+            "entry_price": float(pos.entry_price or 0),
+            "entry_date": _fmt_date(pos.entry_date),
+            "imported_at": _fmt_dt(str(log.created_at), "Australia/Sydney"),
+            "has_own_account": log.organization_id in org_has_account,
+        })
+
+    # Likely-phantom (no ibkr_account today) first.
+    rows.sort(key=lambda r: (r["has_own_account"], r["org_name"], r["ticker"]))
+
+    ctx.update({"msg": msg, "rows": rows, "phantom_count": sum(1 for r in rows if not r["has_own_account"])})
+    return templates.TemplateResponse("superadmin/phantom_positions.html", ctx)
 
 
 # ── Super admin global action routes ─────────────────────────────────────────

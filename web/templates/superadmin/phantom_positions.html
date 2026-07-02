@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Phantom Positions — SaaS Management{% endblock %}
+
+{% block content %}
+<style>
+  .ops-card   { background:var(--surface);border:1px solid var(--border);border-radius:.6rem;padding:1.1rem 1.25rem;margin-bottom:1rem; }
+  .ops-title  { font-size:.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-subtle);margin-bottom:.75rem; }
+</style>
+
+<!-- Header -->
+<div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:.75rem;margin-bottom:1.25rem">
+  <div>
+    <h1 class="text-xl font-bold" style="color:var(--text)">👻 Phantom Positions</h1>
+    <p class="text-sm mt-0.5" style="color:var(--text-muted)">
+      Every OPEN position ever created by the IBKR account reconciliation import,
+      across all organisations
+    </p>
+  </div>
+</div>
+
+{% if msg == 'purged' %}
+<div class="alert-success mb-4">Position purged (no trade record was created).</div>
+{% endif %}
+
+<div class="alert-info mb-5">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+  <div>
+    Before the cross-org IBKR account fallback was closed, any org with no <code>ibkr_account</code>
+    of its own resolved to the shared gateway's default account — so every such org independently
+    imported a <em>copy</em> of that one real account's holdings as its own. That's why positions can
+    look identical regardless of which org you switch to: they're separate DB rows with matching
+    ticker/qty/price, not a caching or scoping bug. Rows marked <strong>⚠️ no ibkr_account</strong> are
+    very likely phantom. Rows marked <strong>✓ has own account</strong> may be the legitimate owner —
+    verify before purging.
+  </div>
+</div>
+
+<div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">
+  <div class="stat-card">
+    <p class="text-xs font-semibold uppercase tracking-wider mb-1" style="color:var(--text-subtle)">Total Imported Rows</p>
+    <p class="text-2xl font-bold" style="color:var(--text)">{{ rows|length }}</p>
+  </div>
+  <div class="stat-card">
+    <p class="text-xs font-semibold uppercase tracking-wider mb-1" style="color:var(--text-subtle)">⚠️ Likely Phantom</p>
+    <p class="text-2xl font-bold" style="color:var(--neg)">{{ phantom_count }}</p>
+    <p class="text-xs mt-0.5" style="color:var(--text-muted)">org has no ibkr_account today</p>
+  </div>
+  <div class="stat-card">
+    <p class="text-xs font-semibold uppercase tracking-wider mb-1" style="color:var(--text-subtle)">✓ Has Own Account</p>
+    <p class="text-2xl font-bold" style="color:var(--pos)">{{ rows|length - phantom_count }}</p>
+    <p class="text-xs mt-0.5" style="color:var(--text-muted)">review before purging</p>
+  </div>
+</div>
+
+<div class="ops-card" style="padding:0;overflow:hidden">
+  {% if not rows %}
+  <p class="text-sm p-6 text-center" style="color:var(--text-muted)">
+    No IBKR-imported positions found — nothing to review.
+  </p>
+  {% else %}
+  <div class="overflow-x-auto">
+    <table class="w-full tbl-dense" style="border-collapse:separate;border-spacing:0;font-size:.82rem">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border);background:var(--surface-alt)">
+          <th style="padding:.6rem .9rem;text-align:left;font-size:.7rem;font-weight:600;color:var(--text-muted)">Org</th>
+          <th style="padding:.6rem .9rem;text-align:left;font-size:.7rem;font-weight:600;color:var(--text-muted)">Ticker</th>
+          <th style="padding:.6rem .9rem;text-align:right;font-size:.7rem;font-weight:600;color:var(--text-muted)">Qty</th>
+          <th style="padding:.6rem .9rem;text-align:right;font-size:.7rem;font-weight:600;color:var(--text-muted)">Entry Price</th>
+          <th style="padding:.6rem .9rem;text-align:left;font-size:.7rem;font-weight:600;color:var(--text-muted)">Entry Date</th>
+          <th style="padding:.6rem .9rem;text-align:left;font-size:.7rem;font-weight:600;color:var(--text-muted)">Imported At</th>
+          <th style="padding:.6rem .9rem;text-align:center;font-size:.7rem;font-weight:600;color:var(--text-muted)">Account Status</th>
+          <th style="padding:.6rem .9rem;text-align:center;font-size:.7rem;font-weight:600;color:var(--text-muted)">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr style="border-bottom:1px solid var(--border)" class="hover-row">
+          <td style="padding:.55rem .9rem;font-weight:600;color:var(--text)">{{ r.org_name }}</td>
+          <td style="padding:.55rem .9rem;font-family:monospace;color:var(--t-accent)">{{ r.ticker }}</td>
+          <td style="padding:.55rem .9rem;text-align:right;font-family:monospace">{{ "{:g}".format(r.qty) }}</td>
+          <td style="padding:.55rem .9rem;text-align:right;font-family:monospace">${{ "%.4f"|format(r.entry_price) }}</td>
+          <td style="padding:.55rem .9rem;color:var(--text-muted)">{{ r.entry_date }}</td>
+          <td style="padding:.55rem .9rem;color:var(--text-muted);font-size:.75rem">{{ r.imported_at }}</td>
+          <td style="padding:.55rem .9rem;text-align:center">
+            {% if r.has_own_account %}
+            <span class="badge" style="font-size:.65rem;background:rgba(16,185,129,.15);color:#10b981">✓ has own account</span>
+            {% else %}
+            <span class="badge" style="font-size:.65rem;background:rgba(239,68,68,.15);color:#ef4444">⚠️ no ibkr_account</span>
+            {% endif %}
+          </td>
+          <td style="padding:.55rem .9rem;text-align:center">
+            <form method="post" action="/positions/{{ r.position_id }}/purge"
+                  onsubmit="return confirm('Purge {{ r.ticker }} from {{ r.org_name }}? This hard-deletes the position with NO trade record. Cannot be undone.')">
+              <button type="submit" class="btn-ghost text-xs py-1 px-2" style="color:var(--neg);border-color:var(--neg)">
+                Purge
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
