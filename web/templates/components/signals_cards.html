@@ -249,7 +249,7 @@
     {% if s.vcp_chart_json %}
     <div style="padding:.85rem 1rem;border-bottom:1px solid var(--border)">
       <div style="margin:0;background:var(--surface-alt);border:1px solid var(--border);border-radius:8px;padding:.75rem;position:relative">
-        <div id="vcp-chart-{{ s.id }}" style="min-height: 280px;"></div>
+        <div id="vcp-chart-{{ s.id }}" data-vcp="{{ s.vcp_chart_json | forceescape }}" style="min-height: 280px;"></div>
       </div>
       <p style="font-size:.68rem;color:var(--text-subtle);text-align:center;margin-top:.4rem;font-style:italic">
         {{ s.vcp_contractions }} contraction{{ 's' if s.vcp_contractions != 1 else '' }} over {{ s.vcp_weeks }} week{{ 's' if s.vcp_weeks != 1 else '' }} base ·
@@ -257,10 +257,6 @@
         green volume = ≥150% of average · amber dots = detected swing points
       </p>
     </div>
-    <script>
-      window._sigVcpData = window._sigVcpData || {};
-      window._sigVcpData['{{ s.id }}'] = {{ s.vcp_chart_json | safe }};
-    </script>
     {% endif %}
 
     {# ── Screener rule badges ────────────────────────────────────────── #}
@@ -361,28 +357,7 @@
 </div>
 {% endif %}
 
-<script>
-  if (typeof window.renderInteractiveChart === 'undefined') {
-    window.renderInteractiveChart = function(sigId) {
-      const el = document.getElementById('vcp-chart-' + sigId);
-      if (!el || el.dataset.rendered === 'true') return;
-      el.dataset.rendered = 'true';
-      
-      const data = window._sigVcpData ? window._sigVcpData[sigId] : null;
-      if (!data) return;
-      
-      if (typeof window.renderVcpChart !== 'undefined') {
-        window.renderVcpChart('#vcp-chart-' + sigId, data);
-      } else {
-        setTimeout(() => {
-          if (typeof window.renderVcpChart !== 'undefined') {
-            window.renderVcpChart('#vcp-chart-' + sigId, data);
-          }
-        }, 100);
-      }
-    };
-  }
-</script>{# end full-card vs compact-row #}
+{# end full-card vs compact-row #}
 {% endfor %}
 </div>
 {% endif %}

@@ -136,6 +136,17 @@ class User(Base):
             ids.add(self.organization_id)  # home org is always accessible
         return sorted(ids)
 
+    @property
+    def all_organizations(self) -> list:
+        """All Organization objects this user is associated with (de-duplicated)."""
+        orgs = {}
+        if self.organization:
+            orgs[self.organization.id] = self.organization
+        for m in self.memberships:
+            if m.organization:
+                orgs[m.organization.id] = m.organization
+        return list(orgs.values())
+
     def is_member_of(self, organization_id: int) -> bool:
         """True if the user belongs to (or is homed at) the given organization."""
         if organization_id is None:

@@ -780,10 +780,11 @@
 
         <!-- Org Selector (Super Admins) -->
         {% if user_role == 'superadmin' and all_orgs %}
-        <form action="/superadmin/switch-org" method="post">
-          <select name="organization_id" onchange="this.form.requestSubmit()"
+        <form action="/superadmin/switch-org" method="post" class="flex items-center gap-1.5">
+          <label for="org-selector-admin" class="text-xs font-bold" style="color:var(--text-subtle); white-space:nowrap">Org:</label>
+          <select id="org-selector-admin" name="organization_id" onchange="this.form.requestSubmit()"
                   class="input py-1 px-2 text-xs font-semibold"
-                  style="max-width:140px;background:var(--surface);color:var(--text);border-color:var(--border);border-radius:.375rem">
+                  style="max-width:130px;background:var(--surface);color:var(--text);border-color:var(--border);border-radius:.375rem">
             {% for org in all_orgs %}
               <option value="{{ org.id }}" {% if org.id == current_org_id %}selected{% endif %}>{{ org.name }}</option>
             {% endfor %}
@@ -791,10 +792,11 @@
         </form>
         {# Org Selector (regular users who belong to more than one org) #}
         {% elif user_role != 'superadmin' and user_orgs and user_orgs|length > 1 %}
-        <form action="/switch-org" method="post" title="Switch organisation">
-          <select name="organization_id" onchange="this.form.requestSubmit()"
+        <form action="/switch-org" method="post" title="Switch organisation" class="flex items-center gap-1.5">
+          <label for="org-selector-user" class="text-xs font-bold" style="color:var(--text-subtle); white-space:nowrap">Org:</label>
+          <select id="org-selector-user" name="organization_id" onchange="this.form.requestSubmit()"
                   class="input py-1 px-2 text-xs font-semibold"
-                  style="max-width:140px;background:var(--surface);color:var(--text);border-color:var(--border);border-radius:.375rem">
+                  style="max-width:130px;background:var(--surface);color:var(--text);border-color:var(--border);border-radius:.375rem">
             {% for org in user_orgs %}
               <option value="{{ org.id }}" {% if org.id == current_org_id %}selected{% endif %}>{{ org.name }}</option>
             {% endfor %}

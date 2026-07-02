@@ -309,6 +309,18 @@ window.renderVcpChart = function(containerSelector, data) {
       foreColor: muted,
       background: 'transparent'
     },
+    title: {
+      text: `Volatility Contraction Pattern - ${ticker.toUpperCase()}`,
+      align: 'left',
+      margin: 10,
+      offsetX: 5,
+      offsetY: 5,
+      style: {
+        fontSize: '13px',
+        fontWeight: '700',
+        color: isDark ? '#f8fafc' : '#0f172a'
+      }
+    },
     grid: {
       borderColor: border,
       strokeDashArray: 3
@@ -361,8 +373,9 @@ window.renderVcpChart = function(containerSelector, data) {
       shared: true,
       intersect: false,
       custom: function({ series, seriesIndex, dataPointIndex, w }) {
-        const dateVal = w.globals.labels[dataPointIndex];
-        const dateStr = new Date(dateVal).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+        const dateStr = (seriesData[dataPointIndex] && seriesData[dataPointIndex].date) 
+          ? new Date(seriesData[dataPointIndex].date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+          : '—';
         
         const price = w.globals.series[0][dataPointIndex];
         const volume = w.globals.series[1][dataPointIndex];

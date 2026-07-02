@@ -81,7 +81,7 @@ def _fake_request(org_id, *, user_role="user", user_id=1, email="multi@astradigi
             "email": email,
         },
         headers={"referer": referer, "host": host},
-        url=SimpleNamespace(scheme="http"),
+        url=SimpleNamespace(scheme="http", path="/"),
         query_params={},
     )
 

@@ -274,12 +274,23 @@
     if (chev) chev.textContent = open ? '▶' : '▼';
   }
 
-  // Wire seed rows on load
-  document.addEventListener('DOMContentLoaded', () => {
-    document.querySelectorAll('.log-header').forEach(hdr => {
-      if (hdr.style.cursor === 'pointer') hdr.addEventListener('click', () => toggleRow(hdr));
-    });
-  });
+  function wireRow(hdr) {
+    const row = hdr.closest('.log-row');
+    if (row && row.querySelector('.log-detail')) {
+      hdr.style.cursor = 'pointer';
+      hdr.addEventListener('click', () => toggleRow(hdr));
+    }
+  }
+
+  function initLogs() {
+    document.querySelectorAll('.log-header').forEach(wireRow);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initLogs);
+  } else {
+    initLogs();
+  }
 
   let paused=false, newCount=0, lastId={{ last_log_id }};
   const feed=document.getElementById('log-feed');

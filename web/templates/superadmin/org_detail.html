@@ -38,7 +38,7 @@
 <!-- Overview Cards -->
 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
   <div class="stat-card">
-    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Tier Allocation</p>
+    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Tier & Status</p>
     <div class="flex items-center gap-2">
       {% if organization.tier.value == 'GOLD' %}
         <span class="text-lg font-bold" style="color:#d97706">🥇 Gold</span>
@@ -48,19 +48,31 @@
         <span class="text-lg font-bold" style="color:#c2410c">🥉 Bronze</span>
       {% endif %}
     </div>
-    <p class="text-xs mt-1" style="color:var(--text-subtle)">Rules inherited automatically</p>
+    <p class="text-xs mt-1">
+      {% if organization.is_active %}
+        <span class="font-semibold" style="color:var(--pos)">🟢 Active Tenant</span>
+      {% else %}
+        <span class="font-semibold" style="color:var(--neg)">🔴 Soft-deleted / Inactive</span>
+      {% endif %}
+    </p>
   </div>
 
   <div class="stat-card">
-    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Active Users</p>
-    <p class="text-lg font-bold" style="color:var(--text)">{{ users|length }} User(s)</p>
+    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Tenant User Accounts</p>
+    <p class="text-lg font-bold" style="color:var(--text)">
+      {{ active_users_count }} Active <span class="text-sm font-normal" style="color:var(--text-subtle)">/ {{ total_users_count }} Total</span>
+    </p>
     <p class="text-xs mt-1" style="color:var(--text-subtle)">Registered in tenant base</p>
   </div>
 
   <div class="stat-card">
-    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Trading Accounts</p>
-    <p class="text-lg font-bold" style="color:var(--t-accent)">{{ accounts|length }} Account(s)</p>
-    <p class="text-xs mt-1" style="color:var(--text-subtle)">Mapped IBKR endpoints</p>
+    <p class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-subtle)">Allocated Trading Capital</p>
+    <p class="text-lg font-bold" style="color:var(--t-accent)">
+      {{ active_accounts_count }} Active <span class="text-sm font-normal" style="color:var(--text-subtle)">/ {{ total_accounts_count }} Total</span>
+    </p>
+    <p class="text-xs mt-1" style="color:var(--text-muted)">
+      Total Capital: <strong style="color:var(--text)">${{ "{:,.2f}".format(total_capital) }}</strong> AUD
+    </p>
   </div>
 </div>
 

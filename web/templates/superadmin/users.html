@@ -167,10 +167,15 @@
               <span class="text-xs font-mono block" style="color:var(--text-subtle)">{{ u.email }}</span>
             </td>
             <td class="p-3">
-              {% if u.organization %}
-                <a href="/superadmin/organizations/{{ u.organization.id }}" class="text-xs font-semibold hover:underline" style="color:var(--text)">
-                  {{ u.organization.name }}
-                </a>
+              {% set user_orgs = u.all_organizations %}
+              {% if user_orgs %}
+                <div class="flex flex-col gap-1">
+                  {% for org in user_orgs %}
+                    <a href="/superadmin/organizations/{{ org.id }}" class="text-xs font-semibold hover:underline block" style="color:var(--text)">
+                      {{ org.name }}{% if org.id == u.organization_id %} <span class="text-[9px] font-bold px-1 rounded" style="background:var(--surface-alt);color:var(--text-muted)">Home</span>{% endif %}
+                    </a>
+                  {% endfor %}
+                </div>
               {% else %}
                 <span class="text-xs" style="color:var(--text-muted)">—</span>
               {% endif %}
@@ -186,6 +191,11 @@
               {{ u.created_at|friendly_date if u.created_at else 'N/A' }}
             </td>
             <td class="p-3 space-y-2">
+              <!-- Edit details link -->
+              <a href="/superadmin/users/{{ u.id }}/edit" class="btn-ghost text-[10px] px-1 py-0.5 hover:underline text-blue-600 dark:text-blue-400 block">
+                ✏️ Edit Details & Orgs
+              </a>
+
               <!-- Edit/Manage role drop form -->
               <form method="post" action="/superadmin/users/{{ u.id }}/update-role" class="flex items-center gap-1">
                 <select name="role_id" class="input py-0.5 px-1 text-[10px] w-24">

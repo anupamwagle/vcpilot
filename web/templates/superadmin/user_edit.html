@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Super Admin · Edit User{% endblock %}
+{% block page_title %}Edit User Account{% endblock %}
+
+{% block content %}
+
+{# ── Back nav + flash messages ─────────────────────────────────────────── #}
+<div class="mb-4">
+  <a href="/superadmin/users" class="text-xs font-semibold" style="color:var(--a-accent)">← Back to Users Manager</a>
+</div>
+
+{% if saved == '1' %}
+<div class="alert-success mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+  User details and organisation access updated successfully.
+</div>
+{% endif %}
+
+{% if error %}
+<div class="alert-danger mb-4">
+  {{ error }}
+</div>
+{% endif %}
+
+<div class="max-w-2xl mx-auto">
+  <div class="card p-6">
+    <p class="section-title mb-6">👤 Edit Account details: <span class="font-mono text-sm font-normal text-slate-400">{{ u.email }}</span></p>
+    
+    <form method="post" class="space-y-6">
+      
+      <!-- Basic Details Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label class="field-label mb-1.5" for="name">Full Name</label>
+          <input type="text" id="name" name="name" value="{{ u.name or '' }}" class="input w-full text-xs" placeholder="e.g. Richard Wyckoff" required />
+        </div>
+
+        <div>
+          <label class="field-label mb-1.5" for="email">Email Address</label>
+          <input type="email" id="email" name="email" value="{{ u.email }}" class="input w-full text-xs font-mono" placeholder="e.g. trader@gmail.com" required />
+        </div>
+      </div>
+
+      <!-- Role & Status -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+        <div>
+          <label class="field-label mb-1.5" for="role_id">Assigned Role</label>
+          <select id="role_id" name="role_id" class="input w-full text-xs" required>
+            {% for role in roles %}
+              <option value="{{ role.id }}" {% if role in u.roles %}selected{% endif %}>{{ role.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="flex items-center gap-2 mt-4 md:mt-0 pt-2">
+          <input type="checkbox" id="is_active" name="is_active" {% if u.is_active %}checked{% endif %}
+                 class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 bg-transparent" style="border-color:var(--border)">
+          <label class="text-xs font-semibold select-none cursor-pointer" for="is_active" style="color:var(--text)">
+            Account Active Status
+          </label>
+        </div>
+      </div>
+
+      <hr style="border-color:var(--border)" class="my-6" />
+
+      <!-- Multi-Org Settings -->
+      <div>
+        <p class="text-sm font-bold mb-1" style="color:var(--text)">🏢 Organisation Memberships</p>
+        <p class="text-xs mb-4" style="color:var(--text-subtle)">Configure default home organisation and additional tenant access.</p>
+
+        <div class="space-y-4">
+          <div>
+            <label class="field-label mb-1.5" for="organization_id">Home / Default Organisation</label>
+            <select id="organization_id" name="organization_id" class="input w-full text-xs" required onchange="updateOrgCheckboxes(this.value)">
+              {% for org in organizations %}
+                <option value="{{ org.id }}" {% if u.organization_id|string == org.id|string %}selected{% endif %}>
+                  {{ org.name }} ({{ org.tier.value }})
+                </option>
+              {% endfor %}
+            </select>
+            <p class="text-[10px] mt-1" style="color:var(--text-subtle)">
+              * The primary organization this user logs into by default.
+            </p>
+          </div>
+
+          <div>
+            <label class="field-label mb-2">Access Permissions (Select All Applicable)</label>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-lg border" style="border-color:var(--border); background:var(--surface-alt)">
+              {% for org in organizations %}
+                <div class="flex items-center gap-2">
+                  <!-- Hidden input to submit the home org value even when the checkbox is disabled -->
+                  <input type="hidden" name="org_ids" value="{{ org.id }}" id="hidden-org-{{ org.id }}" {% if u.organization_id|string != org.id|string %}disabled{% endif %}>
+                  
+                  <input type="checkbox" name="org_ids" value="{{ org.id }}" id="org-chk-{{ org.id }}"
+                         {% if org.id in user_org_ids %}checked{% endif %}
+                         {% if u.organization_id|string == org.id|string %}disabled{% endif %}
+                         class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 bg-transparent org-checkbox" style="border-color:var(--border)">
+                  <label class="text-xs cursor-pointer select-none" for="org-chk-{{ org.id }}" style="color:var(--text)">
+                    {{ org.name }} 
+                    <span class="text-[9px] font-semibold text-slate-500">({{ org.tier.value }})</span>
+                    {% if u.organization_id|string == org.id|string %}
+                      <span class="text-[9px] font-bold px-1 rounded ml-1" style="background:var(--surface);color:var(--text-muted)">Home</span>
+                    {% endif %}
+                  </label>
+                </div>
+              {% endfor %}
+            </div>
+            <p class="text-[10px] mt-1.5" style="color:var(--text-subtle)">
+              * Home organisation is checked and disabled because access to the home organisation is mandatory. To remove access, switch the home organisation select dropdown above first.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex gap-3 pt-4">
+        <button type="submit" class="btn-primary flex-1 text-xs py-2">Save Changes</button>
+        <a href="/superadmin/users" class="btn-ghost text-xs py-2 px-4 border text-center" style="border-color:var(--border); color:var(--text-muted)">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  function updateOrgCheckboxes(homeOrgId) {
+    const checkboxes = document.querySelectorAll('.org-checkbox');
+    checkboxes.forEach(chk => {
+      const orgId = chk.value;
+      const hiddenInput = document.getElementById('hidden-org-' + orgId);
+      const labelSpan = chk.nextElementSibling.querySelector('span.font-bold');
+      
+      if (orgId === homeOrgId) {
+        // Disable the checkbox so it can't be unchecked, and check it
+        chk.disabled = true;
+        chk.checked = true;
+        
+        // Enable hidden input to submit this value
+        if (hiddenInput) hiddenInput.disabled = false;
+        
+        // Add "Home" badge if not present
+        if (!labelSpan) {
+          const badge = document.createElement('span');
+          badge.className = 'text-[9px] font-bold px-1 rounded ml-1';
+          badge.style.background = 'var(--surface)';
+          badge.style.color = 'var(--text-muted)';
+          badge.textContent = 'Home';
+          chk.nextElementSibling.appendChild(badge);
+        }
+      } else {
+        // Enable normal checkbox
+        chk.disabled = false;
+        
+        // Disable hidden input so we don't submit duplicates
+        if (hiddenInput) hiddenInput.disabled = true;
+        
+        // Remove "Home" badge if present
+        if (labelSpan) {
+          labelSpan.remove();
+        }
+      }
+    });
+  }
+</script>
+{% endblock %}

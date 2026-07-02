@@ -178,6 +178,34 @@
 
 {% block extra_scripts %}
 <script>
+window.renderInteractiveChart = function(sigId) {
+  const el = document.getElementById('vcp-chart-' + sigId);
+  if (!el || el.dataset.rendered === 'true') return;
+  
+  const rawData = el.getAttribute('data-vcp');
+  if (!rawData) return;
+  
+  let data;
+  try {
+    data = JSON.parse(rawData);
+  } catch(e) {
+    console.error('Failed to parse VCP JSON for signal ' + sigId, e);
+    return;
+  }
+  
+  el.dataset.rendered = 'true';
+  
+  if (typeof window.renderVcpChart !== 'undefined') {
+    window.renderVcpChart('#vcp-chart-' + sigId, data);
+  } else {
+    setTimeout(() => {
+      if (typeof window.renderVcpChart !== 'undefined') {
+        window.renderVcpChart('#vcp-chart-' + sigId, data);
+      }
+    }, 100);
+  }
+};
+
 function togglePanel(id) {
   const el = document.getElementById(id);
   if (!el) return;

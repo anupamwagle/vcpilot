@@ -7023,8 +7023,23 @@ async def superadmin_org_detail(org_id: int, request: Request, db: Session = Dep
         return RedirectResponse("/superadmin/organizations", 302)
 
     ctx = _global(request, db)
-    users = db.query(User).filter(User.organization_id == org_id).all()
+    from app.models.auth import OrganizationMembership
+    from sqlalchemy import or_
+    
+    users = db.query(User).filter(
+        or_(
+            User.organization_id == org_id,
+            User.id.in_(
+                db.query(OrganizationMembership.user_id).filter(OrganizationMembership.organization_id == org_id)
+            )
+        )
+    ).all()
     accounts = db.query(Account).filter(Account.organization_id == org_id).all()
+    
+    active_users = [u for u in users if u.is_active]
+    active_accounts = [a for a in accounts if a.is_active]
+    total_capital = sum(float(a.capital_aud or 0.0) for a in active_accounts)
+
     try:
         # Operational trail only — user-activity rows live in the Activity Console.
         logs = db.query(AuditLog).filter(
@@ -7071,6 +7086,11 @@ async def superadmin_org_detail(org_id: int, request: Request, db: Session = Dep
         "organization": org,
         "users": users,
         "accounts": accounts,
+        "active_users_count": len(active_users),
+        "total_users_count": len(users),
+        "active_accounts_count": len(active_accounts),
+        "total_accounts_count": len(accounts),
+        "total_capital": total_capital,
         "logs": logs,
         "msg": request.query_params.get("msg", ""),
         "mcp_credentials": mcp_credentials,
@@ -7428,17 +7448,26 @@ async def superadmin_users(request: Request, db: Session = Depends(get_db)):
     if request.session.get("user_role") != "superadmin":
         return RedirectResponse("/", 302)
 
-    from app.models.auth import User, Role
+    from app.models.auth import User, Role, OrganizationMembership
     from app.models.account import Organization
+    from sqlalchemy.orm import joinedload
 
     search = request.query_params.get("search", "").strip()
     selected_org_id = request.query_params.get("org_id", "")
 
-    query = db.query(User)
+    query = db.query(User).options(
+        joinedload(User.organization),
+        joinedload(User.memberships).joinedload(OrganizationMembership.organization)
+    )
     if search:
         query = query.filter((User.name.ilike(f"%{search}%")) | (User.email.ilike(f"%{search}%")))
     if selected_org_id:
-        query = query.filter(User.organization_id == int(selected_org_id))
+        query = query.filter(
+            (User.organization_id == int(selected_org_id)) |
+            User.id.in_(
+                db.query(OrganizationMembership.user_id).filter(OrganizationMembership.organization_id == int(selected_org_id))
+            )
+        )
 
     users = query.order_by(User.email).all()
     organizations = db.query(Organization).order_by(Organization.name).all()
@@ -7656,6 +7685,113 @@ async def superadmin_user_delete(user_id: int, request: Request, db: Session = D
     import urllib.parse
     encoded_email = urllib.parse.quote(email_to_delete)
     return RedirectResponse(f"/superadmin/users?saved=deleted&email={encoded_email}", 302)
+
+
+@app.get("/superadmin/users/{user_id}/edit", response_class=HTMLResponse)
+async def superadmin_user_edit_get(user_id: int, request: Request, db: Session = Depends(get_db)):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    if request.session.get("user_role") != "superadmin":
+        return RedirectResponse("/", 302)
+
+    from app.models.auth import User, Role, OrganizationMembership
+    from app.models.account import Organization
+    from sqlalchemy.orm import joinedload
+
+    user = db.query(User).options(
+        joinedload(User.organization),
+        joinedload(User.memberships).joinedload(OrganizationMembership.organization)
+    ).filter(User.id == user_id).first()
+    if not user:
+        return RedirectResponse("/superadmin/users?error=User+not+found", 302)
+
+    organizations = db.query(Organization).order_by(Organization.name).all()
+    roles = db.query(Role).order_by(Role.name).all()
+
+    ctx = _global(request, db)
+    ctx.update({
+        "u": user,
+        "organizations": organizations,
+        "roles": roles,
+        "user_org_ids": user.organization_ids,
+        "saved": request.query_params.get("saved", ""),
+        "error": request.query_params.get("error", ""),
+    })
+    return templates.TemplateResponse("superadmin/user_edit.html", ctx)
+
+
+@app.post("/superadmin/users/{user_id}/edit")
+async def superadmin_user_edit_post(
+    user_id: int,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    if not _auth(request):
+        return RedirectResponse("/login", 302)
+    if request.session.get("user_role") != "superadmin":
+        return RedirectResponse("/", 302)
+
+    from app.models.auth import User, Role, OrganizationMembership
+    from app.models.audit import AuditLog, AuditAction
+    from app.services.membership import add_user_to_org
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return RedirectResponse("/superadmin/users?error=User+not+found", 302)
+
+    form_data = await request.form()
+    name = form_data.get("name", "").strip()
+    email = form_data.get("email", "").strip().lower()
+    role_id = int(form_data.get("role_id"))
+    organization_id = int(form_data.get("organization_id"))
+    org_ids = [int(x) for x in form_data.getlist("org_ids")]
+    is_active = form_data.get("is_active") == "on"
+
+    if not name or not email:
+        return RedirectResponse(f"/superadmin/users/{user_id}/edit?error=Name+and+Email+are+required", 302)
+
+    # Validate email uniqueness (excluding current user)
+    existing_other = db.query(User).filter(User.email == email, User.id != user_id).first()
+    if existing_other:
+        return RedirectResponse(f"/superadmin/users/{user_id}/edit?error=Email+already+in+use", 302)
+
+    # Update basic details
+    user.name = name
+    user.email = email
+    user.is_active = is_active
+
+    # Update role
+    role = db.query(Role).filter(Role.id == role_id).first()
+    if role:
+        user.roles = [role]
+
+    # Sync memberships
+    all_checked_org_ids = set(org_ids)
+    all_checked_org_ids.add(organization_id)
+
+    # Add/update memberships for checked orgs
+    for oid in all_checked_org_ids:
+        is_default = (oid == organization_id)
+        add_user_to_org(db, user, oid, role=role, is_default=is_default)
+
+    # Remove memberships for unchecked orgs
+    for m in list(user.memberships):
+        if m.organization_id not in all_checked_org_ids:
+            db.delete(m)
+            user.memberships.remove(m)
+
+    # Update default organization_id
+    user.organization_id = organization_id
+
+    db.add(AuditLog(
+        action=AuditAction.CONFIG_CHANGED,
+        actor=request.session.get("email", "superadmin"),
+        organization_id=None,
+        message=f"Super Admin updated user {user.email}: name={user.name}, active={user.is_active}, role={role.name if role else 'None'}, home_org={organization_id}, org_access={list(all_checked_org_ids)}"
+    ))
+    db.commit()
+
+    return RedirectResponse(f"/superadmin/users/{user_id}/edit?saved=1", 302)
 
 
 # ===========================================================================
