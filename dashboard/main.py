@@ -660,13 +660,16 @@ def _global(request: Request, db: Session) -> dict:
     # User display info for sidebar footer
     user_email = request.session.get("email", "")
     user_name  = ""
-    if user_role != "superadmin" and request.session.get("user_id"):
+    if request.session.get("user_id"):
         from app.models.auth import User
         u = db.query(User).filter(User.id == request.session.get("user_id")).first()
         if u:
             user_name = u.name or ""
     if not user_name:
-        user_name = "Super Admin" if user_role == "superadmin" else (user_email.split("@")[0] if user_email else "User")
+        # No DB user row (e.g. the pure .env-credential superadmin login) — fall
+        # back to the email prefix so the footer shows an identity, not the role
+        # (the role/org already renders on the line below, see base.html:810).
+        user_name = user_email.split("@")[0] if user_email else ("Super Admin" if user_role == "superadmin" else "User")
 
     user_id = request.session.get("user_id")
 
