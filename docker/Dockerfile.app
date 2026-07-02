@@ -21,10 +21,10 @@ COPY tests/ ./tests/
 COPY pytest.ini ./pytest.ini
 COPY .env.example .env.example
 
-# Create non-root user
-RUN useradd -m -u 1000 vcpilot && chown -R vcpilot:vcpilot /app
-USER vcpilot
-
+# Runs as root: app code is bind-mounted from the host at runtime (see
+# docker-compose.yml), so a non-root uid would need to match the host's file
+# ownership, which varies by machine (breaks on NAS setups where the repo is
+# owned by a different uid/gid). Not a multi-tenant host, so no isolation lost.
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
