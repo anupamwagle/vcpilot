@@ -57,6 +57,15 @@ def _seed_regime(db, org_id, regime="BULL", exchange_key="ASX"):
 def _patch_market_open(monkeypatch, is_open=True):
     import app.tasks.trading as t
     monkeypatch.setattr(t, "market_is_open_now", lambda exchange_key: is_open)
+    # Fix wall-clock time to a safe mid-session moment (11:30am Sydney) so the
+    # opening-noise guard (CLAUDE.md #40 — skips the first N minutes after the
+    # 10:00am ASX open) never makes this test flaky depending on when it
+    # actually runs in the real world. Tests targeting the guard itself patch
+    # get_current_time separately to a time inside the window.
+    import pytz
+    from datetime import datetime as _datetime
+    fixed = pytz.timezone("Australia/Sydney").localize(_datetime(2026, 7, 1, 11, 30, 0))
+    monkeypatch.setattr("app.utils.time_helper.get_current_time", lambda: fixed)
 
 
 def _patch_trading_paused(monkeypatch, paused=False):
@@ -546,3 +555,188 @@ def test_entry_check_available_capital_not_double_counted_across_signals(db_sess
         f"Both signals should open positions — available capital must not be "
         f"double-counted across signals processed in the same run. Opened: {tickers_opened}"
     )
+
+
+# ---------------------------------------------------------------------------
+# T9 safety rails (CLAUDE.md #40): overlap lock, kill switch, daily loss halt,
+# opening-noise guard
+# ---------------------------------------------------------------------------
+
+def test_entry_check_overlap_lock_skips_when_already_running(db_session, org_and_account, monkeypatch):
+    """A run that can't acquire the per-org overlap lock must touch nothing —
+    prevents two overlapping runs from double-spending capital / double-submitting."""
+    import app.tasks.trading as t
+    from app.tasks.trading import check_entry_triggers
+    org, account = org_and_account
+    sig = _make_signal(db_session, org.id, account.id, pivot=37.0)
+
+    _patch_market_open(monkeypatch, is_open=True)
+    _patch_trading_paused(monkeypatch, paused=False)
+    _seed_regime(db_session, org.id, "BULL")
+    _patch_price_data(monkeypatch, close=37.5)
+    _patch_rule_engine(monkeypatch, breakout_passes=True)
+    _patch_sizing(monkeypatch)
+    _patch_broker_simulate(monkeypatch)
+    _patch_notifier(monkeypatch)
+    monkeypatch.setattr(t, "_acquire_org_lock", lambda lock_key, ttl=240: False)
+
+    check_entry_triggers.run(exchange_key="ASX")
+
+    positions = db_session.query(Position).filter(
+        Position.organization_id == org.id, Position.ticker == "WOW.AX",
+    ).all()
+    assert not positions, "Must not process any signal when the overlap lock can't be acquired"
+
+    db_session.expire(sig)
+    sig_refreshed = db_session.query(Signal).get(sig.id)
+    assert sig_refreshed.status == SignalStatus.PENDING
+
+
+def test_entry_check_kill_switch_skips_all_signals(db_session, org_and_account, monkeypatch):
+    """The kill switch must block entries even harder than PAUSE — checked
+    before anything else in the per-org loop."""
+    from app.tasks.trading import check_entry_triggers
+    org, account = org_and_account
+    sig = _make_signal(db_session, org.id, account.id, pivot=37.0)
+    db_session.add(SystemConfig(key="trading_kill_switch", value="true",
+                                organization_id=org.id, label="Kill Switch", group="trading"))
+    db_session.commit()
+
+    _patch_market_open(monkeypatch, is_open=True)
+    _patch_trading_paused(monkeypatch, paused=False)
+    _seed_regime(db_session, org.id, "BULL")
+    _patch_price_data(monkeypatch, close=37.5)
+    _patch_rule_engine(monkeypatch, breakout_passes=True)
+    _patch_sizing(monkeypatch)
+    _patch_broker_simulate(monkeypatch)
+    _patch_notifier(monkeypatch)
+
+    check_entry_triggers.run(exchange_key="ASX")
+
+    positions = db_session.query(Position).filter(
+        Position.organization_id == org.id, Position.ticker == "WOW.AX",
+    ).all()
+    assert not positions, "Kill switch must block all new entries"
+
+    db_session.expire(sig)
+    sig_refreshed = db_session.query(Signal).get(sig.id)
+    assert sig_refreshed.status == SignalStatus.PENDING
+
+    log = db_session.query(AuditLog).filter(
+        AuditLog.ticker == "WOW.AX", AuditLog.message.like("%kill switch%"),
+    ).first()
+    assert log is not None
+
+
+def test_entry_check_daily_loss_halt_skips_all_signals(db_session, org_and_account, monkeypatch):
+    """Today's realised losses breaching max_daily_loss_aud must halt new
+    entries for the rest of the day and alert once."""
+    from unittest.mock import MagicMock
+    import app.tasks.trading as t
+    from app.tasks.trading import check_entry_triggers
+    from app.models.trade import Trade, ExitReason
+    org, account = org_and_account
+    sig = _make_signal(db_session, org.id, account.id, pivot=37.0)
+    db_session.add(SystemConfig(key="max_daily_loss_aud", value="100",
+                                organization_id=org.id, label="Max Daily Loss", group="trading"))
+    db_session.add(Trade(
+        ticker="XYZ.AX", exchange_key="ASX", asset_type="EQUITY", currency="AUD",
+        account_id=account.id, organization_id=org.id,
+        entry_date=date(2026, 7, 1), exit_date=date(2026, 7, 1), hold_days=0,
+        entry_price=10.0, exit_price=8.0, qty=100,
+        gross_pnl_aud=-200.0, net_pnl_aud=-200.0, pnl_pct=-0.20,
+        initial_stop=9.0, exit_reason=ExitReason.STOP_LOSS, is_paper=True,
+    ))
+    db_session.commit()
+
+    _patch_market_open(monkeypatch, is_open=True)   # fixes "today" to 2026-07-01
+    _patch_trading_paused(monkeypatch, paused=False)
+    _seed_regime(db_session, org.id, "BULL")
+    _patch_price_data(monkeypatch, close=37.5)
+    _patch_rule_engine(monkeypatch, breakout_passes=True)
+    _patch_sizing(monkeypatch)
+    _patch_broker_simulate(monkeypatch)
+    mock_notifier = MagicMock()
+    monkeypatch.setattr(t, "get_notifier", lambda organization_id=None: mock_notifier)
+
+    check_entry_triggers.run(exchange_key="ASX")
+
+    positions = db_session.query(Position).filter(
+        Position.organization_id == org.id, Position.ticker == "WOW.AX",
+    ).all()
+    assert not positions, "Max daily loss halt must block new entries"
+
+    db_session.expire(sig)
+    sig_refreshed = db_session.query(Signal).get(sig.id)
+    assert sig_refreshed.status == SignalStatus.PENDING
+
+    log = db_session.query(AuditLog).filter(
+        AuditLog.ticker == "WOW.AX", AuditLog.message.like("%daily loss halt%"),
+    ).first()
+    assert log is not None
+    mock_notifier.send.assert_called_once()
+
+
+def test_entry_check_opening_noise_guard_skips_near_open(db_session, org_and_account, monkeypatch):
+    """The staggered ASX opening auction (10:00-10:09) can confirm false
+    breakouts on partial-day volume — must be skipped by default."""
+    import pytz
+    from datetime import datetime as _datetime
+    from app.tasks.trading import check_entry_triggers
+    org, account = org_and_account
+    sig = _make_signal(db_session, org.id, account.id, pivot=37.0)
+
+    _patch_market_open(monkeypatch, is_open=True)
+    _patch_trading_paused(monkeypatch, paused=False)
+    _seed_regime(db_session, org.id, "BULL")
+    _patch_price_data(monkeypatch, close=37.5)
+    _patch_rule_engine(monkeypatch, breakout_passes=True)
+    _patch_sizing(monkeypatch)
+    _patch_broker_simulate(monkeypatch)
+    _patch_notifier(monkeypatch)
+    near_open = pytz.timezone("Australia/Sydney").localize(_datetime(2026, 7, 1, 10, 5, 0))
+    monkeypatch.setattr("app.utils.time_helper.get_current_time", lambda: near_open)
+
+    check_entry_triggers.run(exchange_key="ASX")
+
+    positions = db_session.query(Position).filter(
+        Position.organization_id == org.id, Position.ticker == "WOW.AX",
+    ).all()
+    assert not positions, "Must not process signals within the opening-noise window"
+
+    db_session.expire(sig)
+    sig_refreshed = db_session.query(Signal).get(sig.id)
+    assert sig_refreshed.status == SignalStatus.PENDING
+
+    log = db_session.query(AuditLog).filter(
+        AuditLog.ticker == "WOW.AX", AuditLog.message.like("%opening-noise%"),
+    ).first()
+    assert log is not None
+
+
+def test_entry_check_opening_noise_guard_allows_outside_window(db_session, org_and_account, monkeypatch):
+    """Regression guard: outside the opening-noise window, a confirmed
+    breakout must still proceed normally."""
+    import pytz
+    from datetime import datetime as _datetime
+    from app.tasks.trading import check_entry_triggers
+    org, account = org_and_account
+    _make_signal(db_session, org.id, account.id, pivot=37.0)
+
+    _patch_market_open(monkeypatch, is_open=True)
+    _patch_trading_paused(monkeypatch, paused=False)
+    _seed_regime(db_session, org.id, "BULL")
+    _patch_price_data(monkeypatch, close=37.5)
+    _patch_rule_engine(monkeypatch, breakout_passes=True)
+    _patch_sizing(monkeypatch)
+    _patch_broker_simulate(monkeypatch)
+    _patch_notifier(monkeypatch)
+    outside_window = pytz.timezone("Australia/Sydney").localize(_datetime(2026, 7, 1, 10, 15, 0))
+    monkeypatch.setattr("app.utils.time_helper.get_current_time", lambda: outside_window)
+
+    check_entry_triggers.run(exchange_key="ASX")
+
+    positions = db_session.query(Position).filter(
+        Position.organization_id == org.id, Position.ticker == "WOW.AX",
+    ).all()
+    assert positions, "Outside the opening-noise window, a confirmed breakout must still open a position"

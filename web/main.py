@@ -6239,6 +6239,16 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
                                    "hint_extra": "Automated equity breakout entries use a BUY STOP-LIMIT order: the limit "
                                                  "sits this % above the stop trigger (max of the pivot and confirmed "
                                                  "breakout price), capping slippage instead of chasing an extended stock."},
+        "trading_kill_switch":   {"hint_extra": "Emergency halt: blocks ALL new entries immediately and cancels every "
+                                                 "working entry order. Blunter than Trading Paused above (which only "
+                                                 "blocks new entries going forward). Also flippable via Telegram: "
+                                                 "KILLSWITCH ON | KILLSWITCH OFF."},
+        "max_daily_loss_aud":    {"control": "number", "prefix": "A$", "placeholder": "0 (disabled)",
+                                  "hint_extra": "Halts new entries for the rest of the day once today's realised + "
+                                                "unrealised P&L breaches -this amount. Leave at 0 to disable."},
+        "entry_skip_open_minutes": {"control": "number", "placeholder": "10", "step": "1",
+                                    "hint_extra": "Skip ASX entry checks for this many minutes after the 10:00am open — "
+                                                  "the staggered opening auction can confirm false breakouts on partial-day volume."},
         # Crypto
         "crypto_exchange_key":   {"control": "crypto_exchange_select",
                                   "hint_extra": "Active crypto exchange. Must also set API key/secret below. "

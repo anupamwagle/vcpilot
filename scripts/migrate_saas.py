@@ -435,6 +435,9 @@ def migrate():
             ("working_capital_currency", "AUD", "STRING", "Working Capital Currency", "Currency of the working capital (e.g. AUD, USD, USDT, BNB)", "general", False),
             ("weekly_injection_aud", "0", "FLOAT", "Weekly Capital Injection (AUD)", "Amount of capital added to the account each week. Used for compounding position sizing calculations.", "risk", False),
             ("entry_limit_buffer_pct", "1.0", "FLOAT", "Entry Limit Buffer %", "How far above the stop trigger the limit sits on the automated BUY STOP-LIMIT breakout entry — caps slippage instead of chasing", "trading", False),
+            ("trading_kill_switch", "false", "BOOLEAN", "Kill Switch", "Emergency halt: blocks ALL new entries immediately and cancels every working entry order. Flip via Telegram KILLSWITCH ON|OFF or here.", "trading", False),
+            ("max_daily_loss_aud", "0", "FLOAT", "Max Daily Loss (AUD)", "Halt new entries for the day once today's realised+unrealised P&L breaches -this amount. 0 = disabled.", "trading", False),
+            ("entry_skip_open_minutes", "10", "FLOAT", "Skip Entries After Open (min)", "Skip ASX entry checks for this many minutes after the 10:00am open — the staggered opening auction can confirm false breakouts on partial-day volume.", "trading", False),
             ("org_timezone", "Australia/Sydney", "STRING", "Display Timezone",
              "IANA timezone for displaying timestamps (e.g. UTC, Australia/Sydney). "
              "Beat schedules always run on AEST since ASX is in Sydney.", "general", False),

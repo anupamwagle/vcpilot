@@ -19,6 +19,9 @@ Supported commands (case-insensitive):
   UNSKIP <TICKER>     — Restore a skipped signal back to PENDING
   EXIT <TICKER>       — Emergency close an open position (next open)
   STOP <TICKER> <PRICE> — Update stop loss for a position
+  KILLSWITCH ON|OFF   — Emergency halt: blocks ALL new entries immediately and
+                        cancels every working entry order (blunter than PAUSE,
+                        which only blocks new entries going forward)
   RULE <RULE_ID> ON|OFF — Toggle a rule globally
   CONFIG <KEY> <VALUE>  — Update a system config value
   HELP                — List all commands
@@ -81,6 +84,7 @@ class AgentCommandHandler:
             "UNSKIP":    self.cmd_unskip,
             "EXIT":      self.cmd_exit,
             "STOP":      self.cmd_stop,
+            "KILLSWITCH": self.cmd_killswitch,
             "RULE":      self.cmd_rule,
             "CONFIG":    self.cmd_config,
             "HELP":      self.cmd_help,
@@ -257,6 +261,59 @@ class AgentCommandHandler:
         self._set_config("trading_paused", "false", "agent")
         self._audit(AuditAction.TRADING_RESUMED)
         return "▶️ Trading RESUMED. System will process new signals."
+
+    def cmd_killswitch(self, args) -> str:
+        """
+        T9 / CLAUDE.md #40: blunter and faster than PAUSE. PAUSE only stops
+        NEW entries from being placed going forward; the kill switch also
+        cancels every already-working entry order immediately, so nothing
+        can still fill after the switch is flipped.
+        """
+        if not args or args[0].upper() not in ("ON", "OFF"):
+            return "Usage: KILLSWITCH ON|OFF"
+        state = args[0].upper()
+        if state == "ON":
+            self._set_config("trading_kill_switch", "true", "agent")
+            self._audit(AuditAction.CONFIG_CHANGED,
+                       detail={"key": "trading_kill_switch", "value": "true", "source": "telegram"})
+            cancelled_note = self._cancel_working_entry_orders()
+            return f"🛑 *KILL SWITCH ON.* No new entries will be placed.{cancelled_note}"
+        else:
+            self._set_config("trading_kill_switch", "false", "agent")
+            self._audit(AuditAction.CONFIG_CHANGED,
+                       detail={"key": "trading_kill_switch", "value": "false", "source": "telegram"})
+            return "✅ Kill switch OFF. Trading can resume normally (PAUSE/RESUME still applies separately)."
+
+    def _cancel_working_entry_orders(self) -> str:
+        """Cancel every still-working equity BUY entry order for this org.
+        Doesn't touch DB Order/Signal state directly — sync_order_status
+        detects the cancellation on its next run and reverts the signal to
+        PENDING, same as any other DAY-expiry, so there's one code path for
+        that transition rather than two."""
+        from app.models.trade import Order, OrderAction, OrderStatus
+        from app.broker.ibkr import IBKRBroker
+        with get_db() as db:
+            working = db.query(Order).filter(
+                Order.organization_id == self.organization_id,
+                Order.action == OrderAction.BUY,
+                Order.status.in_([OrderStatus.SUBMITTED, OrderStatus.PENDING, OrderStatus.PARTIAL]),
+                Order.exchange_key.in_(["ASX", "NYSE", "NASDAQ"]),
+            ).all()
+        if not working:
+            return ""
+        cancelled = 0
+        try:
+            with IBKRBroker(organization_id=self.organization_id) as broker:
+                if broker.is_connected:
+                    for order in working:
+                        try:
+                            if order.ibkr_order_id and broker.cancel_order(order.ibkr_order_id):
+                                cancelled += 1
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.warning(f"Kill switch: cancel working orders failed: {e}")
+        return f" Cancelled {cancelled} working entry order(s)." if cancelled else ""
 
     def cmd_report(self, args) -> str:
         from app.tasks.reporting import generate_daily_report
@@ -613,6 +670,7 @@ class AgentCommandHandler:
             "UNSKIP <TICKER> — Restore skipped signal\n"
             "EXIT <TICKER> — Emergency exit position\n"
             "STOP <TICKER> <PRICE> — Update stop loss\n"
+            "KILLSWITCH ON|OFF — Emergency halt: blocks all new entries + cancels working orders\n"
             "RULE <ID> ON|OFF — Toggle a rule\n"
             "CONFIG <KEY> <VAL> — Update system config\n"
             "HELP — This message"

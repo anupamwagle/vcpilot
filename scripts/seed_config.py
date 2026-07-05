@@ -21,6 +21,19 @@ SYSTEM_CONFIGS = [
     dict(key="trading_paused",       value="false",   value_type="BOOLEAN",
          label="Trading Paused",     group="trading",
          description="Pause all new trade entries globally"),
+    dict(key="trading_kill_switch",  value="false",   value_type="BOOLEAN",
+         label="Kill Switch",        group="trading",
+         description="Emergency halt: blocks ALL new entries immediately and cancels every "
+                     "working entry order. Blunter than Trading Paused, which only blocks "
+                     "new entries going forward. Flip via Telegram KILLSWITCH ON|OFF or here."),
+    dict(key="max_daily_loss_aud",   value="0",       value_type="FLOAT",
+         label="Max Daily Loss (AUD)", group="trading",
+         description="Halt new entries for the day once today's realised+unrealised P&L "
+                     "breaches -this amount. 0 = disabled (default)."),
+    dict(key="entry_skip_open_minutes", value="10",   value_type="FLOAT",
+         label="Skip Entries After Open (min)", group="trading",
+         description="Skip ASX entry checks for this many minutes after the 10:00am open — "
+                     "the staggered opening auction can confirm false breakouts on partial-day volume."),
     dict(key="last_market_regime",   value="UNKNOWN", value_type="STRING",
          label="Last Market Regime", group="system"),
     dict(key="last_regime_check",    value="",        value_type="STRING",

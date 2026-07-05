@@ -178,6 +178,100 @@ def test_cmd_resume_clears_pause(db_session, org_and_account):
     assert cfg.value == "false"
 
 
+# --- cmd_killswitch (T9 / CLAUDE.md #40) ---
+
+class _NoOrdersBroker:
+    def __init__(self, organization_id=None):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        pass
+
+    @property
+    def is_connected(self):
+        return True
+
+    def cancel_order(self, ibkr_order_id):
+        return True
+
+
+def test_cmd_killswitch_requires_on_off_arg(db_session, org_and_account):
+    org, _ = org_and_account
+    h, _ = _make_handler(db_session, org)
+    result = h.cmd_killswitch([])
+    assert "Usage" in result
+    result2 = h.cmd_killswitch(["MAYBE"])
+    assert "Usage" in result2
+
+
+def test_cmd_killswitch_on_sets_config(db_session, org_and_account, monkeypatch):
+    from app.models.config import SystemConfig
+    org, _ = org_and_account
+    db_session.add(SystemConfig(
+        key="trading_kill_switch", value="false", label="Kill Switch", group="trading",
+        organization_id=org.id,
+    ))
+    db_session.commit()
+    monkeypatch.setattr("app.broker.ibkr.IBKRBroker", _NoOrdersBroker)
+
+    h, _ = _make_handler(db_session, org)
+    result = h.cmd_killswitch(["ON"])
+    assert "KILL SWITCH ON" in result
+
+    db_session.expire_all()
+    cfg = db_session.query(SystemConfig).filter(
+        SystemConfig.key == "trading_kill_switch", SystemConfig.organization_id == org.id,
+    ).first()
+    assert cfg.value == "true"
+
+
+def test_cmd_killswitch_off_clears_config(db_session, org_and_account):
+    from app.models.config import SystemConfig
+    org, _ = org_and_account
+    db_session.add(SystemConfig(
+        key="trading_kill_switch", value="true", label="Kill Switch", group="trading",
+        organization_id=org.id,
+    ))
+    db_session.commit()
+    h, _ = _make_handler(db_session, org)
+    result = h.cmd_killswitch(["OFF"])
+    assert "OFF" in result
+    db_session.expire_all()
+    cfg = db_session.query(SystemConfig).filter(
+        SystemConfig.key == "trading_kill_switch", SystemConfig.organization_id == org.id,
+    ).first()
+    assert cfg.value == "false"
+
+
+def test_cmd_killswitch_on_cancels_working_entry_orders(db_session, org_and_account, monkeypatch):
+    from datetime import date
+    from app.models.config import SystemConfig
+    from app.models.trade import Order, OrderAction, OrderType, OrderStatus
+
+    org, account = org_and_account
+    db_session.add(SystemConfig(
+        key="trading_kill_switch", value="false", label="Kill Switch", group="trading",
+        organization_id=org.id,
+    ))
+    order = Order(
+        ticker="WOW.AX", exchange_key="ASX", asset_type="EQUITY", currency="AUD",
+        account_id=account.id, organization_id=org.id, action=OrderAction.BUY,
+        order_type=OrderType.BRACKET, status=OrderStatus.SUBMITTED,
+        qty_ordered=50, qty_filled=0, ibkr_order_id=1234, is_paper=True,
+    )
+    db_session.add(order)
+    db_session.commit()
+
+    monkeypatch.setattr("app.broker.ibkr.IBKRBroker", _NoOrdersBroker)
+
+    h, _ = _make_handler(db_session, org)
+    result = h.cmd_killswitch(["ON"])
+    assert "Cancelled 1 working entry order" in result
+
+
 # --- cmd_skip ---
 
 def test_cmd_skip_no_args(db_session, org_and_account):

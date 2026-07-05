@@ -32,6 +32,70 @@ def _is_trading_paused(org_id: int) -> bool:
         return cfg and cfg.value.lower() == "true"
 
 
+def _get_org_config_value(org_id: int, key: str) -> str | None:
+    with get_db() as db:
+        cfg = db.query(SystemConfig).filter(
+            SystemConfig.key == key, SystemConfig.organization_id == org_id
+        ).first()
+        return cfg.value if cfg else None
+
+
+def _is_kill_switch_on(org_id: int) -> bool:
+    val = _get_org_config_value(org_id, "trading_kill_switch")
+    return bool(val) and val.lower() == "true"
+
+
+def _get_pending_signals_for_exchange(db, org_id: int, exchange_key: str):
+    if exchange_key == "CRYPTO":
+        return db.query(Signal).filter(
+            Signal.organization_id == org_id, Signal.status == SignalStatus.PENDING,
+            Signal.asset_type == "CRYPTO",
+        ).all()
+    elif exchange_key in ("NYSE", "NASDAQ", "US"):
+        return db.query(Signal).filter(
+            Signal.organization_id == org_id, Signal.status == SignalStatus.PENDING,
+            Signal.exchange_key.in_(["NYSE", "NASDAQ"]),
+        ).all()
+    else:
+        return db.query(Signal).filter(
+            Signal.organization_id == org_id, Signal.status == SignalStatus.PENDING,
+            Signal.exchange_key == exchange_key,
+        ).all()
+
+
+def _audit_skip_all_pending(org_id: int, exchange_key: str, message: str, result_tag: str):
+    """Write a per-signal skip AuditLog for every PENDING signal in scope, so
+    the Signals/Data Log UI shows why nothing happened this run."""
+    try:
+        with get_db() as _db:
+            for sig in _get_pending_signals_for_exchange(_db, org_id, exchange_key):
+                _db.add(AuditLog(
+                    action=AuditAction.TASK_RUN, organization_id=org_id, ticker=sig.ticker,
+                    message=message, detail={"signal_id": sig.id, "result": result_tag},
+                ))
+            _db.commit()
+    except Exception as e:
+        logger.error(f"Failed to log skip ({result_tag}) for org {org_id}: {e}")
+
+
+def _todays_pnl_aud(org_id: int) -> float:
+    """Sum today's realised (closed Trade rows) + unrealised (open Position)
+    P&L for an org, in AUD — used by the max-daily-loss halt."""
+    from app.utils.time_helper import get_current_date
+    today = get_current_date()
+    with get_db() as db:
+        realised = db.query(Trade).filter(
+            Trade.organization_id == org_id, Trade.exit_date == today,
+        ).all()
+        realised_pnl = sum(float(t.net_pnl_aud or 0) for t in realised)
+
+        open_positions = db.query(Position).filter(
+            Position.organization_id == org_id, Position.status == TradeStatus.OPEN,
+        ).all()
+        unrealised_pnl = sum(float(p.unrealised_pnl or 0) for p in open_positions)
+    return realised_pnl + unrealised_pnl
+
+
 @app.task(name="app.tasks.trading.check_entry_triggers", bind=True)
 def check_entry_triggers(self, exchange_key: str = "ASX"):
     """
@@ -79,40 +143,96 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
 
     for org in orgs:
         today = get_current_date()
+
+        # Overlap lock (T9 / CLAUDE.md #40): with the available-capital math in
+        # this task, two overlapping runs for the same org+exchange (a slow run
+        # still going when the next 5-min tick fires) could double-spend
+        # capital or double-submit orders. Fails open on Redis outage.
+        if not _acquire_org_lock(f"check_entry_triggers_lock:{org.id}:{exchange_key}"):
+            logger.debug(f"check_entry_triggers: org {org.id} [{exchange_key}] already running — skipping")
+            continue
+
+        if _is_kill_switch_on(org.id):
+            logger.warning(f"Kill switch ON for Org '{org.name}' — skipping entry check")
+            _audit_skip_all_pending(
+                org.id, exchange_key,
+                f"[{exchange_key}] Entry check: skipped — trading kill switch is ON for this organization",
+                "skipped_kill_switch",
+            )
+            continue
+
         if _is_trading_paused(org.id):
             logger.debug(f"Trading paused for Org '{org.name}' — skipping entry check")
-            try:
-                with get_db() as _db:
-                    if exchange_key == "CRYPTO":
-                        pending_signals = _db.query(Signal).filter(
-                            Signal.organization_id == org.id,
-                            Signal.status == SignalStatus.PENDING,
-                            Signal.asset_type == "CRYPTO"
-                        ).all()
-                    elif exchange_key in ("NYSE", "NASDAQ", "US"):
-                        pending_signals = _db.query(Signal).filter(
-                            Signal.organization_id == org.id,
-                            Signal.status == SignalStatus.PENDING,
-                            Signal.exchange_key.in_(["NYSE", "NASDAQ"])
-                        ).all()
-                    else:
-                        pending_signals = _db.query(Signal).filter(
-                            Signal.organization_id == org.id,
-                            Signal.status == SignalStatus.PENDING,
-                            Signal.exchange_key == exchange_key
-                        ).all()
-                    for sig in pending_signals:
-                        _db.add(AuditLog(
-                            action=AuditAction.TASK_RUN,
-                            organization_id=org.id,
-                            ticker=sig.ticker,
-                            message=f"[{exchange_key}] Entry check: skipped because trading is paused for this organization",
-                            detail={"signal_id": sig.id, "result": "skipped_paused"}
-                        ))
-                    _db.commit()
-            except Exception as e:
-                logger.error(f"Failed to log paused check for {org.name}: {e}")
+            _audit_skip_all_pending(
+                org.id, exchange_key,
+                f"[{exchange_key}] Entry check: skipped because trading is paused for this organization",
+                "skipped_paused",
+            )
             continue
+
+        _max_daily_loss = _get_org_config_value(org.id, "max_daily_loss_aud")
+        if _max_daily_loss:
+            try:
+                _max_daily_loss_f = float(_max_daily_loss)
+            except (TypeError, ValueError):
+                _max_daily_loss_f = 0.0
+            if _max_daily_loss_f > 0:
+                _pnl_today = _todays_pnl_aud(org.id)
+                if _pnl_today <= -_max_daily_loss_f:
+                    logger.warning(f"Max daily loss halt for Org '{org.name}': P&L ${_pnl_today:.2f} <= -${_max_daily_loss_f:.2f}")
+                    # Telegram alert throttled to once per 6h — the halt re-fires this
+                    # same skip on every 5-min tick for the rest of the day otherwise.
+                    from datetime import timedelta as _td
+                    with get_db() as _halt_db:
+                        _already_alerted = _halt_db.query(AuditLog).filter(
+                            AuditLog.organization_id == org.id,
+                            AuditLog.message.like("%daily loss halt%ALERT%"),
+                            AuditLog.created_at >= _dt.utcnow() - _td(hours=6),
+                        ).first()
+                        if not _already_alerted:
+                            _halt_db.add(AuditLog(
+                                action=AuditAction.TASK_RUN, organization_id=org.id,
+                                message=(f"[{exchange_key}] 🛑 ALERT: max daily loss halt triggered — "
+                                         f"today's P&L ${_pnl_today:+.2f} breached -${_max_daily_loss_f:.2f} limit"),
+                            ))
+                        _halt_db.commit()
+                    if not _already_alerted:
+                        try:
+                            notifier = get_notifier(organization_id=org.id)
+                            notifier.send(
+                                f"🛑 *Max Daily Loss Halt*\n"
+                                f"Today's P&L: ${_pnl_today:+.2f} (limit: -${_max_daily_loss_f:.2f})\n"
+                                f"New entries are halted for the rest of the day."
+                            )
+                        except Exception as _ne:
+                            logger.error(f"Failed to send daily loss halt alert for {org.name}: {_ne}")
+                    _audit_skip_all_pending(
+                        org.id, exchange_key,
+                        (f"[{exchange_key}] Entry check: skipped — max daily loss halt "
+                         f"(today's P&L ${_pnl_today:+.2f} breached -${_max_daily_loss_f:.2f} limit)"),
+                        "skipped_daily_loss_halt",
+                    )
+                    continue
+
+        # Opening-noise guard (ASX only): the 10:00–10:09 staggered auction can
+        # confirm "breakouts" on auction prints and partial-day volume.
+        if exchange_key == "ASX":
+            _skip_open_min_raw = _get_org_config_value(org.id, "entry_skip_open_minutes")
+            try:
+                _skip_open_min = float(_skip_open_min_raw) if _skip_open_min_raw else 10.0
+            except (TypeError, ValueError):
+                _skip_open_min = 10.0
+            if _skip_open_min > 0:
+                _mins_since_open = (now_dt.hour - 10) * 60 + now_dt.minute
+                if 0 <= _mins_since_open < _skip_open_min:
+                    logger.debug(f"Entry check: within opening-noise window ({_mins_since_open}min since open) — skipping org {org.id}")
+                    _audit_skip_all_pending(
+                        org.id, exchange_key,
+                        (f"[{exchange_key}] Entry check: skipped — within the opening-noise window "
+                         f"({_mins_since_open} min since 10:00 open, guard={_skip_open_min:.0f} min)"),
+                        "skipped_opening_noise",
+                    )
+                    continue
 
         engine   = RuleEngine(organization_id=org.id, tier=org.tier.value)
         notifier = get_notifier(organization_id=org.id)
@@ -1153,6 +1273,14 @@ def sync_stop_orders(self):
         orgs = db.query(Organization).filter(Organization.is_active == True).all()
 
     for org in orgs:
+        # Overlap lock (T9 / CLAUDE.md #40): this task is scheduled every 5 min
+        # for crypto — a slow run still going when the next tick fires could
+        # double-submit a market sell or double-process a stop. Fails open on
+        # Redis outage.
+        if not _acquire_org_lock(f"sync_stop_orders_lock:{org.id}"):
+            logger.debug(f"sync_stop_orders: org {org.id} already running — skipping")
+            continue
+
         with get_db() as db:
             open_positions = db.query(Position).filter(
                 Position.organization_id == org.id,

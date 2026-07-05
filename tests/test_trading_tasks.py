@@ -242,6 +242,28 @@ def test_sync_stop_orders_with_crypto_position(db_session, org_and_account, open
     sync_stop_orders.run()
 
 
+def test_sync_stop_orders_overlap_lock_skips_processing(db_session, org_and_account, open_crypto_position, monkeypatch):
+    """CLAUDE.md #40: when the per-org overlap lock can't be acquired (another
+    run is still in progress), this run must touch nothing for that org."""
+    from app.tasks.trading import sync_stop_orders
+    from app.models.trade import Position, TradeStatus
+
+    monkeypatch.setattr(
+        "app.tasks.trading.get_intraday_price",
+        lambda *a, **kw: {"ok": True, "price": 0.05, "data_source": "test",  # below stop (0.16)
+                           "delay_mins": 0, "volume": 1_000_000, "bar_timestamp": None}
+    )
+    monkeypatch.setattr("app.tasks.trading.get_notifier", lambda **kw: _mock_notifier())
+    monkeypatch.setattr("app.notifications.get_notifier", lambda **kw: _mock_notifier())
+    monkeypatch.setattr("app.tasks.trading._acquire_org_lock", lambda lock_key, ttl=240: False)
+
+    sync_stop_orders.run()
+
+    db_session.expire_all()
+    pos = db_session.query(Position).filter_by(id=open_crypto_position.id).first()
+    assert pos.status == TradeStatus.OPEN, "Must not process the position when the overlap lock can't be acquired"
+
+
 # ---- _is_trading_paused ----------------------------------------------------
 
 def test_is_trading_paused_false_when_no_config(db_session, org_and_account):
