@@ -429,6 +429,72 @@ def test_entry_check_breakout_confirmed_opens_position(db_session, org_and_accou
 
 
 # ---------------------------------------------------------------------------
+# Test: hard extension guard — don't chase a breakout past the max chase limit
+# ---------------------------------------------------------------------------
+
+def test_entry_check_extension_guard_skips_overextended_breakout(db_session, org_and_account, monkeypatch):
+    """
+    CLAUDE.md #39: check_breakout only validates price-vs-pivot at the moment
+    it runs; price can keep moving before submission actually happens. A hard,
+    always-applied guard re-checks live price against the pivot right before
+    order submission and refuses to chase a breakout more than the seeded
+    vcp_max_extension % (default 5%) past the pivot.
+    """
+    from app.tasks.trading import check_entry_triggers
+    org, account = org_and_account
+    sig = _make_signal(db_session, org.id, account.id, pivot=37.0)
+    _patch_market_open(monkeypatch, is_open=True)
+    _patch_trading_paused(monkeypatch, paused=False)
+    _seed_regime(db_session, org.id, "BULL")
+    _patch_price_data(monkeypatch, close=40.0)   # (40-37)/37 = 8.1% > default 5% max
+    _patch_rule_engine(monkeypatch, breakout_passes=True)
+    _patch_sizing(monkeypatch)
+    _patch_broker_simulate(monkeypatch)
+    _patch_notifier(monkeypatch)
+
+    check_entry_triggers.run(exchange_key="ASX")
+
+    positions = db_session.query(Position).filter(
+        Position.organization_id == org.id, Position.ticker == "WOW.AX",
+    ).all()
+    assert not positions, "Must not open a position when the breakout is extended past the max chase limit"
+
+    db_session.expire(sig)
+    sig_refreshed = db_session.query(Signal).get(sig.id)
+    assert sig_refreshed.status == SignalStatus.PENDING, (
+        "Signal must stay PENDING (not TRIGGERED) when skipped for being overextended"
+    )
+
+    log = db_session.query(AuditLog).filter(
+        AuditLog.ticker == "WOW.AX", AuditLog.message.like("%not chasing%"),
+    ).first()
+    assert log is not None
+
+
+def test_entry_check_extension_guard_allows_breakout_within_range(db_session, org_and_account, monkeypatch):
+    """A breakout within the max chase limit must proceed normally (regression
+    guard against the extension check being overly aggressive)."""
+    from app.tasks.trading import check_entry_triggers
+    org, account = org_and_account
+    _make_signal(db_session, org.id, account.id, pivot=37.0)
+    _patch_market_open(monkeypatch, is_open=True)
+    _patch_trading_paused(monkeypatch, paused=False)
+    _seed_regime(db_session, org.id, "BULL")
+    _patch_price_data(monkeypatch, close=38.0)   # (38-37)/37 = 2.7% < default 5% max
+    _patch_rule_engine(monkeypatch, breakout_passes=True)
+    _patch_sizing(monkeypatch)
+    _patch_broker_simulate(monkeypatch)
+    _patch_notifier(monkeypatch)
+
+    check_entry_triggers.run(exchange_key="ASX")
+
+    positions = db_session.query(Position).filter(
+        Position.organization_id == org.id, Position.ticker == "WOW.AX",
+    ).all()
+    assert positions, "A breakout within the max chase limit must still open a position"
+
+
+# ---------------------------------------------------------------------------
 # Test: available capital must not be double-counted across signals in one run
 # ---------------------------------------------------------------------------
 

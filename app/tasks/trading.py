@@ -228,6 +228,15 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
             ).first()
             base_currency = currency_cfg.value if currency_cfg else "AUD"
 
+            # Buffer above the stop trigger for the automated BUY STOP-LIMIT entry
+            # (CLAUDE.md #39) — how far above max(pivot, confirm price) the limit
+            # sits, capping slippage instead of chasing with no ceiling.
+            _buffer_cfg = db.query(SystemConfig).filter(
+                SystemConfig.key == "entry_limit_buffer_pct",
+                SystemConfig.organization_id == org.id
+            ).first()
+            entry_limit_buffer_pct = float(_buffer_cfg.value) if _buffer_cfg and _buffer_cfg.value else 1.0
+
             # Count open positions
             open_count = db.query(Position).filter(
                 Position.organization_id == org.id,
@@ -520,6 +529,31 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                     engine.clear_signal_overrides()
                     continue
 
+                # Hard extension guard (CLAUDE.md #39): don't chase a breakout that
+                # has already run too far past the pivot by the time we get here —
+                # check_breakout's own price-vs-pivot rule only validated the price
+                # at the moment it ran; price can keep moving before submission
+                # actually happens. Reads the seeded vcp_max_extension threshold
+                # fresh (not hardcoded) so an admin's change takes effect immediately.
+                _pivot_for_guard = float(signal.pivot_price) if signal.pivot_price else None
+                if _pivot_for_guard:
+                    _max_ext_pct = float(engine.threshold("vcp_max_extension") or 5.0)
+                    _pct_above_pivot = (close_price - _pivot_for_guard) / _pivot_for_guard * 100
+                    if _pct_above_pivot > _max_ext_pct:
+                        logger.info(f"Entry check: {signal.ticker} skipped — extended {_pct_above_pivot:.1f}% past pivot (max {_max_ext_pct:.0f}%)")
+                        with get_db() as _skip_db:
+                            _skip_db.add(AuditLog(
+                                action=AuditAction.TASK_RUN,
+                                organization_id=org.id,
+                                ticker=signal.ticker,
+                                message=(f"⏭ {signal.ticker}: breakout extended {_pct_above_pivot:.1f}% past pivot "
+                                         f"${_pivot_for_guard:.3f} (max {_max_ext_pct:.0f}%) — not chasing "
+                                         f"(Minervini extension rule)"),
+                                detail={"signal_id": signal.id, "result": "skipped_extended_past_pivot",
+                                        "pct_above_pivot": round(_pct_above_pivot, 2), "max_pct": _max_ext_pct},
+                            ))
+                        continue
+
                 is_crypto_asset = (signal.asset_type == "CRYPTO" or (signal.exchange_key and signal.exchange_key.startswith("CRYPTO_")))
                 # Use the signal's own currency (AUD for IR, USD for Binance/Coinbase/Kraken)
                 from app.data.fetcher import CRYPTO_AUD_EXCHANGES
@@ -700,6 +734,9 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                 else:
                     # Equity — submit a real bracket to the IBKR gateway (which is
                     # itself in paper or live mode per the org's ibkr_paper_mode).
+                    # pivot_price switches the entry leg to BUY STOP-LIMIT instead
+                    # of a plain LIMIT at the (already-passed) confirm price — see
+                    # CLAUDE.md #39 / IBKRBroker.submit_bracket_order's docstring.
                     with IBKRBroker(organization_id=org.id) as broker:
                         result = broker.submit_bracket_order(
                             ticker=signal.ticker.replace(".AX", ""),
@@ -710,6 +747,8 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                             target_price=float(signal.target_price_1 or entry_price * 1.20),
                             exchange_key=signal.exchange_key or "ASX",
                             order_ref=f"astratrade-{signal.id}",
+                            pivot_price=float(signal.pivot_price) if signal.pivot_price else None,
+                            limit_buffer_pct=entry_limit_buffer_pct,
                         )
 
                 # ── Handle broker error — log it and leave signal PENDING ───────
@@ -753,7 +792,11 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                         status=order_status,
                         qty_ordered=sizing.shares,
                         qty_filled=qty_filled,
-                        limit_price=entry_price,
+                        # For an equity STP LMT entry, result["limit_price"] is the real
+                        # working limit (trigger * (1 + entry_limit_buffer_pct)) — the
+                        # babysitter in sync_order_status compares live price against
+                        # this, not the pre-buffer confirm price.
+                        limit_price=result.get("limit_price", entry_price) if not is_crypto else entry_price,
                         stop_price=float(signal.stop_price),
                         avg_fill_price=avg_fill_price,
                         is_paper=signal_is_paper,
@@ -2276,7 +2319,50 @@ def sync_order_status(self, organization_id: int | None = None):
                                                  f"(entry order expired unfilled)"),
                                         detail={"source": "sync_order_status", "signal_id": signal.id},
                                     ))
-                        # else: still working at the broker — nothing to do yet.
+                        else:
+                            # Working-order babysitter (T2 / CLAUDE.md #39): a stop-limit
+                            # that hasn't triggered costs nothing and simply expires at the
+                            # close if the breakout fails, so a pullback is never cancelled
+                            # here — only a price that keeps running well beyond the entry's
+                            # own limit, where waiting for a fill would mean paying far more
+                            # than the Minervini "don't chase" ceiling ever intended.
+                            if order.limit_price:
+                                try:
+                                    _live = get_intraday_price(order.ticker, organization_id=org.id, asset_type="EQUITY")
+                                    if _live.get("ok") and _live.get("price"):
+                                        _max_ext_pct = float(RuleEngine(organization_id=org.id, tier=org.tier.value)
+                                                              .threshold("vcp_max_extension") or 5.0)
+                                        _cancel_above = float(order.limit_price) * (1 + _max_ext_pct / 100.0)
+                                        if float(_live["price"]) > _cancel_above:
+                                            try:
+                                                with IBKRBroker(organization_id=org.id) as _cancel_broker:
+                                                    if _cancel_broker.is_connected:
+                                                        _cancel_broker.cancel_order(order.ibkr_order_id)
+                                            except Exception as ce:
+                                                logger.warning(f"sync_order_status: cancel failed for {order.ticker}: {ce}")
+                                            order.status = OrderStatus.CANCELLED
+                                            order.cancelled_at = _dt.utcnow()
+                                            summary["cancelled"] += 1
+                                            db.add(AuditLog(
+                                                action=AuditAction.ORDER_CANCELLED, organization_id=org.id, ticker=order.ticker,
+                                                message=(f"⏹ {order.ticker}: cancelled — extended beyond buy range "
+                                                         f"(price ${_live['price']:.3f} > ${_cancel_above:.3f}); "
+                                                         f"signal re-armed"),
+                                                detail={"source": "sync_order_status", "order_id": order.id,
+                                                        "result": "cancelled_extended"},
+                                            ))
+                                            if order.signal_id:
+                                                _sig = db.query(Signal).filter(Signal.id == order.signal_id).first()
+                                                if _sig and _sig.status == SignalStatus.TRIGGERED:
+                                                    _sig.status = SignalStatus.PENDING
+                                                    db.add(AuditLog(
+                                                        action=AuditAction.TASK_RUN, organization_id=org.id, ticker=order.ticker,
+                                                        message=(f"Signal {order.ticker} reverted TRIGGERED → PENDING "
+                                                                 f"(entry order cancelled — extended beyond buy range)"),
+                                                        detail={"source": "sync_order_status", "signal_id": _sig.id},
+                                                    ))
+                                except Exception as be:
+                                    logger.debug(f"sync_order_status: babysitter check failed for {order.ticker}: {be}")
                     except Exception as oe:
                         summary["errors"] += 1
                         logger.error(f"sync_order_status: error reconciling order {order.id} ({order.ticker}): {oe}")

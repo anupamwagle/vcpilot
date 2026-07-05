@@ -35,6 +35,10 @@ SYSTEM_CONFIGS = [
     dict(key="working_capital_currency", value="AUD", value_type="STRING",
          label="Working Capital Currency", group="general",
          description="Currency of the working capital (e.g. AUD, USD, USDT, BNB)"),
+    dict(key="entry_limit_buffer_pct", value="1.0", value_type="FLOAT",
+         label="Entry Limit Buffer %", group="trading",
+         description="How far above the stop trigger the limit sits on the automated "
+                     "BUY STOP-LIMIT breakout entry — caps slippage instead of chasing"),
 
     # --- IBKR Configuration ---
     dict(key="ibkr_account", value=str(settings.ibkr_account_env), value_type="STRING",

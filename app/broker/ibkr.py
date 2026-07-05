@@ -9,7 +9,7 @@ from typing import Optional
 from loguru import logger
 
 try:
-    from ib_insync import IB, Stock, Order, LimitOrder, MarketOrder, StopOrder, BracketOrder
+    from ib_insync import IB, Stock, Order, LimitOrder, MarketOrder, StopOrder, StopLimitOrder, BracketOrder
     IB_AVAILABLE = True
     import logging
     logging.getLogger("ib_insync").setLevel(logging.CRITICAL)
@@ -305,16 +305,37 @@ class IBKRBroker:
         ticker: str,             # yfinance format: "BHP.AX", "AAPL"
         action: str,             # "BUY"
         qty: float,
-        entry_price: float,      # Limit price (native currency)
+        entry_price: float,      # Limit price (native currency); for a BUY STOP-LIMIT
+                                  # entry (pivot_price given) this is the confirmed
+                                  # breakout price used to derive the stop trigger,
+                                  # not the final limit price itself.
         stop_price: float,       # Stop loss (native currency)
         target_price: float,     # Profit target (native currency)
         exchange_key: str = "ASX",
         order_ref: str = "",
+        pivot_price: float | None = None,   # Set only for the automated breakout-entry
+                                             # path — switches the entry leg to BUY
+                                             # STOP-LIMIT (see docstring below).
+        limit_buffer_pct: float = 1.0,      # % above the stop trigger for the limit,
+                                             # only used when pivot_price is set.
     ) -> dict:
         """
-        Submit a bracket order: entry limit + stop loss + profit target.
+        Submit a bracket order: entry + stop loss + profit target.
         Exchange-aware: routes to ASX or US SMART router based on exchange_key.
         Returns dict with order details and IBKR order IDs.
+
+        Entry order type (Minervini SEPA-aligned, see CLAUDE.md #39):
+          - action == "BUY" and pivot_price given (the automated intraday breakout
+            entry path in check_entry_triggers) → BUY STOP-LIMIT. Stop trigger =
+            max(pivot_price, entry_price) — entry_price here is the already-confirmed
+            live breakout price, which can be at or above the pivot. Limit =
+            trigger × (1 + limit_buffer_pct / 100), capping slippage at roughly
+            limit_buffer_pct past the trigger. This replaces a plain LIMIT at the
+            confirm price, which sits below a still-running stock all day and dies
+            unfilled at the close, or gets filled on a breakout that's already
+            failing back through a stale limit.
+          - Otherwise (SELL exits, or any caller that doesn't pass pivot_price,
+            e.g. a manual/agent-placed entry) → unchanged plain LIMIT entry leg.
         """
         if not self.is_connected:
             return _simulate_order(ticker, action, qty, entry_price, stop_price, order_ref)
@@ -327,17 +348,37 @@ class IBKRBroker:
                 logger.error(f"Bracket order failed: {msg}")
                 return {"status": "error", "error": msg, "ticker": ticker}
 
-            e_price = self._round_to_tick(entry_price, exchange_key)
             t_price = self._round_to_tick(target_price, exchange_key)
             s_price = self._round_to_tick(stop_price, exchange_key)
+            use_stop_limit_entry = (action == "BUY" and pivot_price is not None)
+            trigger_price = None
 
-            bracket = self._ib.bracketOrder(
-                action,
-                qty,
-                limitPrice=e_price,
-                takeProfitPrice=t_price,
-                stopLossPrice=s_price,
-            )
+            if use_stop_limit_entry:
+                trigger_price = self._round_to_tick(max(pivot_price, entry_price), exchange_key)
+                e_price = self._round_to_tick(trigger_price * (1 + limit_buffer_pct / 100.0), exchange_key)
+                reverse_action = "SELL" if action == "BUY" else "BUY"
+                parent = StopLimitOrder(
+                    action, qty, lmtPrice=e_price, stopPrice=trigger_price,
+                    orderId=self._ib.client.getReqId(), transmit=False,
+                )
+                take_profit = LimitOrder(
+                    reverse_action, qty, t_price,
+                    orderId=self._ib.client.getReqId(), transmit=False, parentId=parent.orderId,
+                )
+                stop_loss = StopOrder(
+                    reverse_action, qty, s_price,
+                    orderId=self._ib.client.getReqId(), transmit=True, parentId=parent.orderId,
+                )
+                bracket = [parent, take_profit, stop_loss]
+            else:
+                e_price = self._round_to_tick(entry_price, exchange_key)
+                bracket = self._ib.bracketOrder(
+                    action,
+                    qty,
+                    limitPrice=e_price,
+                    takeProfitPrice=t_price,
+                    stopLossPrice=s_price,
+                )
 
             # IMPORTANT: keep ib_insync's transmit flags (parent=False,
             # takeProfit=False, stopLoss=True) so the whole bracket transmits
@@ -371,8 +412,9 @@ class IBKRBroker:
 
             pstatus = parent.orderStatus.status
             statuses = [(t.order.orderType, t.orderStatus.status) for t in trades]
+            trigger_note = f" trigger={trigger_price:.3f}" if trigger_price is not None else ""
             logger.info(
-                f"Bracket {ticker} {action} {qty} @ {e_price:.3f} "
+                f"Bracket {ticker} {action} {qty} @ {e_price:.3f}{trigger_note} "
                 f"stop={s_price:.3f} target={t_price:.3f} → {statuses} "
                 f"(waited {waited:.1f}s for stable status)"
             )
@@ -416,6 +458,9 @@ class IBKRBroker:
                 "stop_price": stop_price,
                 "target_price": target_price,
                 "order_status": pstatus,
+                "entry_order_type": "STP LMT" if use_stop_limit_entry else "LMT",
+                "trigger_price": trigger_price,
+                "limit_price": e_price,
                 "ibkr_parent_id": parent.order.orderId if parent else None,
                 "ibkr_parent_perm_id": getattr(parent.order, "permId", None) if parent else None,
                 "raw": [str(t) for t in trades],

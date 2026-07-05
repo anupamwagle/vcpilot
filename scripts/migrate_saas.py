@@ -434,6 +434,7 @@ def migrate():
             ("working_capital_aud", "5000.0", "FLOAT", "Working Capital (AUD)", "Working capital used for sizing and risk calculations", "general", False),
             ("working_capital_currency", "AUD", "STRING", "Working Capital Currency", "Currency of the working capital (e.g. AUD, USD, USDT, BNB)", "general", False),
             ("weekly_injection_aud", "0", "FLOAT", "Weekly Capital Injection (AUD)", "Amount of capital added to the account each week. Used for compounding position sizing calculations.", "risk", False),
+            ("entry_limit_buffer_pct", "1.0", "FLOAT", "Entry Limit Buffer %", "How far above the stop trigger the limit sits on the automated BUY STOP-LIMIT breakout entry — caps slippage instead of chasing", "trading", False),
             ("org_timezone", "Australia/Sydney", "STRING", "Display Timezone",
              "IANA timezone for displaying timestamps (e.g. UTC, Australia/Sydney). "
              "Beat schedules always run on AEST since ASX is in Sydney.", "general", False),

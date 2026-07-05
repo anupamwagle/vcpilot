@@ -6235,6 +6235,10 @@ async def admin_config(request: Request, db: Session = Depends(get_db)):
         # Risk / trading
         "weekly_injection_aud":  {"control": "number", "prefix": "A$", "placeholder": "1000",
                                   "hint_extra": "Weekly capital added to the account for position sizing calculations"},
+        "entry_limit_buffer_pct": {"control": "number", "placeholder": "1.0", "step": "0.1",
+                                   "hint_extra": "Automated equity breakout entries use a BUY STOP-LIMIT order: the limit "
+                                                 "sits this % above the stop trigger (max of the pivot and confirmed "
+                                                 "breakout price), capping slippage instead of chasing an extended stock."},
         # Crypto
         "crypto_exchange_key":   {"control": "crypto_exchange_select",
                                   "hint_extra": "Active crypto exchange. Must also set API key/secret below. "

@@ -23,6 +23,7 @@ class _FakeBroker:
     ACCOUNT = "DU123"
     OPEN_ORDERS: list[dict] = []
     EXECUTIONS: list[dict] = []
+    CANCELLED_IDS: list = []
 
     def __init__(self, organization_id=None):
         self.organization_id = organization_id
@@ -30,6 +31,13 @@ class _FakeBroker:
 
     def connect(self):
         return True
+
+    def __enter__(self):
+        self.connect()
+        return self
+
+    def __exit__(self, *a):
+        self.disconnect()
 
     @property
     def is_connected(self):
@@ -41,6 +49,10 @@ class _FakeBroker:
     def get_executions(self, days=2):
         return list(_FakeBroker.EXECUTIONS)
 
+    def cancel_order(self, ibkr_order_id):
+        _FakeBroker.CANCELLED_IDS.append(ibkr_order_id)
+        return True
+
     def disconnect(self):
         pass
 
@@ -50,6 +62,7 @@ def fake_broker(monkeypatch):
     monkeypatch.setattr(trading, "IBKRBroker", _FakeBroker)
     _FakeBroker.OPEN_ORDERS = []
     _FakeBroker.EXECUTIONS = []
+    _FakeBroker.CANCELLED_IDS = []
     return _FakeBroker
 
 
@@ -320,3 +333,76 @@ def test_orphan_position_repaired_with_real_signal_stop_and_targets(db_session, 
     assert db_session.query(AuditLog).filter(
         AuditLog.action == AuditAction.POSITION_UPDATED, AuditLog.ticker == "BHP.AX",
     ).first() is not None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Working-order babysitter (T2 / CLAUDE.md #39)
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_babysitter_cancels_order_extended_beyond_buy_range(db_session, org_and_account, fake_broker, monkeypatch):
+    """
+    A working entry order whose live price has run well beyond its own limit
+    (limit * (1 + max_extension%)) is cancelled and the signal re-armed to
+    PENDING — waiting for a fill at that point would mean paying far more than
+    the Minervini "don't chase" ceiling ever intended.
+    """
+    org, account = org_and_account
+    _set_ibkr_account(db_session, org)
+    signal = _make_signal(db_session, org.id, ticker="WOW.AX", stop=34.0, t1=44.0,
+                          status=SignalStatus.TRIGGERED)
+    order = _make_buy_order(db_session, org, account, signal, ticker="WOW.AX", qty=50, ibkr_order_id=7007)
+    order.limit_price = 37.55
+    db_session.commit()
+
+    # Still working at the broker, no fills yet.
+    fake_broker.OPEN_ORDERS = [{"ibkr_order_id": 7007, "ticker": "WOW", "status": "Submitted",
+                                "filled": 0, "remaining": 50}]
+    fake_broker.EXECUTIONS = []
+    # 40.00 > 37.55 * 1.05 (39.4275) -> well beyond the default 5% buffer past the limit.
+    monkeypatch.setattr(trading, "get_intraday_price",
+                        lambda ticker, organization_id=None, asset_type="EQUITY": {"ok": True, "price": 40.0})
+
+    trading.sync_order_status.run(organization_id=org.id)
+    db_session.expire_all()
+
+    order_row = db_session.query(Order).filter(Order.id == order.id).first()
+    assert order_row.status == OrderStatus.CANCELLED
+    assert 7007 in fake_broker.CANCELLED_IDS, "Must actually cancel the working order at the broker"
+
+    sig = db_session.query(Signal).filter(Signal.id == signal.id).first()
+    assert sig.status == SignalStatus.PENDING, "Signal must be re-armed, not left TRIGGERED with a dead order"
+
+    log = db_session.query(AuditLog).filter(
+        AuditLog.action == AuditAction.ORDER_CANCELLED, AuditLog.ticker == "WOW.AX",
+    ).first()
+    assert log is not None
+    assert "extended beyond buy range" in log.message.lower()
+
+
+def test_babysitter_leaves_working_order_alone_within_range(db_session, org_and_account, fake_broker, monkeypatch):
+    """A stop-limit that hasn't triggered yet, with price still within the
+    buy range, must be left working — never cancelled on an ordinary pullback."""
+    org, account = org_and_account
+    _set_ibkr_account(db_session, org)
+    signal = _make_signal(db_session, org.id, ticker="WOW.AX", stop=34.0, t1=44.0,
+                          status=SignalStatus.TRIGGERED)
+    order = _make_buy_order(db_session, org, account, signal, ticker="WOW.AX", qty=50, ibkr_order_id=8008)
+    order.limit_price = 37.55
+    db_session.commit()
+
+    fake_broker.OPEN_ORDERS = [{"ibkr_order_id": 8008, "ticker": "WOW", "status": "Submitted",
+                                "filled": 0, "remaining": 50}]
+    fake_broker.EXECUTIONS = []
+    # 37.00 is BELOW the limit entirely (a pullback) -> must not be cancelled.
+    monkeypatch.setattr(trading, "get_intraday_price",
+                        lambda ticker, organization_id=None, asset_type="EQUITY": {"ok": True, "price": 37.00})
+
+    trading.sync_order_status.run(organization_id=org.id)
+    db_session.expire_all()
+
+    order_row = db_session.query(Order).filter(Order.id == order.id).first()
+    assert order_row.status == OrderStatus.SUBMITTED, "Must stay working — DAY expiry/fill detection handles it otherwise"
+    assert fake_broker.CANCELLED_IDS == []
+
+    sig = db_session.query(Signal).filter(Signal.id == signal.id).first()
+    assert sig.status == SignalStatus.TRIGGERED
