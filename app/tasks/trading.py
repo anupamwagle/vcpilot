@@ -829,6 +829,7 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                 #     internal simulation if it genuinely can't connect.
                 #   Crypto testnet → internal simulation (no live exchange order)
                 #   Crypto live    → ccxt crypto broker
+                detected_paper_mode = None   # I1 (CLAUDE.md #41): set below only for the equity/IBKR path
                 if is_crypto and crypto_testnet:
                     result = {
                         "status":         "simulated",
@@ -870,6 +871,7 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                             pivot_price=float(signal.pivot_price) if signal.pivot_price else None,
                             limit_buffer_pct=entry_limit_buffer_pct,
                         )
+                        detected_paper_mode = broker.detected_paper_mode
 
                 # ── Handle broker error — log it and leave signal PENDING ───────
                 # A "error" result means the broker rejected the order (e.g.
@@ -901,6 +903,10 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                     qty_filled   = sizing.shares if is_simulated else 0
                     avg_fill_price = entry_price if is_simulated else None
                     filled_at    = _dt.utcnow() if is_simulated else None
+                    # I1 (CLAUDE.md #41): prefer the gateway-detected paper/live state
+                    # over Account.is_paper when we actually connected and could tell —
+                    # it can never disagree with what the order really was.
+                    _effective_is_paper = detected_paper_mode if detected_paper_mode is not None else signal_is_paper
 
                     order = Order(
                         ticker=signal.ticker,
@@ -919,7 +925,7 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                         limit_price=result.get("limit_price", entry_price) if not is_crypto else entry_price,
                         stop_price=float(signal.stop_price),
                         avg_fill_price=avg_fill_price,
-                        is_paper=signal_is_paper,
+                        is_paper=_effective_is_paper,
                         ibkr_order_id=result.get("entry_order_id") if is_crypto else result.get("ibkr_parent_id"),
                         perm_id=None if is_crypto else result.get("ibkr_parent_perm_id"),
                         raw_ibkr_response=result,
@@ -946,7 +952,7 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                             target_1=float(signal.target_price_1 or entry_price * 1.20),
                             target_2=float(signal.target_price_2 or entry_price * 1.40),
                             risk_aud=round((entry_price - float(signal.stop_price)) * sizing.shares, 2),
-                            is_paper=signal_is_paper,
+                            is_paper=_effective_is_paper,
                             status=TradeStatus.OPEN,
                         )
                         db.add(pos)
@@ -979,9 +985,9 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                 # broker reports the execution, so send the "submitted" notice
                 # instead of prematurely announcing a fill that hasn't happened.
                 if is_simulated:
-                    notifier.send_order_fill(signal.ticker, "BUY", sizing.shares, entry_price, signal_is_paper)
+                    notifier.send_order_fill(signal.ticker, "BUY", sizing.shares, entry_price, _effective_is_paper)
                 else:
-                    notifier.send_order_submitted(signal.ticker, "BUY", sizing.shares, entry_price, signal_is_paper)
+                    notifier.send_order_submitted(signal.ticker, "BUY", sizing.shares, entry_price, _effective_is_paper)
                 logger.info(f"Entry {'filled (simulated)' if is_simulated else 'submitted'} for {org.name}: {signal.ticker} {sizing.shares}x @ {entry_price:.3f}")
 
             except Exception as e:
@@ -2035,6 +2041,9 @@ def sync_ibkr_positions_task(self, organization_id: int | None = None):
                     ))
                     db.commit()
                     continue
+
+                _check_paper_live_mismatch(org, broker, db)
+
                 org_account = (broker.account or "").strip()
                 gateway_accounts = list(getattr(broker._ib, "managedAccounts", lambda: [])() or []) \
                     if getattr(broker, "_ib", None) else []
@@ -2217,6 +2226,57 @@ def _acquire_org_lock(lock_key: str, ttl: int = 240) -> bool:
         return True
 
 
+def _check_paper_live_mismatch(org, broker, db):
+    """
+    I1 (CLAUDE.md #41): paper-vs-live must come from the IBKR login itself
+    (IBKR separates them by account prefix — DU*/DF* paper, U* live), never
+    from a separate app-side flag that can silently disagree with reality.
+    Called right after a successful connect(). If the org's Account.is_paper
+    label doesn't match what the gateway login actually is, auto-correct the
+    label (it's just a label — the real order already happened as whatever
+    the gateway is) and alert loudly, throttled to once per day.
+    """
+    if broker.detected_paper_mode is None:
+        return  # couldn't determine (managedAccounts() failed) — nothing to compare
+    from app.models.account import Account
+    account = db.query(Account).filter(
+        Account.organization_id == org.id, Account.is_active == True,
+    ).first()
+    if not account or bool(account.is_paper) == bool(broker.detected_paper_mode):
+        return
+
+    old_label = "PAPER" if account.is_paper else "LIVE"
+    real_mode = "PAPER" if broker.detected_paper_mode else "LIVE"
+    account.is_paper = broker.detected_paper_mode
+
+    from datetime import timedelta as _td
+    already_alerted = db.query(AuditLog).filter(
+        AuditLog.organization_id == org.id,
+        AuditLog.message.like("%paper/live MISMATCH%"),
+        AuditLog.created_at >= _dt.utcnow() - _td(hours=24),
+    ).first()
+    db.add(AuditLog(
+        action=AuditAction.CONFIG_CHANGED, organization_id=org.id,
+        message=(f"⚠️ paper/live MISMATCH — app labelled this org's account {old_label}, but the "
+                 f"IBKR gateway is logged into a {real_mode} account. Auto-corrected the label to "
+                 f"{real_mode} (the account/orders were always real {real_mode} regardless of the "
+                 f"label — this only fixes what AstraTrade calls it)."),
+        detail={"source": "paper_live_check", "old_label": old_label, "detected": real_mode},
+    ))
+    if not already_alerted:
+        try:
+            notifier = get_notifier(organization_id=org.id)
+            notifier.send(
+                f"⚠️ *Paper/Live Mismatch Detected*\n"
+                f"AstraTrade labelled this account *{old_label}*, but the IBKR gateway is logged "
+                f"into a *{real_mode}* account.\n"
+                f"The label has been auto-corrected to {real_mode} — this doesn't change anything "
+                f"at the broker, only what AstraTrade calls it. Verify this is the account you intend."
+            )
+        except Exception as e:
+            logger.error(f"Failed to send paper/live mismatch alert for {org.name}: {e}")
+
+
 def _classify_sell_exit_reason(fill_price: float, stop: float, target: float | None) -> ExitReason:
     """
     A bracket's stop-loss and take-profit children share the same orderRef, and
@@ -2312,6 +2372,20 @@ def sync_order_status(self, organization_id: int | None = None):
                 live_open = broker.get_open_orders()
                 executions = broker.get_executions(days=2)
                 broker.disconnect()
+
+                # Defence in depth against a (rare) orderId collision across
+                # sub-accounts under a multi-org (FA/linked) gateway login —
+                # reqAllOpenOrders()/reqExecutions() return every sub-account's
+                # data in one call. Matching purely by ibkr_order_id (which is
+                # already scoped to this org's own tracked Order rows) is the
+                # primary guard; this is a second check on the data itself.
+                # Permissive fallback when account isn't populated (the normal
+                # single-account case), matching the pattern in
+                # web/main.py's /positions/open-orders filter (CLAUDE.md #41).
+                _own_acct = (broker.account or "").strip()
+                if _own_acct:
+                    live_open = [o for o in live_open if not o.get("account") or o.get("account") == _own_acct]
+                    executions = [e for e in executions if not e.get("account") or e.get("account") == _own_acct]
 
                 live_open_ids = {o["ibkr_order_id"] for o in live_open}
                 execs_by_order_id: dict[int, list[dict]] = {}

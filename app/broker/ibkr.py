@@ -34,6 +34,11 @@ class IBKRBroker:
         self._ib: Optional[object] = None
         self._connected = False
         self.last_error: str = ""
+        # I1 (CLAUDE.md #41): the real, gateway-derived paper/live state — set
+        # on a successful connect() from the logged-in account's prefix
+        # (DU*/DF* = paper, U* = live), not from any config flag. None until
+        # connect() succeeds at least once.
+        self.detected_paper_mode: Optional[bool] = None
         # Set True below only when an org-scoped broker resolves its OWN
         # explicit ibkr_account. Gates connect() — see the comment there for
         # why this can't just be "self.account is set", since self.account
@@ -83,6 +88,24 @@ class IBKRBroker:
         if self.port in (None, 4001, 4002):
             self.port = 4004 if self.paper_mode else 4003
 
+    def _detect_paper_mode(self) -> Optional[bool]:
+        """
+        I1 (CLAUDE.md #41): derive the REAL paper/live state from the
+        logged-in account's prefix, not any config flag — IBKR itself
+        separates paper (DU*/DF*) from live (U*) this way, and this can
+        never silently disagree with what actually happens to orders.
+        Resolves to this org's own configured account when set; falls back
+        to the gateway's first managed account otherwise. Returns None if
+        it can't be determined (e.g. managedAccounts() failed or is empty).
+        Only meaningful to call after a successful connect().
+        """
+        try:
+            managed = list(self._ib.managedAccounts() or [])
+            resolve_acct = (self.account or "").strip() or (managed[0] if managed else "")
+            return resolve_acct.upper().startswith(("DU", "DF")) if resolve_acct else None
+        except Exception as e:
+            logger.debug(f"IBKR paper/live detection failed: {e}")
+            return None
 
     def connect(self) -> bool:
         # SAFETY: an org-scoped broker with no explicit ibkr_account of its own
@@ -184,9 +207,11 @@ class IBKRBroker:
                     self.port = port
                     self.client_id = cid
                     self.last_error = ""
+                    self.detected_paper_mode = self._detect_paper_mode()
+
                     logger.info(
-                        f"IBKR connected: host={self.host} port={port} "
-                        f"clientId={cid} paper={self.paper_mode}"
+                        f"IBKR connected: host={self.host} port={port} clientId={cid} "
+                        f"paper={self.paper_mode} detected_paper={self.detected_paper_mode}"
                     )
                     return True
                 except Exception as e:
@@ -614,7 +639,12 @@ class IBKRBroker:
         (unlike positions/orders, no extra sleep() pump is needed).
 
         Returns one dict per fill: {perm_id, order_id, order_ref, ticker, side
-        ("BOT"/"SLD"), qty, avg_price, commission, time}.
+        ("BOT"/"SLD"), qty, avg_price, commission, time, account}.
+
+        `account` (ex.acctNumber) is included so callers can defend against a
+        (rare) orderId collision across sub-accounts under a multi-org (FA/
+        linked) gateway login — reqExecutions returns every sub-account's
+        fills in one call, same leak shape as get_open_orders (CLAUDE.md #41).
         """
         if not self.is_connected:
             return []
@@ -636,6 +666,7 @@ class IBKRBroker:
                     "avg_price":  float(ex.avgPrice or ex.price or 0),
                     "commission": float(comm.commission) if comm and comm.commission else 0.0,
                     "time":       f.time,
+                    "account":    getattr(ex, "acctNumber", "") or "",
                 })
             return out
         except Exception as e:
@@ -669,6 +700,11 @@ class IBKRBroker:
                     "ticker":        t.contract.symbol,
                     "exchange":      getattr(t.contract, "primaryExchange", "") or getattr(t.contract, "exchange", ""),
                     "currency":      getattr(t.contract, "currency", ""),
+                    # Under a multi-org (FA/linked) gateway login, reqAllOpenOrders()
+                    # returns every sub-account's orders in one call — without this
+                    # field, every caller's account filter compares against None and
+                    # silently keeps everything (CLAUDE.md #41 cross-org leak).
+                    "account":       getattr(o, "account", "") or "",
                     "action":        o.action,
                     "qty":           float(o.totalQuantity or 0),
                     "order_type":    o.orderType,

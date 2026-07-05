@@ -330,3 +330,49 @@ def test_cancel_order_connected_not_found():
 
     result = b.cancel_order(99)
     assert result is False
+
+
+# ────────────────────────────────────────────────────────────
+# _detect_paper_mode (I1 / CLAUDE.md #41)
+# ────────────────────────────────────────────────────────────
+
+def test_detect_paper_mode_own_account_paper_prefix():
+    b, mock_ib = _make_connected_ibkr()
+    b.account = "DU123456"
+    mock_ib.managedAccounts.return_value = ["DU123456"]
+    assert b._detect_paper_mode() is True
+
+
+def test_detect_paper_mode_own_account_live_prefix():
+    b, mock_ib = _make_connected_ibkr()
+    b.account = "U987654"
+    mock_ib.managedAccounts.return_value = ["U987654", "DU111111"]
+    assert b._detect_paper_mode() is False
+
+
+def test_detect_paper_mode_df_prefix_is_paper():
+    b, mock_ib = _make_connected_ibkr()
+    b.account = "DF555555"
+    mock_ib.managedAccounts.return_value = ["DF555555"]
+    assert b._detect_paper_mode() is True
+
+
+def test_detect_paper_mode_falls_back_to_first_managed_account(monkeypatch):
+    """No org-own account configured — resolve from the gateway's own list."""
+    b, mock_ib = _make_connected_ibkr()
+    b.account = ""
+    mock_ib.managedAccounts.return_value = ["U222222"]
+    assert b._detect_paper_mode() is False
+
+
+def test_detect_paper_mode_none_when_no_accounts():
+    b, mock_ib = _make_connected_ibkr()
+    b.account = ""
+    mock_ib.managedAccounts.return_value = []
+    assert b._detect_paper_mode() is None
+
+
+def test_detect_paper_mode_none_on_exception():
+    b, mock_ib = _make_connected_ibkr()
+    mock_ib.managedAccounts.side_effect = Exception("no response")
+    assert b._detect_paper_mode() is None

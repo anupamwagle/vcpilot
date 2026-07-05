@@ -406,3 +406,59 @@ def test_babysitter_leaves_working_order_alone_within_range(db_session, org_and_
 
     sig = db_session.query(Signal).filter(Signal.id == signal.id).first()
     assert sig.status == SignalStatus.TRIGGERED
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# I3 (CLAUDE.md #41) — cross-org leak: fills/orders tagged with a DIFFERENT
+# sub-account (multi-org FA/linked gateway login) must be ignored, not
+# accidentally matched to this org's Order/Position by ibkr_order_id alone.
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_execution_from_different_account_is_ignored(db_session, org_and_account, fake_broker):
+    """A fill tagged with a foreign account (even with a matching order_id —
+    the rare cross-account orderId collision this guards against) must not
+    fill this org's order."""
+    org, account = org_and_account
+    _set_ibkr_account(db_session, org, value="DU123")
+    signal = _make_signal(db_session, org.id, ticker="WOW.AX")
+    order = _make_buy_order(db_session, org, account, signal, ticker="WOW.AX", qty=50, ibkr_order_id=9009)
+
+    fake_broker.ACCOUNT = "DU123"   # this org's own resolved account
+    fake_broker.OPEN_ORDERS = []
+    foreign_fill = _exec(9009, signal.id, "BOT", 50, 37.55, commission=6.0, perm_id=555)
+    foreign_fill["account"] = "DU999999"   # a DIFFERENT org's sub-account
+    fake_broker.EXECUTIONS = [foreign_fill]
+
+    trading.sync_order_status.run(organization_id=org.id)
+    db_session.expire_all()
+
+    order_row = db_session.query(Order).filter(Order.id == order.id).first()
+    assert order_row.status == OrderStatus.CANCELLED, (
+        "The foreign-account fill must be ignored entirely — with no matching fill for "
+        "THIS org, an order no longer at the broker is correctly treated as expired"
+    )
+    assert db_session.query(Position).filter(Position.ticker == "WOW.AX").first() is None, (
+        "Must never open a position from another org's execution"
+    )
+
+
+def test_execution_with_own_account_still_fills(db_session, org_and_account, fake_broker):
+    """Control: the same scenario but tagged with THIS org's own account must
+    still fill normally — the account filter isn't over-broad."""
+    org, account = org_and_account
+    _set_ibkr_account(db_session, org, value="DU123")
+    signal = _make_signal(db_session, org.id, ticker="WOW.AX")
+    order = _make_buy_order(db_session, org, account, signal, ticker="WOW.AX", qty=50, ibkr_order_id=9010)
+
+    fake_broker.ACCOUNT = "DU123"
+    fake_broker.OPEN_ORDERS = []
+    own_fill = _exec(9010, signal.id, "BOT", 50, 37.55, commission=6.0, perm_id=556)
+    own_fill["account"] = "DU123"
+    fake_broker.EXECUTIONS = [own_fill]
+
+    trading.sync_order_status.run(organization_id=org.id)
+    db_session.expire_all()
+
+    order_row = db_session.query(Order).filter(Order.id == order.id).first()
+    assert order_row.status == OrderStatus.FILLED
+    assert db_session.query(Position).filter(Position.ticker == "WOW.AX").first() is not None

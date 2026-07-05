@@ -616,6 +616,25 @@ def migrate():
                     conn.commit()
         conn.commit()
 
+        # ── I2 (CLAUDE.md #41): report (don't auto-fix) duplicate ibkr_account
+        # values across orgs. Two orgs sharing an account would both submit
+        # orders to / reconcile against the same real account — a human must
+        # decide which org keeps it, so this only logs, never deletes/edits.
+        dupe_rows = conn.execute(text("""
+            SELECT LOWER(TRIM(value)) AS acct, array_agg(organization_id) AS org_ids
+            FROM system_configs
+            WHERE key = 'ibkr_account' AND organization_id IS NOT NULL
+              AND value IS NOT NULL AND TRIM(value) != ''
+            GROUP BY LOWER(TRIM(value))
+            HAVING COUNT(*) > 1;
+        """)).fetchall()
+        for acct, org_ids in dupe_rows:
+            logger.warning(
+                f"⚠️  Duplicate ibkr_account '{acct}' shared by organizations {list(org_ids)} — "
+                f"orders/reconciliation for these orgs will collide against the same real IBKR "
+                f"account. A human must pick which org keeps it (this migration does not auto-fix)."
+            )
+
         # ── Seed global system configs (organization_id IS NULL) ─────────────────
         global_system_configs = [
             ("mock_time_enabled", "false", "BOOLEAN", "Mock Time Enabled",

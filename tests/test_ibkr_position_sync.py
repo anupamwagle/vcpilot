@@ -36,10 +36,12 @@ class _FakeBroker:
     """Stand-in for IBKRBroker driven by class-level fixtures."""
     POSITIONS: list[dict] = []
     ACCOUNT = "DU123"
+    DETECTED_PAPER_MODE = None   # I1 / CLAUDE.md #41 — gateway-derived paper/live
 
     def __init__(self, organization_id=None):
         self.organization_id = organization_id
         self.account = _FakeBroker.ACCOUNT
+        self.detected_paper_mode = _FakeBroker.DETECTED_PAPER_MODE
 
     def connect(self):
         return True
@@ -58,6 +60,7 @@ class _FakeBroker:
 @pytest.fixture()
 def fake_broker(monkeypatch):
     monkeypatch.setattr(trading, "IBKRBroker", _FakeBroker)
+    _FakeBroker.DETECTED_PAPER_MODE = None
     return _FakeBroker
 
 
@@ -185,3 +188,85 @@ def test_sync_skips_org_with_no_ibkr_account_configured(db_session, org_and_acco
         AuditLog.message.ilike("%no ibkr_account configured%"),
     ).first()
     assert skip_log is not None
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# I1 (CLAUDE.md #41) — paper/live derived from the gateway login itself
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_paper_live_mismatch_auto_corrects_and_alerts(db_session, org_and_account, fake_broker, monkeypatch):
+    """Account.is_paper says PAPER (fixture default), but the gateway login is
+    actually LIVE (U* account) -> auto-correct the label + alert once."""
+    from unittest.mock import MagicMock
+    from app.models.account import Account
+
+    org, account = org_and_account
+    assert account.is_paper is True  # fixture default
+    _set_ibkr_account(db_session, org, value="U987654")
+    fake_broker.ACCOUNT = "U987654"
+    fake_broker.DETECTED_PAPER_MODE = False   # gateway login is actually LIVE
+    fake_broker.POSITIONS = []
+    mock_notifier = MagicMock()
+    monkeypatch.setattr(trading, "get_notifier", lambda organization_id=None: mock_notifier)
+
+    trading.sync_ibkr_positions_task.run(organization_id=org.id)
+    db_session.expire_all()
+
+    acct = db_session.query(Account).filter(Account.id == account.id).first()
+    assert acct.is_paper is False, "Must auto-correct the label to match the real gateway login"
+
+    from app.models.audit import AuditLog
+    log = db_session.query(AuditLog).filter(
+        AuditLog.organization_id == org.id, AuditLog.message.like("%paper/live MISMATCH%"),
+    ).first()
+    assert log is not None
+    mock_notifier.send.assert_called_once()
+
+
+def test_paper_live_no_mismatch_no_op(db_session, org_and_account, fake_broker, monkeypatch):
+    """Detected mode matches the existing label -> no correction, no alert."""
+    from unittest.mock import MagicMock
+    from app.models.account import Account
+
+    org, account = org_and_account
+    assert account.is_paper is True  # fixture default
+    _set_ibkr_account(db_session, org, value="DU123")
+    fake_broker.ACCOUNT = "DU123"
+    fake_broker.DETECTED_PAPER_MODE = True   # matches Account.is_paper
+    fake_broker.POSITIONS = []
+    mock_notifier = MagicMock()
+    monkeypatch.setattr(trading, "get_notifier", lambda organization_id=None: mock_notifier)
+
+    trading.sync_ibkr_positions_task.run(organization_id=org.id)
+    db_session.expire_all()
+
+    acct = db_session.query(Account).filter(Account.id == account.id).first()
+    assert acct.is_paper is True
+
+    from app.models.audit import AuditLog
+    log = db_session.query(AuditLog).filter(
+        AuditLog.organization_id == org.id, AuditLog.message.like("%paper/live MISMATCH%"),
+    ).first()
+    assert log is None
+    mock_notifier.send.assert_not_called()
+
+
+def test_paper_live_mismatch_skipped_when_undetermined(db_session, org_and_account, fake_broker, monkeypatch):
+    """detected_paper_mode is None (couldn't determine) -> never touch the label."""
+    from unittest.mock import MagicMock
+    from app.models.account import Account
+
+    org, account = org_and_account
+    _set_ibkr_account(db_session, org, value="DU123")
+    fake_broker.ACCOUNT = "DU123"
+    fake_broker.DETECTED_PAPER_MODE = None
+    fake_broker.POSITIONS = []
+    mock_notifier = MagicMock()
+    monkeypatch.setattr(trading, "get_notifier", lambda organization_id=None: mock_notifier)
+
+    trading.sync_ibkr_positions_task.run(organization_id=org.id)
+    db_session.expire_all()
+
+    acct = db_session.query(Account).filter(Account.id == account.id).first()
+    assert acct.is_paper is True  # unchanged
+    mock_notifier.send.assert_not_called()

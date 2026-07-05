@@ -6335,6 +6335,23 @@ async def update_config(request: Request, config_id: int, value: str = Form(...)
     if user_role != "superadmin" and c.organization_id != org_id:
         return RedirectResponse("/admin/config?error=forbidden", 302)
 
+    # I2 (CLAUDE.md #41): enforce one IBKR account per org. Without this, two
+    # orgs could save the same ibkr_account and both submit orders to / read
+    # positions from the same real account — double entries, cross-org closes.
+    if c.key == "ibkr_account" and value and value.strip():
+        from sqlalchemy import func as _cfg_func
+        _new_acct = value.strip()
+        _dupe = db.query(SystemConfig).filter(
+            SystemConfig.key == "ibkr_account",
+            SystemConfig.organization_id.isnot(None),
+            SystemConfig.organization_id != c.organization_id,
+            _cfg_func.lower(SystemConfig.value) == _new_acct.lower(),
+        ).first()
+        if _dupe:
+            from urllib.parse import quote as _urlquote
+            _msg = _urlquote(f'IBKR account "{_new_acct}" is already in use by another organization — each org needs its own account')
+            return RedirectResponse(f"/admin/config?error={_msg}", 302)
+
     if value is not None:
         old_val = c.value
         c.value = value
