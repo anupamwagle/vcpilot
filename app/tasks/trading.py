@@ -758,6 +758,7 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                         avg_fill_price=avg_fill_price,
                         is_paper=signal_is_paper,
                         ibkr_order_id=result.get("entry_order_id") if is_crypto else result.get("ibkr_parent_id"),
+                        perm_id=None if is_crypto else result.get("ibkr_parent_perm_id"),
                         raw_ibkr_response=result,
                         submitted_at=_dt.utcnow(),
                         filled_at=filled_at,
@@ -808,7 +809,16 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                             detail={"initial_stop": float(signal.stop_price)},
                         ))
 
-                notifier.send_order_fill(signal.ticker, "BUY", sizing.shares, entry_price, signal_is_paper)
+                # Simulated fills are final immediately (no broker to reconcile
+                # against), so send_order_fill is correct here. Real broker
+                # orders are only SUBMITTED at this point — the actual fill
+                # confirmation comes later from sync_order_status once the
+                # broker reports the execution, so send the "submitted" notice
+                # instead of prematurely announcing a fill that hasn't happened.
+                if is_simulated:
+                    notifier.send_order_fill(signal.ticker, "BUY", sizing.shares, entry_price, signal_is_paper)
+                else:
+                    notifier.send_order_submitted(signal.ticker, "BUY", sizing.shares, entry_price, signal_is_paper)
                 logger.info(f"Entry {'filled (simulated)' if is_simulated else 'submitted'} for {org.name}: {signal.ticker} {sizing.shares}x @ {entry_price:.3f}")
 
             except Exception as e:
@@ -1962,3 +1972,344 @@ def sync_ibkr_positions_task(self, organization_id: int | None = None):
                 except Exception:
                     db.rollback()
 # end sync_ibkr_positions_task
+
+
+def _acquire_org_lock(lock_key: str, ttl: int = 240) -> bool:
+    """
+    Redis SET NX EX mutual-exclusion lock so overlapping runs of a task can't
+    double-process the same org (e.g. a slow run still going when the next
+    beat tick fires). Fails OPEN (returns True — proceed) if Redis itself is
+    unreachable, since refusing to reconcile orders is worse than the small
+    risk of a double-run; state-guards on each mutation make re-processing
+    a no-op anyway.
+    """
+    try:
+        import redis as _redis
+        from app.config import settings as _settings
+        r = _redis.from_url(_settings.redis_url, socket_connect_timeout=3, socket_timeout=3)
+        return bool(r.set(lock_key, "1", nx=True, ex=ttl))
+    except Exception:
+        return True
+
+
+def _classify_sell_exit_reason(fill_price: float, stop: float, target: float | None) -> ExitReason:
+    """
+    A bracket's stop-loss and take-profit children share the same orderRef, and
+    IBKR executions don't carry the order's type/purpose — so the fill is
+    classified by which threshold it's closer to. A stop-limit/stop-market
+    fill lands at-or-below the stop; a limit take-profit fill lands at-or-above
+    the target, so "nearest" is a reliable discriminator in practice.
+    """
+    dist_stop = abs(fill_price - stop) if stop else float("inf")
+    dist_target = abs(fill_price - target) if target else float("inf")
+    return ExitReason.STOP_LOSS if dist_stop <= dist_target else ExitReason.PROFIT_TARGET_1
+
+
+@app.task(name="app.tasks.trading.sync_order_status", bind=True)
+def sync_order_status(self, organization_id: int | None = None):
+    """
+    Reconcile DB Order rows against live IBKR order status + recent executions.
+
+    This is the missing fill-detection step: previously an Order was stamped
+    SUBMITTED and nothing ever updated it. A real fill only became a DB
+    Position when sync_ibkr_positions_task later "imported an orphan" with a
+    defaulted -10% stop, losing the signal's real VCP stop/targets/linkage,
+    and an unfilled DAY order silently evaporated at the close with the Order
+    stuck SUBMITTED and the Signal stuck TRIGGERED forever, with zero
+    telemetry. Equities only — crypto orders aren't routed through IBKR.
+
+    Per org with its own configured ibkr_account (same guard as
+    sync_ibkr_positions_task — never fall back to the shared gateway's
+    default account):
+      - BUY parent filled (fully or partially) → Order FILLED/PARTIAL with the
+        real qty/price/commission; the linked Position is created (or, if the
+        position-sync safety net already imported it as an orphan with a
+        defaulted stop, REPAIRED) with the signal's real stop/targets/linkage.
+      - BUY parent no longer open at the broker and no execution found for it
+        → Order CANCELLED (DAY order expired unfilled), and the Signal is
+        reverted TRIGGERED → PENDING so the next session re-validates the
+        breakout from scratch rather than leaving a dead signal invisible.
+      - A bracket's SELL child fills → the linked Position (matched by the
+        shared orderRef, since child legs are never given their own DB Order
+        row) is closed via the Position→Trade pattern (CLAUDE.md #30) using
+        the REAL execution price/commission, with exit_reason inferred from
+        which threshold (stop vs target) the fill price is closer to.
+
+    Idempotent: a Redis SET NX EX lock per org prevents overlapping runs, and
+    every mutation is guarded by the row's current state, so a re-run (or a
+    lock-miss under Redis outage) is a no-op rather than double-processing.
+    """
+    from app.models.account import Organization, Account
+    from app.utils.time_helper import get_current_date
+
+    with get_db() as db:
+        if organization_id:
+            orgs = db.query(Organization).filter(Organization.id == organization_id).all()
+        else:
+            orgs = db.query(Organization).filter(Organization.is_active == True).all()
+
+    for org in orgs:
+        if not _acquire_org_lock(f"sync_order_status_lock:{org.id}"):
+            logger.debug(f"sync_order_status: org {org.id} already being reconciled — skipping")
+            continue
+
+        summary = {"filled": 0, "partial": 0, "repaired": 0, "cancelled": 0, "closed": 0, "errors": 0}
+        with get_db() as db:
+            try:
+                from app.models.config import SystemConfig as _SC
+                own_account_cfg = db.query(_SC).filter(
+                    _SC.key == "ibkr_account", _SC.organization_id == org.id,
+                ).first()
+                if not (own_account_cfg and (own_account_cfg.value or "").strip()):
+                    # sync_ibkr_positions_task already audits this every 5 min —
+                    # no need to duplicate the log line here.
+                    continue
+
+                open_db_orders = db.query(Order).filter(
+                    Order.organization_id == org.id,
+                    Order.action == OrderAction.BUY,
+                    Order.status.in_([OrderStatus.SUBMITTED, OrderStatus.PENDING, OrderStatus.PARTIAL]),
+                    Order.exchange_key.in_(["ASX", "NYSE", "NASDAQ"]),
+                ).all()
+                open_positions = db.query(Position).filter(
+                    Position.organization_id == org.id,
+                    Position.status == TradeStatus.OPEN,
+                    Position.signal_id.isnot(None),
+                    Position.exchange_key.in_(["ASX", "NYSE", "NASDAQ"]),
+                ).all()
+                if not open_db_orders and not open_positions:
+                    continue
+
+                broker = IBKRBroker(organization_id=org.id)
+                broker.connect()
+                if not broker.is_connected:
+                    continue  # gateway down — leave state as-is, retry next run
+
+                live_open = broker.get_open_orders()
+                executions = broker.get_executions(days=2)
+                broker.disconnect()
+
+                live_open_ids = {o["ibkr_order_id"] for o in live_open}
+                execs_by_order_id: dict[int, list[dict]] = {}
+                for e in executions:
+                    execs_by_order_id.setdefault(e["order_id"], []).append(e)
+
+                account = db.query(Account).filter(
+                    Account.organization_id == org.id, Account.is_active == True,
+                ).first()
+                today = get_current_date()
+                notifier = get_notifier(organization_id=org.id)
+
+                # ── Pass A: BUY parent orders — fill or expiry ──────────────
+                for order in open_db_orders:
+                    try:
+                        fills = [f for f in execs_by_order_id.get(order.ibkr_order_id, []) if f["side"] == "BOT"]
+                        if fills:
+                            total_qty = sum(f["qty"] for f in fills)
+                            if total_qty <= 0:
+                                continue
+                            weighted_price = sum(f["qty"] * f["avg_price"] for f in fills) / total_qty
+                            total_commission = sum(f["commission"] for f in fills)
+                            is_full = total_qty >= float(order.qty_ordered) - 1e-6
+
+                            order.status = OrderStatus.FILLED if is_full else OrderStatus.PARTIAL
+                            order.qty_filled = total_qty
+                            order.avg_fill_price = round(weighted_price, 4)
+                            order.commission_local = round(total_commission, 4)
+                            order.filled_at = _dt.utcnow()
+                            if fills[0].get("perm_id"):
+                                order.perm_id = fills[0]["perm_id"]
+                            summary["filled" if is_full else "partial"] += 1
+
+                            signal = db.query(Signal).filter(Signal.id == order.signal_id).first() \
+                                if order.signal_id else None
+                            existing_pos = db.query(Position).filter(
+                                Position.organization_id == org.id,
+                                Position.ticker == order.ticker,
+                                Position.status == TradeStatus.OPEN,
+                            ).first()
+
+                            if existing_pos:
+                                # The position-sync safety net may have already imported this
+                                # as an "orphan" with a defaulted -10% stop and no signal
+                                # linkage (race with this task). Repair it with the real
+                                # signal-derived stop/targets/linkage rather than duplicating.
+                                if signal and not existing_pos.signal_id:
+                                    existing_pos.signal_id = signal.id
+                                    existing_pos.initial_stop = float(signal.stop_price)
+                                    existing_pos.current_stop = float(signal.stop_price)
+                                    if signal.target_price_1:
+                                        existing_pos.target_1 = float(signal.target_price_1)
+                                    if signal.target_price_2:
+                                        existing_pos.target_2 = float(signal.target_price_2)
+                                    summary["repaired"] += 1
+                                    db.add(AuditLog(
+                                        action=AuditAction.POSITION_UPDATED, organization_id=org.id,
+                                        ticker=order.ticker,
+                                        message=(f"Order fill reconciliation: repaired {order.ticker} with the "
+                                                 f"real signal stop/targets/linkage (real fill ${weighted_price:.3f}), "
+                                                 f"replacing the position-sync safety net's defaulted values"),
+                                        detail={"source": "sync_order_status", "signal_id": signal.id},
+                                    ))
+                                # A prior run may have already created/repaired this position
+                                # from an earlier partial fill — keep qty/entry in sync as more
+                                # fills arrive (weighted_price/total_qty are always recomputed
+                                # from the FULL set of matching executions, not incrementally,
+                                # so this is idempotent across repeated runs).
+                                if abs(float(existing_pos.qty or 0) - total_qty) > 1e-6:
+                                    existing_pos.qty = total_qty
+                                    existing_pos.entry_price = round(weighted_price, 4)
+                                    db.add(AuditLog(
+                                        action=AuditAction.POSITION_UPDATED, organization_id=org.id,
+                                        ticker=order.ticker,
+                                        message=(f"Order fill reconciliation: {order.ticker} qty updated to "
+                                                 f"{total_qty:g} (additional fill @ ${weighted_price:.3f})"),
+                                        detail={"source": "sync_order_status", "order_id": order.id},
+                                    ))
+                            else:
+                                db.add(Position(
+                                    ticker=order.ticker, exchange_key=order.exchange_key,
+                                    asset_type=order.asset_type, currency=order.currency,
+                                    account_id=account.id if account else order.account_id,
+                                    organization_id=org.id, signal_id=signal.id if signal else None,
+                                    entry_date=today, entry_price=round(weighted_price, 4), qty=total_qty,
+                                    current_price=round(weighted_price, 4),
+                                    initial_stop=float(signal.stop_price) if signal else round(weighted_price * 0.90, 4),
+                                    current_stop=float(signal.stop_price) if signal else round(weighted_price * 0.90, 4),
+                                    target_1=float(signal.target_price_1) if signal and signal.target_price_1 else None,
+                                    target_2=float(signal.target_price_2) if signal and signal.target_price_2 else None,
+                                    risk_aud=(round((weighted_price - float(signal.stop_price)) * total_qty, 2)
+                                              if signal else None),
+                                    is_paper=order.is_paper, status=TradeStatus.OPEN,
+                                ))
+                                db.add(AuditLog(
+                                    action=AuditAction.POSITION_OPENED, organization_id=org.id, ticker=order.ticker,
+                                    message=(f"✅ {order.ticker}: real fill confirmed via broker reconciliation — "
+                                             f"{total_qty:g}x @ ${weighted_price:.3f}"),
+                                    detail={"source": "sync_order_status", "signal_id": signal.id if signal else None},
+                                ))
+
+                            db.add(AuditLog(
+                                action=AuditAction.ORDER_FILLED, organization_id=org.id, ticker=order.ticker,
+                                message=(f"Order fill confirmed: {total_qty:g}x{order.ticker} @ ${weighted_price:.3f}"
+                                         + ("" if is_full else " (partial)")),
+                                detail={"source": "sync_order_status", "order_id": order.id},
+                            ))
+                            try:
+                                notifier.send_order_fill(order.ticker, "BUY", total_qty,
+                                                          weighted_price, order.is_paper)
+                            except Exception as ne:
+                                logger.warning(f"sync_order_status: fill notification failed for {order.ticker}: {ne}")
+
+                        elif order.ibkr_order_id not in live_open_ids:
+                            # No longer working at the broker and no fill found — a DAY
+                            # order that expired unfilled at the session close.
+                            order.status = OrderStatus.CANCELLED
+                            order.cancelled_at = _dt.utcnow()
+                            summary["cancelled"] += 1
+                            db.add(AuditLog(
+                                action=AuditAction.ORDER_CANCELLED, organization_id=org.id, ticker=order.ticker,
+                                message=(f"⏹ Entry order for {order.ticker} expired unfilled (DAY order) — "
+                                         f"signal re-armed for next session"),
+                                detail={"source": "sync_order_status", "order_id": order.id},
+                            ))
+                            if order.signal_id:
+                                signal = db.query(Signal).filter(Signal.id == order.signal_id).first()
+                                if signal and signal.status == SignalStatus.TRIGGERED:
+                                    signal.status = SignalStatus.PENDING
+                                    db.add(AuditLog(
+                                        action=AuditAction.TASK_RUN, organization_id=org.id, ticker=order.ticker,
+                                        message=(f"Signal {order.ticker} reverted TRIGGERED → PENDING "
+                                                 f"(entry order expired unfilled)"),
+                                        detail={"source": "sync_order_status", "signal_id": signal.id},
+                                    ))
+                        # else: still working at the broker — nothing to do yet.
+                    except Exception as oe:
+                        summary["errors"] += 1
+                        logger.error(f"sync_order_status: error reconciling order {order.id} ({order.ticker}): {oe}")
+
+                # ── Pass B: bracket SELL children — close the linked Position ─
+                # Child legs are never given their own DB Order row, but every
+                # leg of a bracket shares the same orderRef ("astratrade-{signal_id}"),
+                # so a SELL execution is matched back to its Position via that ref.
+                sell_execs_by_ref: dict[str, list[dict]] = {}
+                for e in executions:
+                    if e["side"] == "SLD" and (e.get("order_ref") or "").startswith("astratrade-"):
+                        sell_execs_by_ref.setdefault(e["order_ref"], []).append(e)
+
+                for pos in open_positions:
+                    try:
+                        fills = sell_execs_by_ref.get(f"astratrade-{pos.signal_id}")
+                        if not fills:
+                            continue
+                        total_qty = sum(f["qty"] for f in fills)
+                        if total_qty <= 0:
+                            continue
+                        weighted_price = sum(f["qty"] * f["avg_price"] for f in fills) / total_qty
+                        total_commission = sum(f["commission"] for f in fills)
+
+                        entry_price = float(pos.entry_price or 0)
+                        fx = float(pos.entry_fx_rate or pos.current_fx_rate or 1.0) or 1.0
+                        pnl_local = (weighted_price - entry_price) * total_qty
+                        pnl_aud = pnl_local / fx
+                        pnl_pct = ((weighted_price - entry_price) / entry_price) if entry_price else 0.0
+                        commission_aud = total_commission / fx
+
+                        exit_reason = _classify_sell_exit_reason(
+                            weighted_price, float(pos.current_stop or 0),
+                            float(pos.target_1) if pos.target_1 else None,
+                        )
+
+                        pos.status = TradeStatus.CLOSED
+                        db.add(Trade(
+                            ticker=pos.ticker, exchange_key=pos.exchange_key, asset_type=pos.asset_type,
+                            currency=pos.currency, account_id=pos.account_id, organization_id=org.id,
+                            signal_id=pos.signal_id, entry_date=pos.entry_date, exit_date=today,
+                            hold_days=(today - pos.entry_date).days if pos.entry_date else 0,
+                            entry_price=pos.entry_price, exit_price=round(weighted_price, 4), qty=total_qty,
+                            gross_pnl_aud=round(pnl_aud, 2),
+                            commission_aud=round(commission_aud, 2),
+                            net_pnl_aud=round(pnl_aud - commission_aud, 2),
+                            pnl_pct=round(pnl_pct, 6),
+                            initial_stop=pos.initial_stop, exit_reason=exit_reason, is_paper=pos.is_paper,
+                            cgt_eligible_discount=((today - pos.entry_date).days > 365) if pos.entry_date else False,
+                        ))
+                        summary["closed"] += 1
+                        emoji = "🛑" if exit_reason == ExitReason.STOP_LOSS else "✅"
+                        db.add(AuditLog(
+                            action=AuditAction.POSITION_CLOSED, organization_id=org.id, ticker=pos.ticker,
+                            message=(f"{emoji} {pos.ticker} closed via real broker fill @ ${weighted_price:.3f} "
+                                     f"({exit_reason.value}) | P&L ${pnl_aud:+.2f}"),
+                            detail={"source": "sync_order_status", "signal_id": pos.signal_id},
+                        ))
+                        try:
+                            notifier.send_exit_alert(pos.ticker, exit_reason.value,
+                                                      pnl_pct * 100, pnl_aud, pos.is_paper)
+                        except Exception as ne:
+                            logger.warning(f"sync_order_status: exit notification failed for {pos.ticker}: {ne}")
+                    except Exception as pe:
+                        summary["errors"] += 1
+                        logger.error(f"sync_order_status: error closing position {pos.id} ({pos.ticker}): {pe}")
+
+                db.add(AuditLog(
+                    action=AuditAction.TASK_RUN, organization_id=org.id,
+                    message=(f"Order status sync complete — filled {summary['filled']}, "
+                             f"partial {summary['partial']}, repaired {summary['repaired']}, "
+                             f"cancelled {summary['cancelled']}, closed {summary['closed']}, "
+                             f"errors {summary['errors']}"),
+                    detail=summary,
+                ))
+                db.commit()
+                logger.info(f"sync_order_status org={org.id}: {summary}")
+            except Exception as e:
+                db.rollback()
+                logger.error(f"sync_order_status failed for org {org.id}: {e}")
+                try:
+                    db.add(AuditLog(
+                        action=AuditAction.TASK_ERROR, organization_id=org.id,
+                        message=f"Order status sync error: {e}",
+                    ))
+                    db.commit()
+                except Exception:
+                    db.rollback()
+# end sync_order_status

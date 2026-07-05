@@ -468,6 +468,19 @@ A ticker can have EITHER a PENDING signal OR an OPEN position per org — never 
 ### 35. `ExitReason.BROKER_SYNC` — automated broker-reconciliation closes are NOT "MANUAL"
 `sync_ibkr_positions_task` closes DB positions that are no longer held at IBKR (orphans). These used to be tagged `ExitReason.MANUAL`, whose UI rationale reads "Closed manually by you" — misleading for an automated close. They now use `ExitReason.BROKER_SYNC` (added to the Python enum, the Postgres `exitreason` enum via migrate_saas Migration 009, and `EXIT_REASON_RATIONALE`). BROKER_SYNC is deliberately NOT offered in the manual-close dropdown on the Positions page. Note the recorded exit price is the last known price, not the broker's actual fill — check IBKR trade history for the true fill. Reserve `MANUAL` strictly for human-initiated closes (dashboard close form, Telegram EXIT command).
 
+### 36. `sync_order_status` — the missing order-fill reconciliation task (5 Jul 2026)
+Before this task existed, an `Order` was stamped `SUBMITTED` at [app/tasks/trading.py](app/tasks/trading.py) and **nothing ever updated it** — a real IBKR fill only became a DB `Position` when `sync_ibkr_positions_task` later "imported an orphan" with a defaulted -10% stop, losing the signal's real VCP stop/targets/linkage; an unfilled DAY order silently evaporated at the close with the Order stuck `SUBMITTED` and the Signal stuck `TRIGGERED` (invisible in every view), with zero telemetry.
+
+`sync_order_status(organization_id=None)` in `app/tasks/trading.py` closes that gap, scheduled every 5 min during ASX/NYSE/NASDAQ session hours (mirrors `check_entry_triggers`' cadence) plus one run ~20 min after each session close to catch DAY-expiry. Equities only — crypto orders aren't routed through IBKR.
+
+- **BUY parent order fills** (fully or partially, matched via `Order.ibkr_order_id` against `IBKRBroker.get_executions()`) → `Order` FILLED/PARTIAL with the real qty/price/commission; the linked `Position` is created (or, if the position-sync safety net already imported it as an orphan racing this task, **repaired** — real signal-derived stop/targets/linkage replace the defaulted -10%/no-linkage values). `qty`/`entry_price` are always recomputed from the FULL set of matching executions (not incremented), so repeated runs and additional partial fills stay idempotent.
+- **BUY parent no longer open at the broker with no execution found** → `Order` CANCELLED (DAY order expired unfilled) and the `Signal` reverts `TRIGGERED → PENDING` so the next session re-validates the breakout from scratch, per Minervini's "only a fresh breakout is valid" principle.
+- **A bracket's SELL child fills** (stop-loss or take-profit) → since child legs never get their own DB `Order` row, they're matched back to their `Position` via the shared `orderRef` (`"astratrade-{signal_id}"`, set on every leg at submission — see `IBKRBroker.submit_bracket_order`). The position is closed via the `Position`→`Trade` pattern (#30) using the **real execution price/commission** — this is strictly better data than `BROKER_SYNC`'s last-known-price guesswork. `exit_reason` (STOP_LOSS vs PROFIT_TARGET_1) is inferred by which threshold (`current_stop` vs `target_1`) the fill price is closer to, since IBKR executions don't carry the order's type/purpose.
+- New `Order.perm_id` column (migrate_saas Migration 010) stores IBKR's globally-unique, reconnect-stable `permId` — captured at submission when available (`IBKRBroker.submit_bracket_order` now returns `ibkr_parent_perm_id`) and backfilled from the first matching execution otherwise. Distinct from `ibkr_order_id` (`orderId`), which is only session/client-scoped.
+- Idempotent: a Redis `SET NX EX 240` lock per org (`_acquire_org_lock`, fails **open** on Redis outage — refusing to reconcile is worse than a rare double-run) prevents overlapping runs; every mutation is guarded by the row's current state.
+- The submission-time Telegram notification for a **real** (non-simulated) order now says "Order Submitted" (`TelegramNotifier.send_order_submitted`) rather than prematurely "Order Filled" — the actual fill confirmation comes from this task. Simulated fills (crypto testnet) are still announced as filled immediately at submission, since there's no broker to reconcile against.
+- `sync_ibkr_positions_task`'s orphan-import/`BROKER_SYNC` path remains as the safety net for gateway-restart races and anything this task's `days=2` execution window missed — not the primary fill-detection mechanism anymore.
+
 ### 22. Custom Exception Handlers (FastAPI/Starlette)
 FastAPI/Starlette exceptions are captured dynamically to render Flowbite/Tailwind custom error pages instead of exposing raw JSON payloads:
 - `StarletteHTTPException` (custom 404, etc.)
@@ -530,6 +543,7 @@ All rules have `enabled_globally=True` by default. Admin can toggle any non-mand
 | Every 5 min (10am–4:12pm Mon–Fri) | `check_entry_triggers(ASX)` — intraday breakout detection |
 | Every 5 min (10am–4:12pm Mon–Fri) | `check_exit_rules_task(ASX)` — evaluate exit conditions |
 | Every 15 min (market hours Mon–Fri) | `sync_stop_orders` — ASX stop sync (IBKR modify-order TBD) |
+| Every 5 min (10am–4:12pm Mon–Fri) + 4:32pm | `sync_order_status` — reconcile Order fills/expiry against IBKR (see #36) |
 | Every 10 min | `health_check` — heartbeat to SystemConfig |
 
 ### CRYPTO (Independent Reserve) — 24/7
@@ -548,6 +562,7 @@ All rules have `enabled_globally=True` by default. Admin can toggle any non-mand
 | Tue–Sat 7:00am | `refresh_price_data(NYSE)` — yfinance EOD for US universe |
 | Tue–Sat 7:30am | `run_daily_screen(NYSE)` — US Minervini screen |
 | 11pm Mon–Fri, 12-6am Tue–Sat | `check_entry_triggers(NYSE)` — NYSE session hours (AEST) |
+| Every 5 min (11pm–6am) + 6:20am Tue–Sat | `sync_order_status` — reconcile Order fills/expiry against IBKR (see #36) |
 
 ---
 

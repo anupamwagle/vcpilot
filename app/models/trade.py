@@ -186,7 +186,10 @@ class Order(Base):
     __tablename__ = "orders"
 
     id              = Column(Integer, primary_key=True)
-    ibkr_order_id   = Column(Integer, nullable=True, index=True)   # IBKR perm ID
+    ibkr_order_id   = Column(Integer, nullable=True, index=True)   # IBKR orderId (client/session-scoped)
+    perm_id         = Column(Integer, nullable=True, index=True)   # IBKR permId (globally unique, stable
+                                                                    # across reconnects — used to match
+                                                                    # executions in sync_order_status)
     external_order_id = Column(String(128), nullable=True)         # ccxt order ID for crypto
     ticker          = Column(String(32), nullable=False, index=True)
     exchange_key    = Column(String(32), nullable=False, default="ASX")

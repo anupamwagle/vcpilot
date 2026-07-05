@@ -205,6 +205,21 @@ class TelegramNotifier(BaseNotifier):
         )
         return self.send(msg)
 
+    def send_order_submitted(self, ticker: str, action: str, qty: float,
+                             price: float, is_paper: bool) -> bool:
+        """
+        A real broker order was placed but not yet confirmed filled — the
+        actual fill confirmation (send_order_fill) comes later from
+        sync_order_status once the broker reports the execution. Distinct
+        from send_order_fill so a working order isn't announced as done.
+        """
+        mode = "📄 PAPER" if is_paper else "💰 LIVE"
+        msg = (
+            f"⏳ *Order Submitted* {mode}\n"
+            f"{_esc(action)} {qty}x *{_esc(ticker)}* @ ${price:.3f} — awaiting fill confirmation"
+        )
+        return self.send(msg)
+
     def send_exit_alert(self, ticker: str, exit_reason: str,
                         pnl_pct: float, pnl_aud: float, is_paper: bool) -> bool:
         emoji = "✅" if pnl_aud >= 0 else "❌"

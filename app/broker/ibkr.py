@@ -417,6 +417,7 @@ class IBKRBroker:
                 "target_price": target_price,
                 "order_status": pstatus,
                 "ibkr_parent_id": parent.order.orderId if parent else None,
+                "ibkr_parent_perm_id": getattr(parent.order, "permId", None) if parent else None,
                 "raw": [str(t) for t in trades],
             }
 
@@ -473,6 +474,42 @@ class IBKRBroker:
             return result
         except Exception as e:
             logger.error(f"Positions fetch failed: {e}")
+            return []
+
+    def get_executions(self, days: int = 2) -> list[dict]:
+        """
+        Fetch recent fills (executions + commission reports) for reconciling
+        DB Order rows against what actually happened at the broker — used by
+        sync_order_status. reqExecutions is blocking and returns fills directly
+        (unlike positions/orders, no extra sleep() pump is needed).
+
+        Returns one dict per fill: {perm_id, order_id, order_ref, ticker, side
+        ("BOT"/"SLD"), qty, avg_price, commission, time}.
+        """
+        if not self.is_connected:
+            return []
+        try:
+            from ib_insync import ExecutionFilter
+            from datetime import datetime, timedelta
+            cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d-%H:%M:%S")
+            fills = self._ib.reqExecutions(ExecutionFilter(time=cutoff))
+            out = []
+            for f in fills:
+                ex, comm = f.execution, f.commissionReport
+                out.append({
+                    "perm_id":    ex.permId,
+                    "order_id":   ex.orderId,
+                    "order_ref":  getattr(ex, "orderRef", "") or "",
+                    "ticker":     f.contract.symbol,
+                    "side":       ex.side,   # "BOT" (bought) or "SLD" (sold)
+                    "qty":        float(ex.shares or 0),
+                    "avg_price":  float(ex.avgPrice or ex.price or 0),
+                    "commission": float(comm.commission) if comm and comm.commission else 0.0,
+                    "time":       f.time,
+                })
+            return out
+        except Exception as e:
+            logger.error(f"Executions fetch failed: {e}")
             return []
 
     def get_open_orders(self) -> list[dict]:

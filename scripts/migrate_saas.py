@@ -1264,6 +1264,30 @@ def migrate():
             logger.debug(f"Migration 009 enum add skipped: {str(e)[:120]}")
         logger.info("Migration 009 complete.")
 
+    # ── Migration 010 — orders.perm_id for fill reconciliation ─────────────────
+    # sync_order_status matches live IBKR executions back to DB Order rows.
+    # ibkr_order_id stores the client/session-scoped orderId; permId is IBKR's
+    # globally-unique, reconnect-stable ID and is what executions carry, so it
+    # needs its own column rather than overloading ibkr_order_id.
+    logger.info("Running migration 010 — orders.perm_id column...")
+    with engine.connect() as conn:
+        def _col_exists_m10(tbl, col):
+            return conn.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name=:t AND column_name=:c"
+            ), {"t": tbl, "c": col}).fetchone() is not None
+
+        if not _col_exists_m10("orders", "perm_id"):
+            try:
+                conn.execute(text("ALTER TABLE orders ADD COLUMN perm_id INTEGER"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_orders_perm_id ON orders (perm_id)"))
+                conn.commit()
+                logger.info("Added orders.perm_id.")
+            except Exception as e:
+                conn.rollback()
+                logger.debug(f"Migration 010 stmt skipped: {str(e)[:120]}")
+        logger.info("Migration 010 complete.")
+
     logger.info("SaaS/Multi-tenant migration and seeding complete!")
 
 

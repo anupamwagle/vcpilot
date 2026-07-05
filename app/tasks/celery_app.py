@@ -162,6 +162,45 @@ app.conf.update(
         },
 
         # =================================================================
+        # Order fill/expiry reconciliation (T1 — the missing fill-detection
+        # step). Every 5 min during each equity session, mirroring
+        # check-entry-triggers' cadence so fills are confirmed promptly, plus
+        # one run ~20 min after each session close to catch DAY-order expiry
+        # (the session's last few check-entry-triggers ticks won't have seen
+        # a fill yet if IBKR reports it only once the order is fully gone).
+        # =================================================================
+        "sync-order-status-asx": {
+            "task": "app.tasks.trading.sync_order_status",
+            "schedule": crontab(hour="10-15", minute="*/5", day_of_week="mon-fri"),
+            "options": {"queue": "trading_equities"},
+        },
+        "sync-order-status-asx-close": {
+            "task": "app.tasks.trading.sync_order_status",
+            "schedule": crontab(hour=16, minute="0,5,10", day_of_week="mon-fri"),
+            "options": {"queue": "trading_equities"},
+        },
+        "sync-order-status-asx-post-close": {
+            "task": "app.tasks.trading.sync_order_status",
+            "schedule": crontab(hour=16, minute=32, day_of_week="mon-fri"),
+            "options": {"queue": "trading_equities"},
+        },
+        "sync-order-status-us-evening": {
+            "task": "app.tasks.trading.sync_order_status",
+            "schedule": crontab(hour="23", minute="*/5", day_of_week="mon-fri"),
+            "options": {"queue": "trading_equities"},
+        },
+        "sync-order-status-us-morning": {
+            "task": "app.tasks.trading.sync_order_status",
+            "schedule": crontab(hour="0,1,2,3,4,5,6", minute="*/5", day_of_week="tue,wed,thu,fri,sat"),
+            "options": {"queue": "trading_equities"},
+        },
+        "sync-order-status-us-post-close": {
+            "task": "app.tasks.trading.sync_order_status",
+            "schedule": crontab(hour=6, minute=20, day_of_week="tue,wed,thu,fri,sat"),
+            "options": {"queue": "trading_equities"},
+        },
+
+        # =================================================================
         # Daily report (6pm AEST after market close)
         # =================================================================
         "daily-report": {
