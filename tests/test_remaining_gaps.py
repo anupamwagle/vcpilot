@@ -225,9 +225,12 @@ def _make_pending_signal(db, org_id, ticker="BHP.AX", exchange_key="ASX", asset_
 
 
 def test_check_entry_triggers_already_open_position(db_session, org_and_account, open_crypto_position, monkeypatch):
-    """Entry check skips signal when position already open for same ticker."""
+    """Entry check auto-skips a pending signal when a position is already open
+    for the same ticker — the signal can never trigger while held, so it must
+    not sit PENDING forever next to the live position."""
     from app.tasks.trading import check_entry_triggers
     from app.models.signal import Signal, SignalStatus
+    from app.models.audit import AuditLog
 
     org, _ = org_and_account
     # open_crypto_position is for TRX-AUD - create signal for same ticker
@@ -247,6 +250,18 @@ def test_check_entry_triggers_already_open_position(db_session, org_and_account,
 
     # Should skip due to open position
     check_entry_triggers.run(exchange_key="CRYPTO_INDEPENDENTRESERVE")
+
+    db_session.expire_all()
+    sig2 = db_session.query(Signal).filter(Signal.id == sig.id).first()
+    assert sig2.status == SignalStatus.SKIPPED, (
+        "Pending signal for an already-held ticker must be auto-skipped, not left PENDING"
+    )
+    assert "position already open" in (sig2.notes or "")
+    log = db_session.query(AuditLog).filter(
+        AuditLog.ticker == "TRX-AUD",
+        AuditLog.message.like("%auto-skipped%"),
+    ).first()
+    assert log is not None, "Auto-skip must be explained in the audit log"
 
 
 def test_check_entry_triggers_broker_error(db_session, org_and_account, monkeypatch):

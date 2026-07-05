@@ -198,3 +198,60 @@ def test_promote_task_reverts_status_when_no_price_data(db_session, org_and_acco
     ).order_by(AuditLog.id.desc()).first()
     assert log is not None
     assert "no price data" in log.message.lower()
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 3. Open-position guard: promotion refused while the ticker is already held
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_promote_task_refused_when_position_already_open(db_session, org_and_account, watching_trx_item,
+                                                         open_crypto_position, trx_price_bar, patch_today):
+    """
+    Promoting a watchlist item whose ticker already has an OPEN position must be
+    refused: the resulting PENDING signal could never trigger (the entry check
+    always skips held tickers), so it would just sit on the Signals page next to
+    the live position confusing the user. The item must revert to WATCHING and
+    the refusal must be auditable.
+    """
+    import app.tasks.trading as trading_module
+
+    org, _account = org_and_account
+
+    trading_module.promote_watchlist_item_task.run(
+        watching_trx_item.id, org.id, "admin@astradigital.com.au", 1
+    )
+
+    assert db_session.query(Signal).filter(Signal.ticker == "TRX-AUD").count() == 0, (
+        "No Signal may be created while an open position exists for the ticker"
+    )
+    db_session.refresh(watching_trx_item)
+    assert watching_trx_item.status == WatchlistStatus.WATCHING
+
+    log = db_session.query(AuditLog).filter(
+        AuditLog.ticker == "TRX-AUD",
+        AuditLog.action == AuditAction.TASK_ERROR,
+    ).order_by(AuditLog.id.desc()).first()
+    assert log is not None
+    assert "open position" in log.message.lower()
+
+
+def test_promote_route_refused_when_position_already_open(db_session, org_and_account, watching_trx_item,
+                                                          open_crypto_position, monkeypatch):
+    """The dashboard route must refuse immediately (no Celery round-trip) with feedback."""
+    from web.main import watchlist_promote
+    import app.tasks.trading as trading_module
+
+    org, _account = org_and_account
+    calls = []
+    monkeypatch.setattr(trading_module.promote_watchlist_item_task, "delay",
+                        lambda *a, **kw: calls.append((a, kw)))
+
+    response = asyncio.run(
+        watchlist_promote(_fake_request(org.id), watching_trx_item.id, db=db_session)
+    )
+
+    assert response.status_code == 302
+    assert "position_open" in response.headers["location"]
+    assert calls == [], "The Celery task must not be queued when the ticker is already held"
+    db_session.refresh(watching_trx_item)
+    assert watching_trx_item.status == WatchlistStatus.WATCHING

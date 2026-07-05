@@ -459,6 +459,15 @@ A pytest suite covering the critical watchlist→signal→position→trade lifec
 
 **When to extend this suite:** any time you touch the watchlist→signal→position→trade lifecycle, `sync_stop_orders`, MCP trading tools, or anything that writes `Trade`/`Position`/`AuditLog` rows — these are the paths where a silent failure means real capital sits unmanaged. Add a test before/alongside the fix, following the monkeypatch patterns already established (`app.utils.time_helper.get_current_date`, `app.data.fetcher.get_intraday_price`, `get_notifier`/`get_mcp_context`/`assert_scope`).
 
+### 34. One live intent per ticker — signal vs position exclusivity (4 Jul 2026)
+A ticker can have EITHER a PENDING signal OR an OPEN position per org — never both. A pending signal for an already-held ticker can never trigger (the entry check's post-breakout guard always skips held tickers), so it would just sit on the Signals page confusing the user. Enforced at three layers:
+1. **Screener** — all three `Signal(...)` creation sites in `screening.py` dedup against open positions (pre-existing).
+2. **Manual promotion** — `promote_watchlist_item_task` refuses (reverts item to WATCHING + TASK_ERROR audit); both web promote routes (`/watchlist/{id}/promote` redirects with `?msg=position_open`, `/trader/watchlist/promote/{id}` returns JSON 409) pre-check for instant feedback.
+3. **Self-heal** — `check_entry_triggers` auto-marks any PENDING signal whose ticker has an open position as SKIPPED (reversible via unskip) with an audit entry, so stale overlaps clean themselves up.
+
+### 35. `ExitReason.BROKER_SYNC` — automated broker-reconciliation closes are NOT "MANUAL"
+`sync_ibkr_positions_task` closes DB positions that are no longer held at IBKR (orphans). These used to be tagged `ExitReason.MANUAL`, whose UI rationale reads "Closed manually by you" — misleading for an automated close. They now use `ExitReason.BROKER_SYNC` (added to the Python enum, the Postgres `exitreason` enum via migrate_saas Migration 009, and `EXIT_REASON_RATIONALE`). BROKER_SYNC is deliberately NOT offered in the manual-close dropdown on the Positions page. Note the recorded exit price is the last known price, not the broker's actual fill — check IBKR trade history for the true fill. Reserve `MANUAL` strictly for human-initiated closes (dashboard close form, Telegram EXIT command).
+
 ### 22. Custom Exception Handlers (FastAPI/Starlette)
 FastAPI/Starlette exceptions are captured dynamically to render Flowbite/Tailwind custom error pages instead of exposing raw JSON payloads:
 - `StarletteHTTPException` (custom 404, etc.)

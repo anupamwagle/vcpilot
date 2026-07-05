@@ -4,7 +4,7 @@ queued from the super admin org detail page.
 
 Covers the four reconciliation outcomes:
   1. IBKR holding missing from DB      → imported as OPEN Position
-  2. DB position missing from IBKR     → auto-closed as MANUAL (+ Trade row)
+  2. DB position missing from IBKR     → auto-closed as BROKER_SYNC (+ Trade row)
   3. Quantity drift                    → DB qty reconciled to IBKR qty
   4. Crypto positions                  → NEVER touched (IBKR can't hold them)
 
@@ -107,12 +107,14 @@ def test_sync_imports_closes_updates_and_skips_crypto(
     # stop defaulted to -10%
     assert float(bhp.initial_stop) == pytest.approx(36.0)
 
-    # 2. CSL orphan auto-closed as MANUAL + Trade row created
+    # 2. CSL orphan auto-closed as BROKER_SYNC + Trade row created
+    # (NOT ExitReason.MANUAL — that reads as "closed manually by you" in the UI,
+    # which is misleading for an automated reconciliation close)
     db_session.refresh(orphan)
     assert orphan.status == TradeStatus.CLOSED
     csl_trade = db_session.query(Trade).filter(Trade.ticker == "CSL.AX").first()
     assert csl_trade is not None
-    assert csl_trade.exit_reason == ExitReason.MANUAL
+    assert csl_trade.exit_reason == ExitReason.BROKER_SYNC
 
     # 3. WBC qty reconciled 100 -> 150, still one OPEN row (no duplicate)
     db_session.refresh(drift)

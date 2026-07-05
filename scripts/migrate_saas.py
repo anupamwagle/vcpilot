@@ -1249,6 +1249,21 @@ def migrate():
 
         logger.info("Migration 008 complete.")
 
+    # ── Migration 009 — BROKER_SYNC exit reason ────────────────────────────────
+    # sync_ibkr_positions_task used to tag orphan auto-closes as MANUAL, which the
+    # UI explains as "closed manually by you" — misleading for an automated close.
+    # Adding the Python enum member does NOT alter the Postgres enum type, so add
+    # the value here (ALTER TYPE ... ADD VALUE must run in AUTOCOMMIT).
+    logger.info("Running migration 009 — BROKER_SYNC exit reason enum value...")
+    with engine.connect() as conn:
+        try:
+            ac_conn = conn.execution_options(isolation_level="AUTOCOMMIT")
+            ac_conn.execute(text("ALTER TYPE exitreason ADD VALUE IF NOT EXISTS 'BROKER_SYNC'"))
+            logger.info("Ensured exitreason enum value 'BROKER_SYNC'.")
+        except Exception as e:
+            logger.debug(f"Migration 009 enum add skipped: {str(e)[:120]}")
+        logger.info("Migration 009 complete.")
+
     logger.info("SaaS/Multi-tenant migration and seeding complete!")
 
 

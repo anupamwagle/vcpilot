@@ -296,9 +296,35 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                 except Exception as e:
                     logger.error(f"Failed to log portfolio heat check for {org.name}: {e}")
                 continue
-
         for signal in pending_signals:
             try:
+                # Self-heal: a PENDING signal for a ticker we already hold can never
+                # trigger (the post-breakout guard below always skips held tickers),
+                # so mark it SKIPPED instead of leaving it pending forever next to
+                # the open position. Reversible via the Signals page "unskip".
+                with get_db() as _held_db:
+                    _held = _held_db.query(Position).filter(
+                        Position.ticker == signal.ticker,
+                        Position.organization_id == org.id,
+                        Position.status == TradeStatus.OPEN,
+                    ).first()
+                    if _held:
+                        _sig = _held_db.query(Signal).filter(Signal.id == signal.id).first()
+                        if _sig:
+                            _sig.status = SignalStatus.SKIPPED
+                            _sig.notes = ((_sig.notes or "") + " | auto-skipped: position already open").strip(" |")
+                        _held_db.add(AuditLog(
+                            action=AuditAction.TASK_RUN,
+                            organization_id=org.id,
+                            ticker=signal.ticker,
+                            message=(f"⏭ {signal.ticker}: pending signal auto-skipped — an open position "
+                                     f"already exists for this ticker (a signal cannot trigger while held; "
+                                     f"unskip it after the position is closed if still valid)"),
+                            detail={"signal_id": signal.id, "result": "auto_skipped_position_open"},
+                        ))
+                if _held:
+                    continue
+
                 # Fetch EOD history for indicators (MAs, 52w range, ATR, avg vol)
                 df = get_price_history(signal.ticker, period="3mo")
                 if df is None or df.empty:
@@ -465,28 +491,35 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
 
                 engine.clear_signal_overrides()
 
-                # Guard: skip if an open position in this ticker already exists
+                # Guard: skip if an open position or active buy order already exists
+                from app.models.trade import Order, OrderAction, OrderStatus
                 with get_db() as _pos_db:
                     already_open = _pos_db.query(Position).filter(
                         Position.ticker == signal.ticker,
                         Position.organization_id == org.id,
                         Position.status == TradeStatus.OPEN,
                     ).first()
-                if already_open:
-                    logger.debug(f"Entry check: {signal.ticker} skipped — open position already exists")
+                    already_ordered = _pos_db.query(Order).filter(
+                        Order.ticker == signal.ticker,
+                        Order.organization_id == org.id,
+                        Order.action == OrderAction.BUY,
+                        Order.status.in_([OrderStatus.SUBMITTED, OrderStatus.PENDING]),
+                    ).first()
+
+                if already_open or already_ordered:
+                    reason = "position already open" if already_open else "buy order already pending/submitted"
+                    logger.debug(f"Entry check: {signal.ticker} skipped — {reason}")
                     with get_db() as _skip_db:
                         _skip_db.add(AuditLog(
                             action=AuditAction.TASK_RUN,
                             organization_id=org.id,
                             ticker=signal.ticker,
-                            message=f"⏭ {signal.ticker}: breakout confirmed but skipped — position already open",
-                            detail={"signal_id": signal.id, "result": "skipped_open_position"},
+                            message=f"⏭ {signal.ticker}: breakout confirmed but skipped — {reason}",
+                            detail={"signal_id": signal.id, "result": "skipped_already_held_or_ordered"},
                         ))
                     engine.clear_signal_overrides()
                     continue
 
-                # Recalculate sizing with intraday price
-                entry_price = close_price
                 is_crypto_asset = (signal.asset_type == "CRYPTO" or (signal.exchange_key and signal.exchange_key.startswith("CRYPTO_")))
                 # Use the signal's own currency (AUD for IR, USD for Binance/Coinbase/Kraken)
                 from app.data.fetcher import CRYPTO_AUD_EXCHANGES
@@ -495,6 +528,59 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                     asset_currency = "AUD" if (_sig_exchange in CRYPTO_AUD_EXCHANGES or signal.ticker.endswith("-AUD")) else "USD"
                 else:
                     asset_currency = "USD" if signal.exchange_key in ("NYSE", "NASDAQ") else "AUD"
+
+                # Calculate available capital
+                # (total capital - currently invested cost basis - outstanding buy orders value)
+                # NOTE: deliberately no separate "submitted this run" running total —
+                # each order/position committed earlier in this same loop is already
+                # visible to this fresh query (get_db() commits at the end of every
+                # `with` block), so tracking it separately would double-subtract it.
+                with get_db() as _cap_db:
+                    _open_pos = _cap_db.query(Position).filter(
+                        Position.organization_id == org.id,
+                        Position.status == TradeStatus.OPEN,
+                    ).all()
+                    _total_invested = 0.0
+                    for _p in _open_pos:
+                        _entry = float(_p.entry_price or 0)
+                        _qty   = float(_p.qty or 0)
+                        _fx    = float(_p.entry_fx_rate or _p.current_fx_rate or 1.0) or 1.0
+                        if _entry > 0 and _qty > 0:
+                            _total_invested += (_entry * _qty) / _fx
+
+                    _outstanding_buys = _cap_db.query(Order).filter(
+                        Order.organization_id == org.id,
+                        Order.action == OrderAction.BUY,
+                        Order.status.in_([OrderStatus.SUBMITTED, OrderStatus.PENDING])
+                    ).all()
+                    _total_ordered = 0.0
+                    for _o in _outstanding_buys:
+                        _price = float(_o.limit_price or _o.stop_price or 0)
+                        _qty   = float(_o.qty_ordered or 0)
+                        _fx    = float(_o.fx_rate_aud or 1.0) or 1.0
+                        if _price > 0 and _qty > 0:
+                            _total_ordered += (_price * _qty) / _fx
+
+                current_avail_capital = capital - _total_invested - _total_ordered
+                _min_required = 100.0 if (signal.exchange_key in ("NYSE", "NASDAQ") or is_crypto_asset) else 600.0
+                if current_avail_capital < _min_required:
+                    logger.debug(f"Entry check: {signal.ticker} skipped — insufficient capital (${current_avail_capital:.2f} < ${_min_required:.0f})")
+                    with get_db() as _skip_db:
+                        _skip_db.add(AuditLog(
+                            action=AuditAction.TASK_RUN,
+                            organization_id=org.id,
+                            ticker=signal.ticker,
+                            message=(f"Entry check: {signal.ticker} breakout confirmed but skipped — "
+                                     f"insufficient available capital (${current_avail_capital:.2f} available, "
+                                     f"minimum ${_min_required:.0f} required)"),
+                            detail={"signal_id": signal.id, "result": "skipped_insufficient_capital",
+                                    "avail_capital": current_avail_capital}
+                        ))
+                    engine.clear_signal_overrides()
+                    continue
+
+                # Recalculate sizing with intraday price
+                entry_price = close_price
 
                 # ── Equity stop-width cap (Minervini: max ~7–8% stop, never beyond 10%) ──
                 # The VCP stop (low of the final contraction) can occasionally sit further
@@ -533,6 +619,30 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                     is_crypto=is_crypto_asset,
                     regime_multiplier=0.5 if regime == "CAUTION" else 1.0,
                 )
+
+                # Cap the position value by the available capital
+                from app.data.fetcher import get_fx_rate
+                try:
+                    if base_currency == asset_currency:
+                        fx_rate = 1.0
+                    else:
+                        fx_rate = get_fx_rate(base_currency, asset_currency)
+                except Exception:
+                    fx_rate = 0.65 if (base_currency == "AUD" and asset_currency == "USD") else 1.0
+
+                avail_capital_local = current_avail_capital * (fx_rate if fx_rate else 1.0)
+                max_shares_by_avail = avail_capital_local / entry_price
+                if not is_crypto_asset:
+                    import math
+                    max_shares_by_avail = max(1.0, math.floor(max_shares_by_avail))
+
+                if sizing.shares > max_shares_by_avail:
+                    _orig_shares = sizing.shares
+                    sizing.shares = max_shares_by_avail
+                    sizing.capital_local = sizing.shares * entry_price
+                    sizing.capital_aud = sizing.capital_local / (fx_rate if fx_rate else 1.0)
+                    sizing.risk_aud = (sizing.shares * (entry_price - float(signal.stop_price))) / (fx_rate if fx_rate else 1.0)
+                    logger.info(f"Capping position size for {signal.ticker} to available capital: {_orig_shares} -> {sizing.shares} shares")
 
                 min_shares = 0.000001 if is_crypto_asset else 1.0
                 if sizing.shares < min_shares:
@@ -627,7 +737,7 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
 
                 # ── Record order + position (only reached on success/simulation) ─
                 with get_db() as db:
-                    is_simulated = (result.get("status") == "simulated")
+                    is_simulated = (result.get("status") == "simulated" or result.get("simulated") is True)
                     order_status = OrderStatus.FILLED if is_simulated else OrderStatus.SUBMITTED
                     qty_filled   = sizing.shares if is_simulated else 0
                     avg_fill_price = entry_price if is_simulated else None
@@ -1418,6 +1528,32 @@ def promote_watchlist_item_task(self, item_id: int, organization_id: int, user_e
                         w.exchange_key == "CRYPTO" or
                         (w.exchange_key and w.exchange_key.startswith("CRYPTO_")))
 
+        # Guard: refuse promotion while an open position exists for this ticker.
+        # A PENDING signal for an already-held ticker can never trigger (the entry
+        # check skips held tickers) — it would just sit on the Signals page
+        # confusing the user next to the live position.
+        open_pos = db.query(Position).filter(
+            Position.ticker == w.ticker,
+            Position.organization_id == organization_id,
+            Position.status == TradeStatus.OPEN,
+        ).first()
+        if open_pos:
+            w.status = WatchlistStatus.WATCHING   # revert the optimistic SIGNALLED flip
+            db.add(AuditLog(
+                action=AuditAction.TASK_ERROR,
+                ticker=w.ticker,
+                actor=user_email,
+                user_id=user_id,
+                organization_id=organization_id,
+                message=(f"Promotion of {w.ticker} refused — an OPEN position already exists "
+                         f"(entry ${float(open_pos.entry_price or 0):.3f} on {open_pos.entry_date}). "
+                         f"A pending signal cannot trigger while the position is held; close the "
+                         f"position first if you want a new entry signal."),
+            ))
+            db.commit()
+            logger.info(f"Promotion of {w.ticker} refused for Org {organization_id} — open position exists")
+            return
+
         # Ensure the Stock row has a company name (skip for crypto — no earnings data)
         stock_row = db.query(Stock).filter(Stock.ticker == w.ticker).first()
         if stock_row and not stock_row.name and not is_crypto:
@@ -1608,7 +1744,7 @@ def sync_ibkr_positions_task(self, organization_id: int | None = None):
     Reconciliation:
       • IBKR holding not in DB   → import as OPEN Position (avg cost from IBKR,
                                     stop defaulted to -10% and flagged for review)
-      • DB position not in IBKR  → auto-close as ExitReason.MANUAL (Trade row,
+      • DB position not in IBKR  → auto-close as ExitReason.BROKER_SYNC (Trade row,
                                     per the Position→Trade pattern in CLAUDE.md #30)
       • Both present, qty drift  → DB qty reconciled to IBKR qty
 
@@ -1764,7 +1900,7 @@ def sync_ibkr_positions_task(self, organization_id: int | None = None):
                             detail={"source": "ibkr_sync", "avg_cost": avg, "qty": qty},
                         ))
 
-                # --- DB → IBKR: orphans auto-close as MANUAL ---
+                # --- DB → IBKR: orphans auto-close as BROKER_SYNC ---
                 # Guarded: never mass-close when the account is mismatched or the
                 # broker returned no positions at all (likely a config/transient
                 # issue, not a real "everything was sold" event).
@@ -1793,14 +1929,14 @@ def sync_ibkr_positions_task(self, organization_id: int | None = None):
                         net_pnl_aud=round(pnl_aud, 2),
                         pnl_pct=round(pnl_pct / 100, 4),
                         initial_stop=pos.initial_stop,
-                        exit_reason=ExitReason.MANUAL,
+                        exit_reason=ExitReason.BROKER_SYNC,
                         is_paper=pos.is_paper,
                         cgt_eligible_discount=((today - pos.entry_date).days > 365) if pos.entry_date else False,
                     ))
                     summary["closed"] += 1
                     db.add(AuditLog(
                         action=AuditAction.POSITION_CLOSED, organization_id=org.id, ticker=pos.ticker,
-                        message=(f"IBKR sync: not found in IBKR — auto-closed as MANUAL @ "
+                        message=(f"IBKR sync: not found in IBKR — auto-closed as BROKER_SYNC @ "
                                  f"${close_price:.4f} | P&L ${pnl_aud:+.0f}"),
                         detail={"source": "ibkr_sync", "reason": "orphan_not_in_ibkr"},
                     ))

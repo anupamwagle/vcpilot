@@ -3956,6 +3956,27 @@ async def watchlist_promote(request: Request, item_id: int, db: Session = Depend
     if not w:
         return RedirectResponse("/watchlist?msg=not_found", 302)
 
+    # Refuse promotion while an open position exists — the signal could never
+    # trigger (entry check skips held tickers) and would just sit PENDING.
+    from app.models.trade import Position, TradeStatus
+    open_pos = db.query(Position).filter(
+        Position.ticker == w.ticker,
+        Position.organization_id == org_id,
+        Position.status == TradeStatus.OPEN,
+    ).first()
+    if open_pos:
+        from app.models.audit import AuditLog, AuditAction
+        db.add(AuditLog(
+            action=AuditAction.TASK_ERROR,
+            actor=request.session.get("email", "dashboard"),
+            user_id=request.session.get("user_id"),
+            organization_id=org_id,
+            ticker=w.ticker,
+            message=f"Promotion of {w.ticker} refused — an open position already exists for this ticker",
+        ))
+        db.commit()
+        return RedirectResponse("/watchlist?msg=position_open", 302)
+
     # Immediately mark as signalled/processing to prevent double triggers
     w.status = WatchlistStatus.SIGNALLED
     db.commit()
@@ -5662,6 +5683,21 @@ async def trader_watchlist_promote(request: Request, item_id: int, db: Session =
     w = db.query(Watchlist).filter(Watchlist.id == item_id, Watchlist.organization_id == org_id).first()
     if not w:
         return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
+
+    # Refuse promotion while an open position exists — the signal could never
+    # trigger (entry check skips held tickers) and would just sit PENDING.
+    from app.models.trade import Position, TradeStatus
+    open_pos = db.query(Position).filter(
+        Position.ticker == w.ticker,
+        Position.organization_id == org_id,
+        Position.status == TradeStatus.OPEN,
+    ).first()
+    if open_pos:
+        return JSONResponse({
+            "ok": False,
+            "error": (f"{w.ticker} already has an open position — a new signal cannot "
+                      f"trigger while the position is held. Close it first."),
+        }, status_code=409)
 
     ticker = w.ticker
     w.status = WatchlistStatus.SIGNALLED

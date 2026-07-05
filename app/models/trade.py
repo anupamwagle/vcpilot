@@ -49,6 +49,7 @@ class ExitReason(str, enum.Enum):
     CLIMAX_TOP       = "CLIMAX_TOP"           # Exhaustion signal
     MANUAL           = "MANUAL"              # Admin / Telegram override
     THREE_WEEKS_TIGHT= "THREE_WEEKS_TIGHT"   # 3-weeks-tight trailing stop
+    BROKER_SYNC      = "BROKER_SYNC"         # Auto-closed by broker reconciliation (position no longer at broker)
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +149,17 @@ EXIT_REASON_RATIONALE: dict[str, dict[str, str]] = {
         "detail": (
             "This position was closed by hand rather than by an automatic rule — for example from the "
             "Positions page or a remote command. The system simply recorded and executed your decision."
+        ),
+    },
+    "BROKER_SYNC": {
+        "summary": "Closed automatically because the position was no longer held at the broker.",
+        "detail": (
+            "During the regular broker reconciliation, AstraTrade found this position was no longer "
+            "held in the broker account — typically because a bracket stop or target order filled at "
+            "the broker, or the shares were sold directly on the broker's own platform. The record was "
+            "closed at the last known price to keep AstraTrade in sync with the broker. Check the "
+            "broker's trade history for the exact fill; if this was a stop-loss fill, the true exit "
+            "reason is the protective stop doing its job."
         ),
     },
 }

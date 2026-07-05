@@ -426,3 +426,57 @@ def test_entry_check_breakout_confirmed_opens_position(db_session, org_and_accou
     db_session.expire(sig)
     sig_refreshed = db_session.query(Signal).get(sig.id)
     assert sig_refreshed.status == SignalStatus.TRIGGERED
+
+
+# ---------------------------------------------------------------------------
+# Test: available capital must not be double-counted across signals in one run
+# ---------------------------------------------------------------------------
+
+def test_entry_check_available_capital_not_double_counted_across_signals(db_session, org_and_account, monkeypatch):
+    """
+    check_entry_triggers re-queries open Positions/Orders fresh for every signal it
+    processes, and each `with get_db()` block commits immediately — so by the time
+    signal 2 is checked, signal 1's newly-opened position is already visible to that
+    fresh query. A separate in-memory running total on top of that would subtract
+    the same committed capital twice and wrongly starve later signals in a busy run.
+
+    capital_aud=1000 (fixture default), ASX min_required=600. Both signals are sized
+    (via a fixed calculate_position_size stub) at 50 shares @ $6 = $300 trade value:
+      - Correct (single subtraction): signal 2 sees 1000-300=700 >= 600 -> proceeds.
+      - Buggy (double subtraction):   signal 2 would see 1000-300-300=400 < 600 -> skipped.
+    """
+    from app.tasks.trading import check_entry_triggers
+    from app.risk.manager import SizingResult
+    import app.tasks.trading as t
+
+    org, account = org_and_account
+    _make_signal(db_session, org.id, account.id, ticker="WOW.AX", pivot=6.5)
+    _make_signal(db_session, org.id, account.id, ticker="CSL.AX", pivot=6.5)
+
+    _patch_market_open(monkeypatch, is_open=True)
+    _patch_trading_paused(monkeypatch, paused=False)
+    _seed_regime(db_session, org.id, "BULL")
+    _patch_price_data(monkeypatch, close=6.0)
+    _patch_rule_engine(monkeypatch, breakout_passes=True)
+    _patch_broker_simulate(monkeypatch)
+    _patch_notifier(monkeypatch)
+    monkeypatch.setattr(t, "calculate_position_size",
+                        lambda *a, **kw: SizingResult(
+                            shares=50, capital_aud=300.0, capital_local=300.0,
+                            risk_aud=10.0, risk_pct=1.0, portfolio_pct=30.0,
+                            stop_price=5.98, entry_price=6.0,
+                            currency="AUD", fx_rate_aud=1.0, message="fixed test sizing",
+                        ))
+
+    check_entry_triggers.run(exchange_key="ASX")
+
+    positions = db_session.query(Position).filter(
+        Position.organization_id == org.id,
+        Position.ticker.in_(["WOW.AX", "CSL.AX"]),
+        Position.status == TradeStatus.OPEN,
+    ).all()
+    tickers_opened = {p.ticker for p in positions}
+    assert tickers_opened == {"WOW.AX", "CSL.AX"}, (
+        f"Both signals should open positions — available capital must not be "
+        f"double-counted across signals processed in the same run. Opened: {tickers_opened}"
+    )
