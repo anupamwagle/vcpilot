@@ -22,6 +22,10 @@ class _FakeIB:
         return [c]
     def sleep(self, n):
         pass
+    def reqMarketDataType(self, n):
+        pass
+    def cancelMktData(self, c):
+        pass
 
 
 def _broker(connected: bool):

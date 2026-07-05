@@ -103,14 +103,71 @@ def test_get_market_snapshot_no_last_price(monkeypatch):
     b._build_contract = lambda ticker, exchange_key="ASX": MagicMock()
     mock_ib.qualifyContracts = MagicMock()
 
+    # No last/close AND no bid/ask (must be explicit — MagicMock's default
+    # numeric magic methods return 1.0 for an unconfigured attribute, which
+    # would otherwise be picked up by the bid/ask midpoint fallback below).
     mock_ticker = MagicMock()
     mock_ticker.last = None
     mock_ticker.close = None
+    mock_ticker.bid = None
+    mock_ticker.ask = None
     mock_ib.reqMktData.return_value = mock_ticker
     mock_ib.sleep = MagicMock()
 
     result = b.get_market_snapshot("BHP", "ASX")
     assert result is None
+
+
+def test_get_market_snapshot_falls_back_to_bid_ask_midpoint(monkeypatch):
+    """Thin ASX names can have live bid/ask with no last trade — use the midpoint."""
+    b, mock_ib = _make_connected_ibkr()
+    b._build_contract = lambda ticker, exchange_key="ASX": MagicMock()
+    mock_ib.qualifyContracts = MagicMock()
+
+    mock_ticker = MagicMock()
+    mock_ticker.last = None
+    mock_ticker.close = None
+    mock_ticker.bid = 10.0
+    mock_ticker.ask = 10.20
+    mock_ticker.volume = 0
+    mock_ib.reqMktData.return_value = mock_ticker
+    mock_ib.sleep = MagicMock()
+
+    result = b.get_market_snapshot("BHP", "ASX")
+    assert result is not None
+    assert result["last"] == pytest.approx(10.10)
+
+
+def test_get_market_snapshot_retries_delayed_when_live_unavailable(monkeypatch):
+    """No live data at all -> retry with delayed (reqMarketDataType 3) before giving up."""
+    b, mock_ib = _make_connected_ibkr()
+    b._build_contract = lambda ticker, exchange_key="ASX": MagicMock()
+    mock_ib.qualifyContracts = MagicMock()
+    mock_ib.sleep = MagicMock()
+
+    live_ticker = MagicMock()
+    live_ticker.last = None
+    live_ticker.close = None
+    live_ticker.bid = None
+    live_ticker.ask = None
+
+    delayed_ticker = MagicMock()
+    delayed_ticker.last = 42.5
+    delayed_ticker.close = 42.0
+    delayed_ticker.bid = 42.4
+    delayed_ticker.ask = 42.6
+    delayed_ticker.volume = 1000
+
+    data_types_requested = []
+    mock_ib.reqMarketDataType.side_effect = lambda t: data_types_requested.append(t)
+    mock_ib.reqMktData.side_effect = [live_ticker, delayed_ticker]
+
+    result = b.get_market_snapshot("BHP", "ASX")
+
+    assert result is not None
+    assert result["last"] == 42.5
+    assert result["delayed"] is True
+    assert data_types_requested == [1, 3], "Must try live (1) before falling back to delayed (3)"
 
 
 def test_get_market_snapshot_exception_returns_none():

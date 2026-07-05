@@ -1538,13 +1538,14 @@ def get_intraday_price(
                     if broker.is_connected:
                         snap = broker.get_market_snapshot(ticker)
                         if snap and snap.get("last"):
+                            is_delayed = bool(snap.get("delayed"))
                             return {
                                 "price": float(snap["last"]),
                                 "volume": int(snap.get("volume", 0)),
                                 "bid": snap.get("bid"),
                                 "ask": snap.get("ask"),
-                                "data_source": "ibkr",
-                                "delay_mins": 0,
+                                "data_source": "ibkr_delayed" if is_delayed else "ibkr",
+                                "delay_mins": 15 if is_delayed else 0,
                                 "bar_timestamp": snap.get("timestamp"),
                                 "ok": True,
                             }

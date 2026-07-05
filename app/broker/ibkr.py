@@ -645,20 +645,24 @@ class IBKRBroker:
     def get_market_snapshot(self, ticker: str, exchange_key: str = "ASX") -> Optional[dict]:
         """
         Request a real-time market data snapshot for a ticker on any supported exchange.
-        Returns {last, bid, ask, volume, timestamp} or None if unavailable.
-        Requires active IBKR market data subscription for the exchange.
+        Returns {last, bid, ask, volume, timestamp, delayed} or None if unavailable.
+
+        Tries live data (reqMarketDataType(1)) first. If no subscription is active
+        for that exchange, IBKR returns nothing rather than an error, which used to
+        make this method fall straight through to yfinance — worse latency than
+        IBKR's own free ~15-min delayed feed. So on a live miss, this retries once
+        with reqMarketDataType(3) (IBKR delayed) before giving up; the caller sets
+        data_source accordingly (see get_intraday_price). Falls back to the bid/ask
+        midpoint when last/close are unavailable (thin ASX names often have no last
+        trade but a live quote).
         """
         if not self.is_connected or not IB_AVAILABLE:
             return None
         try:
-            from ib_insync import Stock as IBStock
             from datetime import datetime as _dt
+            import math
             contract = self._build_contract(ticker, exchange_key)
             self._ib.qualifyContracts(contract)
-            import math
-            # reqMktData with snapshot=True returns a Ticker object immediately
-            ticker_data = self._ib.reqMktData(contract, "", True, False)
-            self._ib.sleep(2)  # Wait for data to arrive
 
             def _num(x):
                 # IBKR returns float('nan') for unavailable fields (e.g. ASX
@@ -672,20 +676,34 @@ class IBKRBroker:
                 except (TypeError, ValueError):
                     return None
 
-            last = _num(ticker_data.last)
-            if last is None:
-                last = _num(ticker_data.close)
-            bid = _num(ticker_data.bid)
-            ask = _num(ticker_data.ask)
-            vol = _num(ticker_data.volume) or 0.0
-            if last is not None:
-                return {
-                    "last": last,
-                    "bid": bid,
-                    "ask": ask,
-                    "volume": int(vol),
-                    "timestamp": _dt.utcnow(),
-                }
+            def _snapshot(market_data_type: int):
+                self._ib.reqMarketDataType(market_data_type)
+                ticker_data = self._ib.reqMktData(contract, "", True, False)
+                self._ib.sleep(2)  # wait for data to arrive
+                last = _num(ticker_data.last)
+                if last is None:
+                    last = _num(ticker_data.close)
+                bid = _num(ticker_data.bid)
+                ask = _num(ticker_data.ask)
+                if last is None and bid is not None and ask is not None:
+                    last = round((bid + ask) / 2, 4)
+                vol = _num(ticker_data.volume) or 0.0
+                self._ib.cancelMktData(contract)
+                if last is None:
+                    return None
+                return {"last": last, "bid": bid, "ask": ask, "volume": int(vol), "timestamp": _dt.utcnow()}
+
+            live = _snapshot(1)
+            if live is not None:
+                live["delayed"] = False
+                return live
+
+            delayed = _snapshot(3)
+            if delayed is not None:
+                delayed["delayed"] = True
+                logger.debug(f"IBKR live data unavailable for {ticker} — using delayed (~15min) feed")
+                return delayed
+
             return None
         except Exception as e:
             logger.debug(f"Market snapshot failed for {ticker}: {e}")

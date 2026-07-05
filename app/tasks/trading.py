@@ -1421,7 +1421,11 @@ def update_position_pnl_task(self):
         asset_type = getattr(pos, "asset_type", "EQUITY") or "EQUITY"
 
         if ticker not in ticker_prices:
-            result = get_intraday_price(ticker, asset_type=asset_type)
+            # organization_id is required for the IBKR branch inside get_intraday_price
+            # (it needs an org-scoped broker connection) — omitting it silently forced
+            # every equity price here onto the 15-min-delayed yfinance fallback instead
+            # of live IBKR data, even when the gateway was connected and working (T4.1).
+            result = get_intraday_price(ticker, organization_id=pos.organization_id, asset_type=asset_type)
             ticker_prices[ticker] = result if result.get("ok") else None
 
             # ── Write to Redis live_price cache (drives trader terminal + watchlist) ──
