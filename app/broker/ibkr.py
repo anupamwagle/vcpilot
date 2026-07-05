@@ -425,6 +425,91 @@ class IBKRBroker:
             logger.error(f"Bracket order failed for {ticker}: {e}")
             return {"status": "error", "error": str(e), "ticker": ticker}
 
+    def submit_market_sell(
+        self,
+        ticker: str,             # yfinance format: "BHP.AX", "AAPL" — or bare symbol, either works
+        qty: float,
+        exchange_key: str = "ASX",
+        order_ref: str = "",
+    ) -> dict:
+        """
+        Plain market SELL — used ONLY when a position has no working stop order
+        left at the broker (an imported/orphaned position, or a bracket that was
+        already cancelled). Never call this while a bracket's stop-loss child is
+        still working: whichever of the two sells fills first would leave the
+        other trying to sell shares already gone — a naked short in either
+        direction. See CLAUDE.md #37 / sync_stop_orders' equity branch, which is
+        responsible for checking get_open_orders() before ever calling this.
+
+        Cancels any stray working orders left on this symbol first so nothing
+        else can execute against the same shares after this order is placed.
+        Returns a dict in the same shape as submit_bracket_order's result.
+        """
+        if not self.is_connected:
+            return _simulate_order(ticker, "SELL", qty, 0, 0, order_ref)
+
+        try:
+            contract = self._build_contract(ticker, exchange_key)
+            qualified = self._ib.qualifyContracts(contract)
+            if not qualified or not getattr(contract, "conId", 0):
+                msg = f"contract not qualified for {ticker} on {exchange_key} (bad symbol / no permission)"
+                logger.error(f"Market sell failed: {msg}")
+                return {"status": "error", "error": msg, "ticker": ticker}
+
+            self._ib.reqAllOpenOrders()
+            self._ib.sleep(0.5)
+            stray = [t for t in self._ib.openTrades() if t.contract.symbol == contract.symbol]
+            for t in stray:
+                try:
+                    self._ib.cancelOrder(t.order)
+                except Exception as ce:
+                    logger.warning(f"Market sell: failed to cancel stray order for {ticker}: {ce}")
+            if stray:
+                self._ib.sleep(1)
+
+            order = MarketOrder("SELL", qty)
+            order.orderRef = order_ref
+            order.tif = "DAY"
+            if self.account:
+                order.account = self.account
+
+            trade = self._ib.placeOrder(contract, order)
+
+            stable = {"Submitted", "PreSubmitted", "Filled", "Cancelled",
+                      "ApiCancelled", "Inactive", "Rejected", "PendingCancel"}
+            waited = 0.0
+            while trade.orderStatus.status not in stable and waited < 12.0:
+                self._ib.sleep(0.5)
+                waited += 0.5
+
+            status = trade.orderStatus.status
+            bad = {"Cancelled", "ApiCancelled", "Inactive", "Rejected", "PendingCancel"}
+            if status in bad:
+                reason = ""
+                try:
+                    if trade.log:
+                        reason = trade.log[-1].message or ""
+                except Exception:
+                    pass
+                msg = f"IBKR {status}" + (f": {reason}" if reason else "")
+                logger.error(f"Market sell REJECTED for {ticker}: {msg}")
+                return {"status": "error", "error": msg, "ticker": ticker, "order_status": status}
+
+            logger.info(f"Market sell submitted for {ticker}: qty={qty} status={status} "
+                        f"(cancelled {len(stray)} stray order(s) first)")
+            return {
+                "status": "submitted",
+                "broker": "ibkr",
+                "ticker": ticker,
+                "qty": qty,
+                "order_status": status,
+                "ibkr_order_id": order.orderId,
+                "ibkr_perm_id": getattr(order, "permId", None),
+            }
+        except Exception as e:
+            logger.error(f"Market sell failed for {ticker}: {e}")
+            return {"status": "error", "error": str(e), "ticker": ticker}
+
     def cancel_order(self, ibkr_order_id: int) -> bool:
         if not self.is_connected:
             logger.info(f"Simulation: cancel order {ibkr_order_id}")

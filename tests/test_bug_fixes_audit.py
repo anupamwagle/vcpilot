@@ -90,31 +90,131 @@ def _make_price_df(close=41.0):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Bug #1 — sync_stop_orders detects equity stop breach and closes position
+# Bug #1 — sync_stop_orders detects equity stop breach
+#
+# CLAUDE.md #37 (5 Jul 2026): sync_stop_orders used to fire its own SELL bracket
+# on stop breach UNCONDITIONALLY, even while the entry bracket's own stop-loss
+# child order was still working at IBKR — a naked-short/double-sell risk. The
+# tests below replace the pre-fix versions that asserted the app closed the
+# position (and created the Trade) itself immediately; that now only happens
+# via sync_order_status once a REAL fill is confirmed (see
+# tests/test_order_status_sync.py for that coverage).
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestSyncStopOrdersEquity:
-    def test_equity_position_stopped_out_closes_position(self, db_session, org_and_account, monkeypatch):
-        from app.tasks.trading import sync_stop_orders
-        from app.models.trade import TradeStatus, Trade, Position
-        org, account = org_and_account
-        pos = _make_open_position(db_session, org, account, entry_price=40.0, current_stop=36.0)
+class _StopTestBroker:
+    """Configurable stand-in for IBKRBroker used by the equity stop tests."""
+    OPEN_ORDERS: list[dict] = []
+    MARKET_SELL_RESULT: dict = {"status": "submitted", "ibkr_order_id": 9999, "ibkr_perm_id": 111}
 
-        # sync_stop_orders uses a local `from app.data.fetcher import get_intraday_price as _gip`
-        # so we must patch at the source module
+    def __init__(self, organization_id=None):
+        self.organization_id = organization_id
+        self.account = "DU123"
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        pass
+
+    @property
+    def is_connected(self):
+        return True
+
+    def get_open_orders(self):
+        return list(_StopTestBroker.OPEN_ORDERS)
+
+    def submit_market_sell(self, ticker, qty, exchange_key="ASX", order_ref=""):
+        return dict(_StopTestBroker.MARKET_SELL_RESULT)
+
+
+class TestSyncStopOrdersEquity:
+    def test_equity_stop_breach_with_live_broker_stop_alerts_only(self, db_session, org_and_account, monkeypatch):
+        """A live broker stop must never be double-sold against — alert only, no order, no close."""
+        from app.tasks.trading import sync_stop_orders
+        from app.models.trade import TradeStatus, Position, Order
+        org, account = org_and_account
+        pos = _make_open_position(db_session, org, account, ticker="BHP.AX", entry_price=40.0, current_stop=36.0)
+
         monkeypatch.setattr("app.data.fetcher.get_intraday_price",
                             lambda *a, **kw: {"ok": True, "price": 34.0, "data_source": "test"})
-        monkeypatch.setattr("app.tasks.trading.IBKRBroker", MagicMock())
+        _StopTestBroker.OPEN_ORDERS = [{"ticker": "BHP", "action": "SELL", "status": "Submitted"}]
+        monkeypatch.setattr("app.tasks.trading.IBKRBroker", _StopTestBroker)
+        sent = MagicMock()
+        monkeypatch.setattr("app.tasks.trading.get_notifier", lambda *a, **kw: sent)
+
+        sync_stop_orders.run()
+
+        db_session.expire_all()
+        still_open = db_session.query(Position).filter_by(id=pos.id).first()
+        assert still_open.status == TradeStatus.OPEN, (
+            "Must NOT close the position itself while the broker's bracket stop is still working"
+        )
+        assert db_session.query(Order).filter_by(ticker="BHP.AX").count() == 0, (
+            "Must NOT submit its own sell while a broker stop is already live"
+        )
+        sent.send.assert_called_once()
+        assert "stop" in sent.send.call_args[0][0].lower()
+
+    def test_equity_stop_with_no_live_broker_stop_submits_market_sell_without_closing(
+        self, db_session, org_and_account, monkeypatch
+    ):
+        """No working broker stop (imported/orphan position) -> market sell, but stays OPEN until confirmed."""
+        from app.tasks.trading import sync_stop_orders
+        from app.models.trade import TradeStatus, Position, Order, OrderAction, OrderStatus
+        org, account = org_and_account
+        pos = _make_open_position(db_session, org, account, ticker="BHP.AX", entry_price=40.0,
+                                  current_stop=36.0, qty=100)
+
+        monkeypatch.setattr("app.data.fetcher.get_intraday_price",
+                            lambda *a, **kw: {"ok": True, "price": 34.0, "data_source": "test"})
+        _StopTestBroker.OPEN_ORDERS = []  # no working stop at the broker
+        _StopTestBroker.MARKET_SELL_RESULT = {"status": "submitted", "ibkr_order_id": 9999, "ibkr_perm_id": 111}
+        monkeypatch.setattr("app.tasks.trading.IBKRBroker", _StopTestBroker)
         monkeypatch.setattr("app.tasks.trading.get_notifier", lambda *a, **kw: MagicMock())
 
         sync_stop_orders.run()
 
         db_session.expire_all()
-        closed = db_session.query(Position).filter_by(id=pos.id).first()
-        assert closed.status == TradeStatus.CLOSED
-        trade = db_session.query(Trade).filter_by(ticker=pos.ticker, organization_id=org.id).first()
-        assert trade is not None
-        assert float(trade.exit_price) == 34.0
+        still_open = db_session.query(Position).filter_by(id=pos.id).first()
+        assert still_open.status == TradeStatus.OPEN, (
+            "Must stay OPEN until sync_order_status confirms the real fill — never close optimistically"
+        )
+        order = db_session.query(Order).filter_by(ticker="BHP.AX").first()
+        assert order is not None
+        assert order.action == OrderAction.SELL
+        assert order.status == OrderStatus.SUBMITTED
+        assert float(order.qty_ordered) == 100
+        assert order.ibkr_order_id == 9999
+
+    def test_equity_stop_market_sell_failure_leaves_position_open_and_alerts(
+        self, db_session, org_and_account, monkeypatch
+    ):
+        """A failed market-sell fallback must never fail silently — unprotected + open must be loud."""
+        from app.tasks.trading import sync_stop_orders
+        from app.models.trade import TradeStatus, Position
+        from app.models.audit import AuditLog, AuditAction
+        org, account = org_and_account
+        pos = _make_open_position(db_session, org, account, ticker="BHP.AX", entry_price=40.0, current_stop=36.0)
+
+        monkeypatch.setattr("app.data.fetcher.get_intraday_price",
+                            lambda *a, **kw: {"ok": True, "price": 34.0, "data_source": "test"})
+        _StopTestBroker.OPEN_ORDERS = []
+        _StopTestBroker.MARKET_SELL_RESULT = {"status": "error", "error": "IBKR Rejected"}
+        monkeypatch.setattr("app.tasks.trading.IBKRBroker", _StopTestBroker)
+        sent = MagicMock()
+        monkeypatch.setattr("app.tasks.trading.get_notifier", lambda *a, **kw: sent)
+
+        sync_stop_orders.run()
+
+        db_session.expire_all()
+        still_open = db_session.query(Position).filter_by(id=pos.id).first()
+        assert still_open.status == TradeStatus.OPEN
+        log = db_session.query(AuditLog).filter(
+            AuditLog.action == AuditAction.TASK_ERROR, AuditLog.ticker == "BHP.AX",
+        ).first()
+        assert log is not None
+        assert "unprotected" in log.message.lower()
+        sent.send_health_alert.assert_called_once()
 
     def test_equity_position_above_stop_stays_open(self, db_session, org_and_account, monkeypatch):
         from app.tasks.trading import sync_stop_orders
@@ -132,26 +232,6 @@ class TestSyncStopOrdersEquity:
         db_session.expire_all()
         still_open = db_session.query(Position).filter_by(id=pos.id).first()
         assert still_open.status == TradeStatus.OPEN
-
-    def test_equity_stop_trade_pnl_and_commission(self, db_session, org_and_account, monkeypatch):
-        from app.tasks.trading import sync_stop_orders
-        from app.models.trade import Trade
-        org, account = org_and_account
-        # AUD: entry=40, exit=34, qty=100 → gross=-600, commission=$6, net=-606
-        pos = _make_open_position(db_session, org, account, entry_price=40.0,
-                                  current_stop=36.0, qty=100)
-
-        monkeypatch.setattr("app.data.fetcher.get_intraday_price",
-                            lambda *a, **kw: {"ok": True, "price": 34.0, "data_source": "test"})
-        monkeypatch.setattr("app.tasks.trading.IBKRBroker", MagicMock())
-        monkeypatch.setattr("app.tasks.trading.get_notifier", lambda *a, **kw: MagicMock())
-        sync_stop_orders.run()
-
-        db_session.expire_all()
-        trade = db_session.query(Trade).filter_by(ticker=pos.ticker, organization_id=org.id).first()
-        assert trade is not None
-        assert float(trade.gross_pnl_aud) == -600.0
-        assert float(trade.net_pnl_aud) == -606.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -565,6 +645,11 @@ class TestRegimeEvalNasdaqKey:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestSyncStopCurrencySymbol:
+    """
+    Currency symbol now shows up in the breach-alert audit row (the
+    has-live-broker-stop path — see CLAUDE.md #37), rather than a
+    close/Trade audit row which no longer happens synchronously here.
+    """
     def test_usd_stop_audit_uses_usd_symbol(self, db_session, org_and_account, monkeypatch):
         from app.tasks.trading import sync_stop_orders
         from app.models.audit import AuditLog
@@ -576,7 +661,8 @@ class TestSyncStopCurrencySymbol:
         monkeypatch.setattr("app.data.fetcher.get_intraday_price",
                             lambda *a, **kw: {"ok": True, "price": 85.0, "data_source": "test"})
         monkeypatch.setattr("app.data.fetcher.get_fx_rate", lambda *a, **kw: 0.65)
-        monkeypatch.setattr("app.tasks.trading.IBKRBroker", MagicMock())
+        _StopTestBroker.OPEN_ORDERS = [{"ticker": "AAPL", "action": "SELL", "status": "Submitted"}]
+        monkeypatch.setattr("app.tasks.trading.IBKRBroker", _StopTestBroker)
         monkeypatch.setattr("app.tasks.trading.get_notifier", lambda *a, **kw: MagicMock())
 
         sync_stop_orders.run()
@@ -585,7 +671,7 @@ class TestSyncStopCurrencySymbol:
         logs = db_session.query(AuditLog).filter(
             AuditLog.ticker == "AAPL", AuditLog.message.like("%US$%")
         ).all()
-        assert logs, "Stop-out audit log must use US$ for USD positions"
+        assert logs, "Stop breach alert must use US$ for USD positions"
 
     def test_aud_stop_audit_uses_aud_symbol(self, db_session, org_and_account, monkeypatch):
         from app.tasks.trading import sync_stop_orders
@@ -596,7 +682,8 @@ class TestSyncStopCurrencySymbol:
 
         monkeypatch.setattr("app.data.fetcher.get_intraday_price",
                             lambda *a, **kw: {"ok": True, "price": 34.0, "data_source": "test"})
-        monkeypatch.setattr("app.tasks.trading.IBKRBroker", MagicMock())
+        _StopTestBroker.OPEN_ORDERS = [{"ticker": "WBC", "action": "SELL", "status": "Submitted"}]
+        monkeypatch.setattr("app.tasks.trading.IBKRBroker", _StopTestBroker)
         monkeypatch.setattr("app.tasks.trading.get_notifier", lambda *a, **kw: MagicMock())
 
         sync_stop_orders.run()

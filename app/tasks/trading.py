@@ -1127,8 +1127,8 @@ def sync_stop_orders(self):
                 pos_currency = getattr(pos, "currency", None) or "AUD"
 
                 if not is_crypto:
-                    # Equity stop-loss detection — fetch intraday price and close if breached.
-                    from app.data.fetcher import get_intraday_price as _gip, get_fx_rate as _gfx
+                    # Equity stop-loss detection — fetch intraday price and act if breached.
+                    from app.data.fetcher import get_intraday_price as _gip
                     price_result = _gip(pos.ticker, org.id, asset_type="EQUITY")
                     if not price_result.get("ok") or not price_result.get("price"):
                         logger.debug(f"sync_stop_orders: no live price for equity {pos.ticker} — skip")
@@ -1139,64 +1139,114 @@ def sync_stop_orders(self):
                     if not _eq_stop or not _eq_entry:
                         continue
                     if _eq_price <= _eq_stop:
-                        logger.warning(f"sync_stop_orders: equity {pos.ticker} stopped out — price {_eq_price:.3f} ≤ stop {_eq_stop:.3f}")
-                        _fx = 1.0
-                        if pos_currency == "USD":
-                            try:
-                                _fx = float(_gfx("USD", "AUD") or 1.0)
-                            except Exception:
-                                _fx = 1.0
-                        _pnl_aud = (_eq_price - _eq_entry) * float(pos.qty) / _fx
-                        _comm    = 6.0 if pos_currency == "AUD" else round(6.0 / max(_fx, 0.01), 2)
-                        _sym     = "US$" if pos_currency == "USD" else "A$"
-                        _today   = get_current_date()
+                        logger.warning(f"sync_stop_orders: equity {pos.ticker} price through stop — price {_eq_price:.3f} ≤ stop {_eq_stop:.3f}")
+                        _sym = "US$" if pos_currency == "USD" else "A$"
+                        _bare_ticker = pos.ticker.replace(".AX", "")
+
+                        # CLAUDE.md #37: never fire our own sell while the broker's real
+                        # bracket stop-loss child is still working — whichever of the two
+                        # fills first would leave the other trying to sell shares already
+                        # gone, a naked short in either direction. sync_order_status (T1)
+                        # is the one true fill-detector for a live bracket; this task only
+                        # alerts in that case. Only a position with NO working stop at the
+                        # broker (an imported position, or a bracket that was cancelled) is
+                        # ever acted on directly here, and even then the DB position is left
+                        # OPEN until sync_order_status confirms the real fill — never closed
+                        # optimistically (see CLAUDE.md #30).
+                        has_live_stop = False
+                        sell_result = None
                         try:
                             with IBKRBroker(organization_id=org.id) as broker:
-                                broker.submit_bracket_order(
-                                    ticker=pos.ticker.replace(".AX", ""),
-                                    action="SELL", qty=float(pos.qty),
-                                    entry_price=_eq_price, stop_price=0, target_price=0,
-                                    exchange_key=pos.exchange_key or "ASX",
-                                    order_ref=f"stop-{pos.id}",
-                                )
+                                if broker.is_connected:
+                                    live_orders = broker.get_open_orders() or []
+                                    has_live_stop = any(
+                                        (o.get("ticker") or "").upper() == _bare_ticker.upper()
+                                        and o.get("action") == "SELL"
+                                        for o in live_orders
+                                    )
+                                    if not has_live_stop:
+                                        sell_result = broker.submit_market_sell(
+                                            ticker=_bare_ticker, qty=float(pos.qty),
+                                            exchange_key=pos.exchange_key or "ASX",
+                                            order_ref=f"stopsell-{pos.id}",
+                                        )
+                                else:
+                                    logger.warning(f"sync_stop_orders: IBKR not connected — alert only for {pos.ticker}")
                         except Exception as _be:
-                            logger.warning(f"sync_stop_orders: IBKR sell failed for {pos.ticker}: {_be}")
-                        with get_db() as db2:
-                            _p = db2.query(Position).get(pos.id)
-                            if _p and _p.status == TradeStatus.OPEN:
-                                _p.status = TradeStatus.CLOSED
-                                db2.add(Trade(
-                                    organization_id=org.id, account_id=_p.account_id,
-                                    ticker=_p.ticker, exchange_key=_p.exchange_key,
-                                    asset_type=getattr(_p, "asset_type", "EQUITY"),
-                                    currency=pos_currency, signal_id=_p.signal_id,
-                                    entry_date=_p.entry_date, exit_date=_today,
-                                    hold_days=(_today - _p.entry_date).days,
-                                    qty=_p.qty, entry_price=_p.entry_price, exit_price=_eq_price,
-                                    gross_pnl_aud=round(_pnl_aud, 2),
-                                    net_pnl_aud=round(_pnl_aud - _comm, 2),
-                                    pnl_pct=round((_eq_price - _eq_entry) / _eq_entry, 6),
-                                    initial_stop=_p.initial_stop, exit_reason=ExitReason.STOP_LOSS,
-                                    is_paper=_p.is_paper,
-                                    cgt_eligible_discount=(_today - _p.entry_date).days > 365,
+                            logger.warning(f"sync_stop_orders: IBKR check/sell failed for {pos.ticker}: {_be}")
+                            sell_result = {"status": "error", "error": str(_be)}
+
+                        if has_live_stop:
+                            # Alert only, throttled to once per 20 min per position so a
+                            # slow-filling broker stop doesn't spam every 15-min tick.
+                            from datetime import timedelta as _td
+                            with get_db() as _db:
+                                recent_alert = _db.query(AuditLog).filter(
+                                    AuditLog.organization_id == org.id, AuditLog.ticker == pos.ticker,
+                                    AuditLog.message.like("%stop breach alert%"),
+                                    AuditLog.created_at >= _dt.utcnow() - _td(minutes=20),
+                                ).first()
+                                _db.add(AuditLog(
+                                    action=AuditAction.TASK_RUN, organization_id=org.id, ticker=pos.ticker,
+                                    message=(f"⚠ stop breach alert — {pos.ticker} price {_sym}{_eq_price:.3f} is "
+                                             f"through stop {_sym}{_eq_stop:.3f}; the broker's own bracket stop "
+                                             f"should be executing — check IBKR Gateway if this persists"),
+                                    detail={"source": "sync_stop_orders", "result": "breach_alert_only",
+                                            "price": _eq_price, "stop": _eq_stop},
                                 ))
-                                db2.add(AuditLog(
-                                    action=AuditAction.POSITION_CLOSED,
-                                    organization_id=org.id, ticker=pos.ticker,
-                                    message=f"🛑 STOP triggered — {pos.ticker} @ {_sym}{_eq_price:.3f} "
-                                            f"stop was {_sym}{_eq_stop:.3f} P&L {_sym}{_pnl_aud:+.2f}",
+                                _db.commit()
+                            if not recent_alert:
+                                try:
+                                    notifier = get_notifier(organization_id=org.id)
+                                    notifier.send(
+                                        f"⚠️ *Stop Breach — Broker Stop Should Fire*\n"
+                                        f"{pos.ticker} price {_sym}{_eq_price:.3f} is through stop {_sym}{_eq_stop:.3f}\n"
+                                        f"The broker's own bracket order should execute shortly — "
+                                        f"check IBKR Gateway if this persists."
+                                    )
+                                except Exception as _ne:
+                                    logger.error(f"sync_stop_orders: breach alert failed for {pos.ticker}: {_ne}")
+                        elif sell_result and sell_result.get("status") != "error":
+                            with get_db() as _db:
+                                _db.add(Order(
+                                    ticker=pos.ticker, exchange_key=pos.exchange_key or "ASX",
+                                    asset_type="EQUITY", currency=pos_currency,
+                                    account_id=pos.account_id, organization_id=org.id,
+                                    signal_id=pos.signal_id, action=OrderAction.SELL,
+                                    order_type=OrderType.MARKET, status=OrderStatus.SUBMITTED,
+                                    qty_ordered=pos.qty, qty_filled=0, is_paper=pos.is_paper,
+                                    ibkr_order_id=sell_result.get("ibkr_order_id"),
+                                    perm_id=sell_result.get("ibkr_perm_id"),
+                                    raw_ibkr_response=sell_result, submitted_at=_dt.utcnow(),
                                 ))
-                                db2.commit()
-                        try:
-                            notifier = get_notifier(organization_id=org.id)
-                            notifier.send(
-                                f"🛑 *Stop Loss Triggered*\n"
-                                f"{pos.ticker} closed @ {_sym}{_eq_price:.3f}\n"
-                                f"Stop was {_sym}{_eq_stop:.3f}\n"
-                                f"P&L: {_sym}{_pnl_aud:+.2f}"
-                            )
-                        except Exception as _ne:
-                            logger.error(f"sync_stop_orders: notification failed for {pos.ticker}: {_ne}")
+                                _db.add(AuditLog(
+                                    action=AuditAction.ORDER_SUBMITTED, organization_id=org.id, ticker=pos.ticker,
+                                    message=(f"🛑 {pos.ticker}: price through stop with no working broker stop — "
+                                             f"submitted a market sell (qty {float(pos.qty):g}); position stays "
+                                             f"OPEN until the fill is confirmed by order reconciliation"),
+                                    detail={"source": "sync_stop_orders", "result": sell_result},
+                                ))
+                                _db.commit()
+                        else:
+                            with get_db() as _db:
+                                _db.add(AuditLog(
+                                    action=AuditAction.TASK_ERROR, organization_id=org.id, ticker=pos.ticker,
+                                    message=(f"❌ {pos.ticker}: price through stop, no working broker stop, and "
+                                             f"the market sell FAILED — "
+                                             f"{(sell_result or {}).get('error', 'unknown error')}. Position "
+                                             f"remains OPEN and unprotected — check IBKR Gateway immediately."),
+                                    detail={"source": "sync_stop_orders", "result": sell_result},
+                                ))
+                                _db.commit()
+                            try:
+                                notifier = get_notifier(organization_id=org.id)
+                                notifier.send_health_alert(
+                                    pos.ticker,
+                                    "Price through stop, no working broker stop, and the market sell FAILED — "
+                                    "position is unprotected, check IBKR Gateway immediately."
+                                )
+                            except Exception as _ne:
+                                logger.error(f"sync_stop_orders: failure alert failed for {pos.ticker}: {_ne}")
                     continue  # equity handled — skip crypto trailing-stop block
 
                 # ── Fetch live price (crypto) ─────────────────────────────
@@ -2074,7 +2124,6 @@ def sync_order_status(self, organization_id: int | None = None):
                 open_positions = db.query(Position).filter(
                     Position.organization_id == org.id,
                     Position.status == TradeStatus.OPEN,
-                    Position.signal_id.isnot(None),
                     Position.exchange_key.in_(["ASX", "NYSE", "NASDAQ"]),
                 ).all()
                 if not open_db_orders and not open_positions:
@@ -2228,18 +2277,24 @@ def sync_order_status(self, organization_id: int | None = None):
                         summary["errors"] += 1
                         logger.error(f"sync_order_status: error reconciling order {order.id} ({order.ticker}): {oe}")
 
-                # ── Pass B: bracket SELL children — close the linked Position ─
-                # Child legs are never given their own DB Order row, but every
-                # leg of a bracket shares the same orderRef ("astratrade-{signal_id}"),
-                # so a SELL execution is matched back to its Position via that ref.
+                # ── Pass B: SELL fills — close the linked Position ──────────
+                # Bracket child legs are never given their own DB Order row, but
+                # every leg of a bracket shares the same orderRef
+                # ("astratrade-{signal_id}"), so a SELL execution is matched back
+                # to its Position via that ref. A sync_stop_orders market-sell
+                # fallback (submitted only when there's no working broker stop —
+                # see CLAUDE.md #37) uses its own "stopsell-{position_id}" ref,
+                # which works even for positions with no signal_id (orphan imports).
                 sell_execs_by_ref: dict[str, list[dict]] = {}
                 for e in executions:
-                    if e["side"] == "SLD" and (e.get("order_ref") or "").startswith("astratrade-"):
-                        sell_execs_by_ref.setdefault(e["order_ref"], []).append(e)
+                    ref = e.get("order_ref") or ""
+                    if e["side"] == "SLD" and (ref.startswith("astratrade-") or ref.startswith("stopsell-")):
+                        sell_execs_by_ref.setdefault(ref, []).append(e)
 
                 for pos in open_positions:
                     try:
-                        fills = sell_execs_by_ref.get(f"astratrade-{pos.signal_id}")
+                        fills = (sell_execs_by_ref.get(f"astratrade-{pos.signal_id}")
+                                 or sell_execs_by_ref.get(f"stopsell-{pos.id}"))
                         if not fills:
                             continue
                         total_qty = sum(f["qty"] for f in fills)
