@@ -181,6 +181,74 @@ def test_check_exit_rules_task_stop_loss_creates_trade(db_session, org_and_accou
     assert "STOP" in str(trade.exit_reason)
 
 
+def test_check_exit_rules_task_failed_breakout_creates_trade(db_session, org_and_account, monkeypatch):
+    """
+    R3 / CLAUDE.md #42, end-to-end wiring: a Position with pivot_price carried
+    over (T1's creation paths) that closes back below its pivot within the
+    configured window gets closed via the real (unmocked) evaluate_exit_rules,
+    with exit_reason=FAILED_BREAKOUT.
+    """
+    from app.tasks.trading import check_exit_rules_task
+    from app.models.trade import Trade, Position, TradeStatus, ExitReason
+    from app.models.account import Account
+
+    org, _ = org_and_account
+    account = db_session.query(Account).filter(Account.organization_id == org.id).first()
+    pos = Position(
+        ticker="BHP.AX", exchange_key="ASX", asset_type="EQUITY",
+        organization_id=org.id, account_id=account.id if account else None,
+        status=TradeStatus.OPEN, entry_price=40.0, qty=100,
+        current_stop=36.0, initial_stop=36.0, target_1=48.0, target_2=56.0,
+        pivot_price=40.0, entry_date=date.today() - timedelta(days=1),  # entered yesterday
+        is_paper=True,
+    )
+    db_session.add(pos)
+    db_session.commit()
+
+    monkeypatch.setattr("app.tasks.trading.market_is_open_now", lambda *a, **kw: True)
+    monkeypatch.setattr("app.tasks.trading._is_trading_paused", lambda org_id: False)
+    monkeypatch.setattr("app.utils.time_helper.get_current_date", lambda: date.today())
+    monkeypatch.setattr("app.tasks.trading.get_notifier", lambda organization_id=None: MagicMock())
+    # Close (39.0) back below pivot (40.0), well above the stop (36.0).
+    monkeypatch.setattr("app.tasks.trading.get_intraday_price",
+                        lambda *a, **kw: {"ok": True, "price": 39.0, "volume": 200000,
+                                          "data_source": "yfinance", "delay_mins": 15,
+                                          "bar_timestamp": None})
+    monkeypatch.setattr("app.tasks.trading.get_price_history",
+                        lambda *a, **kw: __import__("pandas").DataFrame({
+                            "date": [date.today() - timedelta(days=i) for i in range(60, 0, -1)],
+                            "open": [39.0] * 60, "high": [39.5] * 60, "low": [38.5] * 60,
+                            "close": [39.0] * 60, "volume": [200000] * 60,
+                            "avg_vol_50": [200000] * 60,
+                        }))
+    monkeypatch.setattr("app.data.fetcher.get_fundamentals", lambda *a, **kw: {})
+
+    class _FailedBreakoutOnlyEngine:
+        def is_enabled(self, rule_id):
+            return rule_id == "exit_failed_breakout"
+        def threshold(self, rule_id):
+            return 3.0 if rule_id == "exit_failed_breakout" else None
+
+    monkeypatch.setattr("app.tasks.trading.RuleEngine", lambda **kw: _FailedBreakoutOnlyEngine())
+
+    from app.broker.ibkr import IBKRBroker
+    monkeypatch.setattr(IBKRBroker, "connect", lambda self: False)
+    monkeypatch.setattr(IBKRBroker, "submit_bracket_order",
+                        lambda self, **kw: {"status": "simulated", "order_id": "SIM-EXIT"})
+
+    check_exit_rules_task.run("ASX")
+
+    db_session.expire_all()
+    pos_refreshed = db_session.query(Position).filter(Position.id == pos.id).first()
+    assert pos_refreshed.status == TradeStatus.CLOSED
+
+    trade = db_session.query(Trade).filter(
+        Trade.organization_id == org.id, Trade.ticker == "BHP.AX"
+    ).first()
+    assert trade is not None
+    assert trade.exit_reason == ExitReason.FAILED_BREAKOUT
+
+
 # ────────────────────────────────────────────────────────────
 # update_position_pnl_task — updates current_price
 # ────────────────────────────────────────────────────────────

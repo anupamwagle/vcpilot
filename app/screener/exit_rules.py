@@ -49,6 +49,9 @@ def evaluate_exit_rules(
     avg_vol_50: float,
     next_earnings_date: Optional[date],
     engine: RuleEngine,
+    pivot_price: Optional[float] = None,   # R3 (CLAUDE.md #42): Signal.pivot_price carried
+                                            # onto the Position at creation — None (the
+                                            # default) skips exit_failed_breakout entirely.
 ) -> list[ExitSignal]:
     """
     Evaluate all exit rules for an open position.
@@ -77,6 +80,24 @@ def evaluate_exit_rules(
             rule_id=rule_id
         ))
         return signals  # Stop hit — exit immediately, don't evaluate other rules
+
+    # -------------------------------------------------------------------------
+    # Failed Breakout (R3 / CLAUDE.md #42) — close back below the pivot within
+    # N days of entry. A correct breakout should hold above the pivot almost
+    # immediately; Minervini cuts these fast rather than waiting for the full
+    # stop to be hit — a big part of why his average loss stays ~5-6% instead
+    # of the full 8-10% stop.
+    # -------------------------------------------------------------------------
+    rule_id = "exit_failed_breakout"
+    if engine.is_enabled(rule_id) and pivot_price:
+        max_days = int(engine.threshold(rule_id) or 3)
+        if hold_days <= max_days and close < float(pivot_price):
+            signals.append(ExitSignal(
+                should_exit=True, reason=ExitReason.FAILED_BREAKOUT, exit_type="FULL",
+                message=(f"Failed breakout: close {close:.3f} back below pivot "
+                         f"{float(pivot_price):.3f} within {hold_days}d of entry (max {max_days}d)"),
+                rule_id=rule_id,
+            ))
 
     # -------------------------------------------------------------------------
     # Time Stop

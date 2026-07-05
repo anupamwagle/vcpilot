@@ -17,6 +17,7 @@ from app.data.calendar import market_is_open_now
 from app.screener.rules import RuleEngine
 from app.screener.vcp import check_breakout
 from app.screener.price_filter import price_in_range
+from app.screener.liquidity_filter import liquidity_ok
 from app.screener.exit_rules import evaluate_exit_rules
 from app.risk.manager import calculate_position_size, check_portfolio_heat
 from app.broker.ibkr import IBKRBroker
@@ -530,6 +531,21 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                         engine.clear_signal_overrides()
                         continue
 
+                    # Minimum Liquidity Filter (R2 / CLAUDE.md #42) — re-check live,
+                    # same reasoning as the price-range re-check above.
+                    liq_ok, liq_reason = liquidity_ok(signal.ticker, close_price, avg_vol, engine, signal.asset_type)
+                    if not liq_ok:
+                        with get_db() as _db:
+                            _db.add(AuditLog(
+                                action=AuditAction.TASK_RUN,
+                                organization_id=org.id,
+                                ticker=signal.ticker,
+                                message=f"Entry check: skipped — {liq_reason}",
+                                detail={"signal_id": signal.id, "result": "skipped_insufficient_liquidity"},
+                            ))
+                        engine.clear_signal_overrides()
+                        continue
+
                 # Check breakout conditions
                 breakout_rules = check_breakout(
                     signal.ticker, df_check,
@@ -772,6 +788,7 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                     base_currency=base_currency,
                     is_crypto=is_crypto_asset,
                     regime_multiplier=0.5 if regime == "CAUTION" else 1.0,
+                    avg_vol_50=avg_vol if not is_crypto_asset else None,
                 )
 
                 # Cap the position value by the available capital
@@ -951,6 +968,7 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                             current_stop=float(signal.stop_price),
                             target_1=float(signal.target_price_1 or entry_price * 1.20),
                             target_2=float(signal.target_price_2 or entry_price * 1.40),
+                            pivot_price=float(signal.pivot_price) if signal.pivot_price else None,
                             risk_aud=round((entry_price - float(signal.stop_price)) * sizing.shares, 2),
                             is_paper=_effective_is_paper,
                             status=TradeStatus.OPEN,
@@ -1117,6 +1135,7 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
                     avg_vol_50=avg_vol,
                     next_earnings_date=next_earnings,
                     engine=engine,
+                    pivot_price=float(pos.pivot_price) if getattr(pos, "pivot_price", None) else None,
                 )
 
                 has_exit = any(s.should_exit for s in exit_signals)
@@ -2440,6 +2459,8 @@ def sync_order_status(self, organization_id: int | None = None):
                                         existing_pos.target_1 = float(signal.target_price_1)
                                     if signal.target_price_2:
                                         existing_pos.target_2 = float(signal.target_price_2)
+                                    if signal.pivot_price:
+                                        existing_pos.pivot_price = float(signal.pivot_price)
                                     summary["repaired"] += 1
                                     db.add(AuditLog(
                                         action=AuditAction.POSITION_UPDATED, organization_id=org.id,
@@ -2476,6 +2497,7 @@ def sync_order_status(self, organization_id: int | None = None):
                                     current_stop=float(signal.stop_price) if signal else round(weighted_price * 0.90, 4),
                                     target_1=float(signal.target_price_1) if signal and signal.target_price_1 else None,
                                     target_2=float(signal.target_price_2) if signal and signal.target_price_2 else None,
+                                    pivot_price=float(signal.pivot_price) if signal and signal.pivot_price else None,
                                     risk_aud=(round((weighted_price - float(signal.stop_price)) * total_qty, 2)
                                               if signal else None),
                                     is_paper=order.is_paper, status=TradeStatus.OPEN,

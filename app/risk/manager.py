@@ -33,6 +33,11 @@ _IBKR_MIN_COMMISSION = {
     "USDT": 0.0,         # Crypto: no fixed minimum (% based)
 }
 
+# R2 (CLAUDE.md #42): never size a position above this % of the stock's own
+# 50-day average share volume — a bigger clip than this can't realistically
+# fill (or exit) without materially moving a thin stock's price.
+MAX_PCT_OF_AVG_VOLUME = 20.0
+
 
 def calculate_position_size(
     capital_aud: float,               # Total account capital in base_currency (kept name for kwargs backward compatibility)
@@ -44,6 +49,9 @@ def calculate_position_size(
     regime_multiplier: float = 1.0,   # 0.5 in CAUTION, 0 in BEAR
     base_currency: str = "AUD",       # Base currency of the account capital
     is_crypto: bool = False,          # If True, skip commission checks and allow fractional shares
+    avg_vol_50: float = None,         # R2 (CLAUDE.md #42): 50-day avg share volume, for a
+                                       # realistic-fill cap. None (the default) skips the cap
+                                       # entirely — existing callers are unaffected.
 ) -> SizingResult:
     """
     AstraTrade position sizing: Risk-based, currency-aware.
@@ -64,6 +72,9 @@ def calculate_position_size(
         regime_multiplier: Scale factor from market regime
         base_currency:     Base currency of the account capital
         is_crypto:         If True, skip commission checks and allow fractional shares
+        avg_vol_50:        50-day average share volume — when given, caps the position at
+                            MAX_PCT_OF_AVG_VOLUME of it so a fill is actually realistic
+                            for the stock's real liquidity (R2 / CLAUDE.md #42)
 
     Returns:
         SizingResult with both native and AUD-equivalent values
@@ -123,6 +134,15 @@ def calculate_position_size(
     else:
         max_shares_by_capital = max(1.0, math.floor(max_capital_local / entry_price))
     shares = min(shares, max_shares_by_capital)
+
+    # Cap by a % of the stock's own average volume so fills are realistic
+    # (R2 / CLAUDE.md #42) — skipped entirely when the caller doesn't have
+    # avg_vol_50 available (backward compatible with existing callers).
+    if avg_vol_50 is not None and avg_vol_50 > 0:
+        max_shares_by_volume = avg_vol_50 * (MAX_PCT_OF_AVG_VOLUME / 100)
+        if not is_crypto:
+            max_shares_by_volume = max(1.0, math.floor(max_shares_by_volume))
+        shares = min(shares, max_shares_by_volume)
 
     # Commission efficiency check (skip for crypto)
     if min_commission > 0:

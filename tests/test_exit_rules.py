@@ -59,6 +59,7 @@ def _call(
     avg_vol_50=100_000.0,
     next_earnings_date=None,
     engine=None,
+    pivot_price=None,
 ):
     return evaluate_exit_rules(
         ticker=ticker,
@@ -72,6 +73,7 @@ def _call(
         avg_vol_50=avg_vol_50,
         next_earnings_date=next_earnings_date,
         engine=engine or StubEngine(),
+        pivot_price=pivot_price,
     )
 
 
@@ -104,6 +106,84 @@ def test_stop_loss_returns_immediately_no_other_rules():
     sigs = _call(current_price=8.0, current_stop=8.5, df=df, engine=engine)
     assert len(sigs) == 1
     assert sigs[0].reason == ExitReason.STOP_LOSS
+
+
+# ---------------------------------------------------------------------------
+# Failed breakout (R3 / CLAUDE.md #42)
+# ---------------------------------------------------------------------------
+
+def test_failed_breakout_triggers_close_below_pivot_within_window():
+    # Entry day 1, checked on day 2 (1 day held) — well within the default 3-day window.
+    df = _make_df(close=9.5)  # close is below pivot (10.0), above stop (8.5)
+    sigs = _call(
+        current_price=9.5, current_stop=8.5, df=df,
+        entry_date=date(2026, 1, 1), today=date(2026, 1, 2),
+        pivot_price=10.0,
+        engine=StubEngine(disabled={"exit_time_stop"}),
+    )
+    assert any(s.reason == ExitReason.FAILED_BREAKOUT and s.should_exit for s in sigs)
+
+
+def test_failed_breakout_does_not_trigger_above_pivot():
+    df = _make_df(close=10.5)
+    sigs = _call(
+        current_price=10.5, current_stop=8.5, df=df,
+        entry_date=date(2026, 1, 1), today=date(2026, 1, 2),
+        pivot_price=10.0,
+        engine=StubEngine(disabled={"exit_time_stop"}),
+    )
+    assert not any(s.reason == ExitReason.FAILED_BREAKOUT for s in sigs)
+
+
+def test_failed_breakout_does_not_trigger_outside_window():
+    """Close back below pivot, but only after the max-days window has passed."""
+    df = _make_df(close=9.5)
+    sigs = _call(
+        current_price=9.5, current_stop=8.5, df=df,
+        entry_date=date(2026, 1, 1), today=date(2026, 1, 10),  # 9 days later
+        pivot_price=10.0,
+        engine=StubEngine(thresholds={"exit_failed_breakout": 3.0}, disabled={"exit_time_stop"}),
+    )
+    assert not any(s.reason == ExitReason.FAILED_BREAKOUT for s in sigs)
+
+
+def test_failed_breakout_skipped_when_no_pivot_price():
+    """Positions with no carried-over pivot_price (e.g. created before this
+    column existed) must never trigger — the check is a no-op without it."""
+    df = _make_df(close=9.5)
+    sigs = _call(
+        current_price=9.5, current_stop=8.5, df=df,
+        entry_date=date(2026, 1, 1), today=date(2026, 1, 2),
+        pivot_price=None,
+        engine=StubEngine(disabled={"exit_time_stop"}),
+    )
+    assert not any(s.reason == ExitReason.FAILED_BREAKOUT for s in sigs)
+
+
+def test_failed_breakout_disabled_rule_never_triggers():
+    df = _make_df(close=9.5)
+    sigs = _call(
+        current_price=9.5, current_stop=8.5, df=df,
+        entry_date=date(2026, 1, 1), today=date(2026, 1, 2),
+        pivot_price=10.0,
+        engine=StubEngine(disabled={"exit_time_stop", "exit_failed_breakout"}),
+    )
+    assert not any(s.reason == ExitReason.FAILED_BREAKOUT for s in sigs)
+
+
+def test_failed_breakout_takes_priority_over_time_stop_when_both_trigger():
+    """Order matters — the caller (check_exit_rules_task) acts on the FIRST
+    should_exit=True signal, so failed-breakout (placed earlier in the
+    function) must win when both could plausibly apply."""
+    df = _make_df(close=9.5)
+    sigs = _call(
+        current_price=9.5, current_stop=8.5, df=df,
+        entry_date=date(2026, 1, 1), today=date(2026, 1, 2),
+        pivot_price=10.0,
+        engine=StubEngine(thresholds={"exit_time_stop": 100.0, "exit_time_stop_weeks": 0}),
+    )
+    first_exit = next(s for s in sigs if s.should_exit)
+    assert first_exit.reason == ExitReason.FAILED_BREAKOUT
 
 
 # ---------------------------------------------------------------------------

@@ -1311,6 +1311,92 @@ def migrate():
                 logger.debug(f"Migration 010 stmt skipped: {str(e)[:120]}")
         logger.info("Migration 010 complete.")
 
+    # ── Migration 011 — R1: tighten risk_max_position_pct default 30% → 25% ────
+    # Minervini's stated maximum in a single name is 20-25%; 30% as a *default*
+    # over-concentrates every new org (50% is his cautionary example of
+    # outright dangerous concentration, not a target the old minervini_ref text
+    # implied). Only touches rows still at the untouched default 30 — never
+    # clobbers a value an admin deliberately set.
+    logger.info("Running migration 011 — tighten risk_max_position_pct default 30% -> 25%...")
+    with engine.connect() as conn:
+        before = conn.execute(text("""
+            SELECT organization_id, threshold FROM rule_configs
+            WHERE rule_id = 'risk_max_position_pct' AND threshold = 30;
+        """)).fetchall()
+        if before:
+            logger.info(f"risk_max_position_pct at old default (30%) for orgs (NULL = global template): "
+                        f"{[r[0] for r in before]}")
+        result = conn.execute(text("""
+            UPDATE rule_configs
+            SET threshold = 25,
+                label = 'Max position size: 25% of capital',
+                description = 'No single position can exceed 25% of total capital.',
+                minervini_ref = 'Concentration with control — 20-25% cap per name (50% is his '
+                                'cautionary example of outright dangerous concentration, not a target)'
+            WHERE rule_id = 'risk_max_position_pct' AND threshold = 30;
+        """))
+        conn.commit()
+        logger.info(f"Migration 011: updated {result.rowcount} risk_max_position_pct row(s) 30% -> 25%.")
+        # AW org (id=10) explicit check, per the audit's request to confirm the live org specifically.
+        aw_row = conn.execute(text("""
+            SELECT threshold FROM rule_configs
+            WHERE rule_id = 'risk_max_position_pct' AND organization_id = 10;
+        """)).fetchone()
+        if aw_row is not None:
+            logger.info(f"Migration 011: AW org (id=10) risk_max_position_pct is now {aw_row[0]}%.")
+        logger.info("Migration 011 complete.")
+
+    # ── Migration 012 — R3: failed-breakout defensive exit ──────────────────────
+    # New Position.pivot_price column (carried from Signal.pivot_price at entry),
+    # the FAILED_BREAKOUT exitreason enum value (ALTER TYPE must run in
+    # AUTOCOMMIT — same pattern as Migration 009's BROKER_SYNC), and seeding the
+    # exit_failed_breakout rule to the global template + every org (same
+    # loop pattern as Migration 007's new_rules seeding).
+    logger.info("Running migration 012 — failed-breakout defensive exit...")
+    with engine.connect() as conn:
+        if not conn.execute(text("""
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'positions' AND column_name = 'pivot_price';
+        """)).fetchone():
+            conn.execute(text("ALTER TABLE positions ADD COLUMN pivot_price NUMERIC(14,4);"))
+            conn.commit()
+            logger.info("Added positions.pivot_price.")
+
+        try:
+            ac_conn = conn.execution_options(isolation_level="AUTOCOMMIT")
+            ac_conn.execute(text("ALTER TYPE exitreason ADD VALUE IF NOT EXISTS 'FAILED_BREAKOUT'"))
+            logger.info("Ensured exitreason enum value 'FAILED_BREAKOUT'.")
+        except Exception as e:
+            logger.debug(f"Migration 012 enum add skipped: {str(e)[:120]}")
+
+        orgs_list = conn.execute(text("SELECT id FROM organizations;")).fetchall()
+        for oid in [None] + [o[0] for o in orgs_list]:
+            if oid is None:
+                exists = conn.execute(text(
+                    "SELECT 1 FROM rule_configs WHERE rule_id = 'exit_failed_breakout' AND organization_id IS NULL"
+                )).fetchone()
+            else:
+                exists = conn.execute(text(
+                    "SELECT 1 FROM rule_configs WHERE rule_id = 'exit_failed_breakout' AND organization_id = :o"
+                ), {"o": oid}).fetchone()
+            if exists:
+                continue
+            conn.execute(text("""
+                INSERT INTO rule_configs (rule_id, organization_id, category, label, description,
+                    minervini_ref, enabled_globally, is_mandatory, threshold, threshold_label,
+                    threshold_min, threshold_max, sort_order, updated_by)
+                VALUES ('exit_failed_breakout', :oid, 'EXIT_DEFENSIVE',
+                    'Exit failed breakout: close back below pivot within 3 days',
+                    'A correct breakout should hold above the pivot almost immediately. If a daily '
+                    'close falls back below the pivot buy point within this many days of entry, exit '
+                    'rather than waiting for the full stop.',
+                    'Cut a failed breakout fast — don''t wait for the full stop',
+                    true, false, 3.0, 'Max days after entry to apply this check', 1.0, 10.0, 60.5,
+                    'migration_012')
+            """), {"oid": oid})
+        conn.commit()
+        logger.info("Migration 012 complete.")
+
     logger.info("SaaS/Multi-tenant migration and seeding complete!")
 
 

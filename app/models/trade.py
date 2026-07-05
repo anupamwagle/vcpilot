@@ -50,6 +50,7 @@ class ExitReason(str, enum.Enum):
     MANUAL           = "MANUAL"              # Admin / Telegram override
     THREE_WEEKS_TIGHT= "THREE_WEEKS_TIGHT"   # 3-weeks-tight trailing stop
     BROKER_SYNC      = "BROKER_SYNC"         # Auto-closed by broker reconciliation (position no longer at broker)
+    FAILED_BREAKOUT  = "FAILED_BREAKOUT"     # Close back below pivot within N days of entry
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +163,16 @@ EXIT_REASON_RATIONALE: dict[str, dict[str, str]] = {
             "reason is the protective stop doing its job."
         ),
     },
+    "FAILED_BREAKOUT": {
+        "summary": "The breakout didn't act right, so the position was cut early — before the full stop.",
+        "detail": (
+            "A correct breakout should hold above the pivot almost immediately. Within a few days of "
+            "entry, price closed back below the pivot buy point, which Minervini treats as a sell signal "
+            "in its own right rather than waiting for the full stop-loss to be hit. Cutting quickly here "
+            "is a big part of how his average loss stays around 5-6% instead of the full 8-10% stop — "
+            "most of his losing trades are cut via this rule, not the hard stop."
+        ),
+    },
 }
 
 
@@ -268,6 +279,13 @@ class Position(Base):
     target_1        = Column(Numeric(14, 4), nullable=True)
     target_2        = Column(Numeric(14, 4), nullable=True)
     target_1_hit    = Column(Boolean, default=False)
+
+    # R3 (CLAUDE.md #42): carried over from Signal.pivot_price at position
+    # creation — needed by exit_failed_breakout to detect a close back below
+    # the pivot within N days of entry. Nullable since positions created
+    # before this column existed (or with no linked signal) won't have it;
+    # evaluate_exit_rules skips the check when it's unset.
+    pivot_price     = Column(Numeric(14, 4), nullable=True)
 
     # Pyramid tracking
     pyramid_count   = Column(Integer, default=0)

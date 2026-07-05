@@ -430,6 +430,10 @@ def test_entry_check_breakout_confirmed_opens_position(db_session, org_and_accou
     ).all()
     assert positions, "A position should be opened on confirmed breakout"
     assert positions[0].status == TradeStatus.OPEN
+    assert float(positions[0].pivot_price) == 37.0, (
+        "Signal.pivot_price must be carried onto the Position (R3 / CLAUDE.md #42 — "
+        "needed by exit_failed_breakout)"
+    )
 
     # Signal should be flipped to TRIGGERED
     db_session.expire(sig)
@@ -501,6 +505,50 @@ def test_entry_check_extension_guard_allows_breakout_within_range(db_session, or
         Position.organization_id == org.id, Position.ticker == "WOW.AX",
     ).all()
     assert positions, "A breakout within the max chase limit must still open a position"
+
+
+# ---------------------------------------------------------------------------
+# Test: minimum liquidity filter (R2 / CLAUDE.md #42) — intraday re-check
+# ---------------------------------------------------------------------------
+
+def test_entry_check_liquidity_filter_skips_thin_stock(db_session, org_and_account, monkeypatch):
+    from decimal import Decimal
+    from app.tasks.trading import check_entry_triggers
+    from app.models.config import RuleConfig
+    org, account = org_and_account
+    sig = _make_signal(db_session, org.id, account.id, pivot=37.0)
+    db_session.add(RuleConfig(
+        rule_id="entry_min_avg_dollar_volume", organization_id=org.id, category="ENTRY",
+        label="Min liquidity", threshold=Decimal("500000.0"),
+        enabled_globally=True, asset_types="EQUITY", is_mandatory=False,
+    ))
+    db_session.commit()
+
+    _patch_market_open(monkeypatch, is_open=True)
+    _patch_trading_paused(monkeypatch, paused=False)
+    _seed_regime(db_session, org.id, "BULL")
+    # close=37.5 x volume=1,000 = $37,500/day -- far below the $500k min.
+    _patch_price_data(monkeypatch, close=37.5, volume=1_000)
+    _patch_rule_engine(monkeypatch, breakout_passes=True)
+    _patch_sizing(monkeypatch)
+    _patch_broker_simulate(monkeypatch)
+    _patch_notifier(monkeypatch)
+
+    check_entry_triggers.run(exchange_key="ASX")
+
+    positions = db_session.query(Position).filter(
+        Position.organization_id == org.id, Position.ticker == "WOW.AX",
+    ).all()
+    assert not positions, "Must not open a position for a stock below the minimum liquidity threshold"
+
+    db_session.expire(sig)
+    sig_refreshed = db_session.query(Signal).get(sig.id)
+    assert sig_refreshed.status == SignalStatus.PENDING
+
+    log = db_session.query(AuditLog).filter(
+        AuditLog.ticker == "WOW.AX", AuditLog.message.like("%avg $ volume%"),
+    ).first()
+    assert log is not None
 
 
 # ---------------------------------------------------------------------------

@@ -448,6 +448,18 @@ RULE_CONFIGS = [
          threshold=1.00, threshold_label="Maximum share price (AUD/USD)",
          threshold_min=0.0, threshold_max=10000.0),
 
+    dict(rule_id="entry_min_avg_dollar_volume",
+         category="ENTRY", sort_order=54, asset_types="EQUITY",
+         label="Minimum liquidity: A$500,000/day average volume",
+         description="Skip equities whose 50-day average $ volume (avg volume × price) is "
+                      "below this — avoids genuinely untradeable names, especially with "
+                      "asx_universe_scope=ALL_LISTED, where a 2%-risk position could be "
+                      "multiple days of a thin stock's average turnover.",
+         minervini_ref="Trade institutional-quality liquidity only",
+         enabled_globally=True, is_mandatory=False,
+         threshold=500000.0, threshold_label="Min avg $ volume/day (50-day)",
+         threshold_min=0.0, threshold_max=10000000.0),
+
     # =========================================================================
     # DEFENSIVE EXIT RULES
     # =========================================================================
@@ -470,6 +482,18 @@ RULE_CONFIGS = [
          minervini_ref="Cut losses short — stop ≤ 7–8%, never beyond 10%",
          threshold=8.0, threshold_label="Max stop distance below entry (%)",
          threshold_min=5.0, threshold_max=12.0,
+         enabled_globally=True, is_mandatory=False),
+
+    dict(rule_id="exit_failed_breakout",
+         category="EXIT_DEFENSIVE", sort_order=60.5,
+         label="Exit failed breakout: close back below pivot within 3 days",
+         description="A correct breakout should hold above the pivot almost immediately. If a daily "
+                     "close falls back below the pivot buy point within this many days of entry, exit "
+                     "rather than waiting for the full stop — this is how the average loss stays around "
+                     "5-6% instead of the full 8-10% stop.",
+         minervini_ref="Cut a failed breakout fast — don't wait for the full stop",
+         threshold=3.0, threshold_label="Max days after entry to apply this check",
+         threshold_min=1.0, threshold_max=10.0,
          enabled_globally=True, is_mandatory=False),
 
     dict(rule_id="exit_time_stop",
@@ -615,10 +639,11 @@ RULE_CONFIGS = [
 
     dict(rule_id="risk_max_position_pct",
          category="POSITION_SIZING", sort_order=81,
-         label="Max position size: 30% of capital",
-         description="No single position can exceed 30% of total capital.",
-         minervini_ref="Concentration with control — cap single-name exposure (≤ 50%)",
-         threshold=30.0, threshold_label="Max position size % of capital",
+         label="Max position size: 25% of capital",
+         description="No single position can exceed 25% of total capital.",
+         minervini_ref="Concentration with control — 20-25% cap per name (50% is his cautionary "
+                       "example of outright dangerous concentration, not a target)",
+         threshold=25.0, threshold_label="Max position size % of capital",
          threshold_min=10.0, threshold_max=50.0,
          enabled_globally=True, is_mandatory=False),
 

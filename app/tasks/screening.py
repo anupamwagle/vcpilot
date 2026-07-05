@@ -29,6 +29,7 @@ from app.screener.trend_template import evaluate_trend_template
 from app.screener.fundamentals import evaluate_fundamentals
 from app.screener.vcp import detect_vcp
 from app.screener.price_filter import price_in_range
+from app.screener.liquidity_filter import liquidity_ok
 from app.screener.market_regime import evaluate_market_regime, MarketRegime
 from app.screener.crypto_rules import evaluate_crypto_rules, get_crypto_fundamental_data
 from app.risk.manager import calculate_position_size
@@ -982,6 +983,19 @@ def run_daily_screen(self, exchange_key: str = "ASX"):
                             ))
                         continue
 
+                    # --- Minimum Liquidity Filter (R2 / CLAUDE.md #42) ---
+                    avg_vol_50 = float(df["avg_vol_50"].iloc[-1] or 0) if "avg_vol_50" in df.columns else 0.0
+                    liq_ok, liq_reason = liquidity_ok(ticker, last_close, avg_vol_50, ticker_engine, ticker_asset_type)
+                    if not liq_ok:
+                        with get_db() as db:
+                            db.add(AuditLog(
+                                action=AuditAction.TASK_RUN,
+                                organization_id=org.id,
+                                ticker=ticker,
+                                message=f"SCREENER_SKIP liquidity: {liq_reason}",
+                            ))
+                        continue
+
                     # --- Trend Template ---
                     trend_results = evaluate_trend_template(ticker, df, ticker_engine)
                     trend_passed = sum(1 for r in trend_results.values() if r.passed)
@@ -1366,6 +1380,20 @@ def _run_screen_force(self, organization_id: int = None, exchange_key: str = "AS
                                 ticker=ticker,
                                 message=f"⚪ SKIP — {range_reason}",
                                 detail={"reason": "price_out_of_range"},
+                            ))
+                        continue
+
+                    # --- Minimum Liquidity Filter (R2 / CLAUDE.md #42) ---
+                    avg_vol_50 = float(df["avg_vol_50"].iloc[-1] or 0) if "avg_vol_50" in df.columns else 0.0
+                    liq_ok, liq_reason = liquidity_ok(ticker, last_close, avg_vol_50, ticker_engine, asset_type)
+                    if not liq_ok:
+                        with get_db() as db:
+                            db.add(AuditLog(
+                                action=AuditAction.SCREENER_TICKER,
+                                organization_id=org.id,
+                                ticker=ticker,
+                                message=f"⚪ SKIP — {liq_reason}",
+                                detail={"reason": "insufficient_liquidity"},
                             ))
                         continue
 
@@ -2061,6 +2089,22 @@ def screen_single_ticker(
                     ticker=ticker,
                     message=f"⚪ SKIP manual add — {range_reason}",
                     detail={"result": "skip_price_out_of_range"},
+                ))
+                db.commit()
+            return
+
+        # 4c. Minimum Liquidity Filter (R2 / CLAUDE.md #42) — same reasoning:
+        # never bypassed by adding a ticker directly.
+        avg_vol_50 = float(df["avg_vol_50"].iloc[-1] or 0) if "avg_vol_50" in df.columns else 0.0
+        liq_ok, liq_reason = liquidity_ok(ticker, last_close, avg_vol_50, engine, asset_type)
+        if not liq_ok:
+            with get_db() as db:
+                db.add(AuditLog(
+                    action=AuditAction.SCREENER_TICKER,
+                    organization_id=organization_id,
+                    ticker=ticker,
+                    message=f"⚪ SKIP manual add — {liq_reason}",
+                    detail={"result": "skip_insufficient_liquidity"},
                 ))
                 db.commit()
             return
