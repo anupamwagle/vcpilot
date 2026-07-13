@@ -738,6 +738,34 @@ def _safe_next(next_url: str) -> str:
     return next_url
 
 
+def _get_or_create_telegram_webhook_secret(org_id: int, db: Session) -> str:
+    """Per-org secret passed to Telegram's setWebhook and checked on every
+    incoming webhook request via the X-Telegram-Bot-Api-Secret-Token header,
+    so a forged POST with a guessed chat_id can't execute trading commands."""
+    import secrets as _secrets
+    from app.models.config import SystemConfig
+    cfg = db.query(SystemConfig).filter(
+        SystemConfig.key == "telegram_webhook_secret",
+        SystemConfig.organization_id == org_id,
+    ).first()
+    if cfg and cfg.value:
+        return cfg.value
+    new_secret = _secrets.token_urlsafe(32)
+    if cfg:
+        cfg.value = new_secret
+    else:
+        db.add(SystemConfig(
+            key="telegram_webhook_secret",
+            value=new_secret,
+            label="Telegram Webhook Secret",
+            group="system",
+            is_secret=True,
+            organization_id=org_id,
+        ))
+    db.commit()
+    return new_secret
+
+
 def _is_superadmin(request: Request) -> bool:
     return request.session.get("user_role") == "superadmin"
 
@@ -787,12 +815,24 @@ async def login_post(
     from app.config import settings
     from app.models.auth import User, verify_password
     from app.models.account import Organization
+    from app.utils.rate_limit import check_ip_throttle, increment as _rl_increment, reset as _rl_reset, is_set as _rl_is_set, set_with_ttl as _rl_set_with_ttl
 
     email_clean = email.strip().lower()
 
     from app.models.audit import AuditLog, AuditAction
+
+    if not check_ip_throttle(request, "login", max_requests=10, window_seconds=60):
+        return templates.TemplateResponse("login.html", {"request": request, "error": "Too many attempts. Please wait a minute and try again.", "next": next}, status_code=429)
+
+    lock_key = f"login_lock:{email_clean}"
+    if _rl_is_set(lock_key):
+        db.add(AuditLog(action=AuditAction.TASK_ERROR, actor=email_clean, message="Login attempt blocked — account temporarily locked after repeated failures"))
+        db.commit()
+        return templates.TemplateResponse("login.html", {"request": request, "error": "Too many failed attempts. Try again in 15 minutes.", "next": next}, status_code=429)
+
     # 1. Check Super Admin from .env
     if email_clean == settings.superadmin_email.strip().lower() and hmac.compare_digest(password.encode(), settings.superadmin_password.encode()):
+        _rl_reset(f"login_fail:{email_clean}")
         default_org = db.query(Organization).order_by(Organization.id).first()
         request.session["authenticated"] = True
         request.session["user_role"] = "superadmin"
@@ -812,10 +852,12 @@ async def login_post(
             db.add(AuditLog(action=AuditAction.TASK_ERROR, actor=email_clean, message="Failed login attempt - user account is disabled"))
             db.commit()
             return templates.TemplateResponse("login.html", {"request": request, "error": "User account is disabled", "next": next}, status_code=401)
-        
+
+        _rl_reset(f"login_fail:{email_clean}")
+
         # Check if user has "Super Admin" role in DB
         is_super = any(r.name == "Super Admin" for r in user.roles)
-        
+
         request.session["authenticated"] = True
         request.session["user_role"] = "superadmin" if is_super else "user"
         request.session["user_id"] = user.id
@@ -828,6 +870,10 @@ async def login_post(
             return RedirectResponse(_safe_next(next), 302)
         return RedirectResponse("/", 302)
 
+    fail_count = _rl_increment(f"login_fail:{email_clean}", 15 * 60)
+    if fail_count >= 10:
+        _rl_set_with_ttl(lock_key, 15 * 60)
+        db.add(AuditLog(action=AuditAction.TASK_ERROR, actor=email_clean, message=f"Account locked for 15 minutes after {fail_count} failed login attempts"))
     db.add(AuditLog(action=AuditAction.TASK_ERROR, actor=email_clean, message=f"Failed login attempt for email {email_clean}"))
     db.commit()
     return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid email or password", "next": next}, status_code=401)
@@ -861,6 +907,10 @@ async def login_request_otp(
     from app.models.auth import User
     from app.utils.email import send_email
     from app.config import settings
+    from app.utils.rate_limit import check_ip_throttle
+
+    if not check_ip_throttle(request, "login_request_otp", max_requests=10, window_seconds=60):
+        return templates.TemplateResponse("login.html", {"request": request, "error": "Too many attempts. Please wait a minute and try again.", "next": next}, status_code=429)
 
     email_clean = email.strip().lower()
     user = db.query(User).filter(User.email == email_clean).first()
@@ -928,16 +978,28 @@ async def login_verify_otp_post(
 ):
     from datetime import datetime
     from app.models.auth import User
+    from app.utils.rate_limit import check_ip_throttle, increment as _rl_increment, reset as _rl_reset
+
+    if not check_ip_throttle(request, "verify_otp", max_requests=10, window_seconds=60):
+        return templates.TemplateResponse("verify_otp.html", {"request": request, "email": email, "error": "Too many attempts. Please wait a minute and try again.", "next": next}, status_code=429)
 
     user = db.query(User).filter(User.email == email.strip().lower()).first()
     if not user:
         return templates.TemplateResponse("verify_otp.html", {"request": request, "email": email, "error": "User session expired. Please request a new OTP.", "next": next}, status_code=400)
-    
+
     from app.models.audit import AuditLog, AuditAction
     if not user.otp_code or user.otp_code != otp_code.strip() or not user.otp_expires_at or user.otp_expires_at < datetime.utcnow():
+        fail_key = f"otp_fail:{user.email}"
+        fail_count = _rl_increment(fail_key, 15 * 60)
+        if fail_count >= 5 and user.otp_code:
+            user.otp_code = None
+            user.otp_expires_at = None
+            db.add(AuditLog(action=AuditAction.TASK_ERROR, actor=user.email, user_id=user.id, organization_id=user.organization_id, message=f"OTP invalidated after {fail_count} failed verification attempts — request a new one"))
         db.add(AuditLog(action=AuditAction.TASK_ERROR, actor=user.email, user_id=user.id, organization_id=user.organization_id, message=f"Failed OTP passcode verification attempt"))
         db.commit()
         return templates.TemplateResponse("verify_otp.html", {"request": request, "email": email, "error": "Invalid or expired OTP code", "next": next}, status_code=400)
+
+    _rl_reset(f"otp_fail:{user.email}")
 
     # Clear OTP
     user.otp_code = None
@@ -6591,7 +6653,9 @@ async def admin_audit(request: Request, db: Session = Depends(get_db)):
 async def webhook_telegram(request: Request, db: Session = Depends(get_db)):
     """
     Handle incoming messages from Telegram Bot API.
-    Security: incoming chat_id must match a telegram_chat_id in SystemConfig.
+    Security: incoming chat_id must match a telegram_chat_id in SystemConfig,
+    and (once configured) the X-Telegram-Bot-Api-Secret-Token header must match
+    the org's telegram_webhook_secret — see /admin/telegram/set-webhook.
     """
     from fastapi.responses import JSONResponse
     from app.agent.commands import AgentCommandHandler
@@ -6626,6 +6690,23 @@ async def webhook_telegram(request: Request, db: Session = Depends(get_db)):
     if org_id is None:
         logger.warning(f"Telegram message from unknown chat {chat_id} — ignored")
         return JSONResponse({"ok": True})
+
+    # Verify this request genuinely came from Telegram, not a forged POST with
+    # a guessed/known chat_id — enforced once the org has re-registered its
+    # webhook with a secret_token (see /admin/telegram/set-webhook). Orgs that
+    # haven't re-registered since this check shipped have no secret configured
+    # yet, so they fail open here until they do (poll_telegram_updates is
+    # unaffected either way, as it doesn't go through this endpoint).
+    secret_cfg = db.query(SystemConfig).filter(
+        SystemConfig.key == "telegram_webhook_secret",
+        SystemConfig.organization_id == org_id,
+    ).first()
+    if secret_cfg and secret_cfg.value:
+        import hmac
+        incoming_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if not hmac.compare_digest(incoming_secret.encode(), secret_cfg.value.encode()):
+            logger.warning(f"Telegram webhook request for org {org_id} failed secret_token check — rejecting")
+            return JSONResponse({"ok": False}, status_code=403)
 
     # Check if Telegram is enabled
     cfg_enabled = db.query(SystemConfig).filter(
@@ -6702,27 +6783,28 @@ async def admin_comms(request: Request, db: Session = Depends(get_db)):
 
 
 @app.post("/admin/telegram/set-webhook")
-async def telegram_set_webhook(request: Request):
+async def telegram_set_webhook(request: Request, db: Session = Depends(get_db)):
     """Register the AstraTrade webhook with Telegram."""
     if not _auth(request):
         return RedirectResponse("/login", 302)
     org_id = request.session.get("organization_id")
-    
+
     from app.notifications.telegram import TelegramNotifier
     import httpx
-    
+
     notifier = TelegramNotifier(organization_id=org_id)
     if not notifier.token:
         return RedirectResponse("/admin/comms?msg=tg_no_token", 302)
-        
+
     hook_url = f"{str(request.base_url).rstrip('/')}/webhook/telegram"
     # For safety, ensure it's HTTPS if not localhost
     if "localhost" not in hook_url and "0.0.0.0" not in hook_url and not hook_url.startswith("https"):
         logger.warning(f"Telegram webhook registration: URL is not HTTPS ({hook_url}). Telegram requires HTTPS.")
-        
+
+    secret_token = _get_or_create_telegram_webhook_secret(org_id, db)
     try:
         url = f"https://api.telegram.org/bot{notifier.token}/setWebhook"
-        resp = httpx.post(url, data={"url": hook_url}, timeout=10)
+        resp = httpx.post(url, data={"url": hook_url, "secret_token": secret_token}, timeout=10)
         ok = resp.status_code == 200 and resp.json().get("ok")
         return RedirectResponse(f"/admin/comms?msg={'tg_hook_ok' if ok else 'tg_hook_fail'}", 302)
     except Exception as e:
@@ -8318,6 +8400,10 @@ async def reset_password_get(request: Request, token: str = Query(...), db: Sess
 async def reset_password_post(request: Request, token: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     from datetime import datetime
     from app.models.auth import User, hash_password as hash_p
+    from app.utils.rate_limit import check_ip_throttle
+
+    if not check_ip_throttle(request, "reset_password", max_requests=10, window_seconds=60):
+        return templates.TemplateResponse("reset_password.html", {"request": request, "token": token, "error": "Too many attempts. Please wait a minute and try again.", "success": False}, status_code=429)
 
     user = db.query(User).filter(User.reset_token == token, User.reset_token_expires > datetime.utcnow()).first()
     if not user:
@@ -8898,6 +8984,10 @@ async def mcp_oauth_token(request: Request, db: Session = Depends(get_db)):
     """
     from app.models.mcp import MCPCredential, verify_secret
     from app.mcp.auth import create_access_token
+    from app.utils.rate_limit import check_ip_throttle
+
+    if not check_ip_throttle(request, "mcp_oauth_token", max_requests=10, window_seconds=60):
+        return _JSONResponse({"error": "slow_down", "error_description": "Too many requests, please wait a minute and try again"}, status_code=429)
 
     client_id     = None
     client_secret = None

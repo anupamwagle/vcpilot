@@ -171,9 +171,11 @@ def test_send_with_explicit_chat_id_only_sends_to_that_chat():
 
 
 class _FakeTelegramRequest:
-    """Minimal stand-in for FastAPI's Request — webhook_telegram only awaits .json()."""
-    def __init__(self, payload):
+    """Minimal stand-in for FastAPI's Request — webhook_telegram only awaits
+    .json() and reads .headers."""
+    def __init__(self, payload, headers=None):
         self._payload = payload
+        self.headers = headers or {}
 
     async def json(self):
         return self._payload
@@ -222,6 +224,88 @@ def test_webhook_telegram_ignores_unknown_chat(db_session, org_and_account):
 
     assert response.status_code == 200
     mock_send.assert_not_called()
+
+
+def test_webhook_telegram_fails_open_when_secret_not_yet_configured(db_session, org_and_account):
+    """Orgs that haven't re-registered their webhook since this check shipped
+    have no telegram_webhook_secret row yet — must not be locked out."""
+    import asyncio
+    from unittest.mock import patch
+    from web.main import webhook_telegram
+    from app.models.config import SystemConfig
+
+    org, _ = org_and_account
+    db_session.add(SystemConfig(key="telegram_chat_id", value="111,222", organization_id=org.id))
+    db_session.commit()
+
+    request = _FakeTelegramRequest({"message": {"chat": {"id": 222}, "text": "STATUS", "from": {"id": 1}}})
+
+    with patch("app.agent.commands.AgentCommandHandler.handle", return_value="ok"), \
+         patch("app.notifications.telegram.TelegramNotifier.send", return_value=True) as mock_send:
+        response = asyncio.run(webhook_telegram(request, db=db_session))
+
+    assert response.status_code == 200
+    mock_send.assert_called_once()
+
+
+def test_webhook_telegram_rejects_mismatched_secret_token(db_session, org_and_account):
+    """Once an org has re-registered its webhook (secret configured), a forged
+    POST with a guessed chat_id but the wrong/missing secret must be rejected."""
+    import asyncio
+    from unittest.mock import patch
+    from web.main import webhook_telegram
+    from app.models.config import SystemConfig
+
+    org, _ = org_and_account
+    db_session.add(SystemConfig(key="telegram_chat_id", value="111,222", organization_id=org.id))
+    db_session.add(SystemConfig(key="telegram_webhook_secret", value="realsecret", organization_id=org.id))
+    db_session.commit()
+
+    request = _FakeTelegramRequest(
+        {"message": {"chat": {"id": 222}, "text": "STATUS", "from": {"id": 1}}},
+        headers={"X-Telegram-Bot-Api-Secret-Token": "wrongsecret"},
+    )
+
+    with patch("app.agent.commands.AgentCommandHandler.handle", return_value="ok"), \
+         patch("app.notifications.telegram.TelegramNotifier.send", return_value=True) as mock_send:
+        response = asyncio.run(webhook_telegram(request, db=db_session))
+
+    assert response.status_code == 403
+    mock_send.assert_not_called()
+
+
+def test_webhook_telegram_accepts_matching_secret_token(db_session, org_and_account):
+    import asyncio
+    from unittest.mock import patch
+    from web.main import webhook_telegram
+    from app.models.config import SystemConfig
+
+    org, _ = org_and_account
+    db_session.add(SystemConfig(key="telegram_chat_id", value="111,222", organization_id=org.id))
+    db_session.add(SystemConfig(key="telegram_webhook_secret", value="realsecret", organization_id=org.id))
+    db_session.commit()
+
+    request = _FakeTelegramRequest(
+        {"message": {"chat": {"id": 222}, "text": "STATUS", "from": {"id": 1}}},
+        headers={"X-Telegram-Bot-Api-Secret-Token": "realsecret"},
+    )
+
+    with patch("app.agent.commands.AgentCommandHandler.handle", return_value="ok"), \
+         patch("app.notifications.telegram.TelegramNotifier.send", return_value=True) as mock_send:
+        response = asyncio.run(webhook_telegram(request, db=db_session))
+
+    assert response.status_code == 200
+    mock_send.assert_called_once()
+
+
+def test_get_or_create_telegram_webhook_secret_is_idempotent(db_session, org_and_account):
+    from web.main import _get_or_create_telegram_webhook_secret
+    org, _ = org_and_account
+
+    secret1 = _get_or_create_telegram_webhook_secret(org.id, db_session)
+    assert secret1
+    secret2 = _get_or_create_telegram_webhook_secret(org.id, db_session)
+    assert secret1 == secret2
 
 
 def test_notifier_parses_comma_separated_chat_ids_from_db(db_session, org_and_account):

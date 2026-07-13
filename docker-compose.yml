@@ -19,7 +19,8 @@ x-app-env: &app-env
   environment:
     - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB}
     #- DATABASE_URL=${DATABASE_URL}
-    - REDIS_URL=${REDIS_URL}
+    - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6389/0
+    #- REDIS_URL=${REDIS_URL}
 
 x-repo-volume: &repo-volume .:/app
 
@@ -47,7 +48,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       # REMOVED: Local migrations mount. The initialization container handles seeds.
@@ -66,15 +67,15 @@ services:
     image: redis:7-alpine
     container_name: vcpilot-redis
     restart: unless-stopped
-    command: redis-server --port 6389
+    command: redis-server --port 6389 --requirepass ${REDIS_PASSWORD}
     ports:
-      - "6389:6389"
+      - "127.0.0.1:6389:6389"
     volumes:
       - redis-data:/data
     networks:
       - vcpilot-net
     healthcheck:
-      test: ["CMD", "redis-cli", "-p", "6389", "ping"]
+      test: ["CMD", "redis-cli", "-p", "6389", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -265,9 +266,9 @@ services:
       BYPASS_WARNING: "yes"
       VNC_SERVER_PASSWORD: ${VNC_PASSWORD:-changeme}
     ports:
-      - "4001:4001"
-      - "4002:4002"
-      - "5900:5900"
+      - "127.0.0.1:4001:4001"
+      - "127.0.0.1:4002:4002"
+      - "127.0.0.1:5900:5900"
     volumes:
       - ibkr-jts:/home/ibgateway/Jts
     networks:
@@ -287,7 +288,7 @@ services:
     volumes:
       - /share/Container/vcpilot/novnc:/novnc:ro
     ports:
-      - "6085:8080"
+      - "127.0.0.1:6085:8080"
     networks:
       - vcpilot-net
     depends_on:
