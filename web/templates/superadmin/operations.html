@@ -21,7 +21,11 @@
   </div>
 </div>
 
-{% if msg %}
+{% if msg == 'queue_failed' %}
+<div class="alert-warn mb-4">
+  <strong>Could not queue the task</strong> — the message broker (Redis) appears to be unreachable, so nothing was scheduled. Check that the redis container is running, then try again.
+</div>
+{% elif msg %}
 <div class="alert-success mb-4">
   {% if msg == 'data' %}Price data refresh queued — check Task Log for progress.
   {% elif msg == 'universe' %}Universe refresh queued — stocks will be added/updated.

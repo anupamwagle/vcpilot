@@ -909,6 +909,16 @@ def evaluate_market_regime_task(self, exchange_key: str = "ASX"):
 
     except Exception as exc:
         logger.error(f"[{exchange_key}] Regime evaluation failed: {exc}")
+        # Surface in the Task Log — otherwise the Evaluate Market button appears
+        # to do nothing and the regime silently stays "Not evaluated"/stale.
+        try:
+            with get_db() as db:
+                db.add(AuditLog(
+                    action=AuditAction.TASK_ERROR,
+                    message=f"[{exchange_key}] Market regime evaluation FAILED: {str(exc)[:200]}",
+                ))
+        except Exception:
+            pass
 
 
 @app.task(name="app.tasks.screening.run_daily_screen", bind=True, max_retries=2)
@@ -1668,19 +1678,25 @@ def _run_screen_force(self, organization_id: int = None, exchange_key: str = "AS
 
     except Exception as exc:
         logger.error(f"Force screen failed: {exc}")
+        # Surface in the Task Log — otherwise the Run Screener button appears
+        # to do nothing when the task dies (e.g. data source outage).
+        try:
+            with get_db() as db:
+                db.add(AuditLog(
+                    action=AuditAction.TASK_ERROR,
+                    organization_id=organization_id,
+                    message=f"[{exchange_key or 'ASX'}] Force screen FAILED: {str(exc)[:200]}",
+                ))
+        except Exception:
+            pass
 
 
-def _get_or_create_sector_label(label_name: str, organization_id: int, db) -> int | None:
-    """
-    Look up a WatchlistLabel by name for the given org.
-    Creates it if it doesn't exist.
-    Returns the label id or None on error.
-
-    Sector labels use a consistent colour map defined below.
-    """
-    from app.models.signal import WatchlistLabel
-
-    _SECTOR_COLOURS = {
+# Colour map for every label name the auto-classifier can assign. Module-level
+# on purpose: its key set doubles as the authoritative "auto-assigned label
+# names" set — recategorise_watchlist_labels uses it to distinguish
+# classifier-owned labels (always re-assignable) from user-chosen labels
+# (protected unless force=True).
+SECTOR_LABEL_COLOURS = {
         "Gold":               "#f59e0b",   # amber
         "Lithium":            "#10b981",   # emerald
         "Rare Earth":         "#8b5cf6",   # violet
@@ -1708,6 +1724,7 @@ def _get_or_create_sector_label(label_name: str, organization_id: int, db) -> in
         "Crypto Core":        "#06b6d4",   # cyan
         "Layer 1":            "#2563eb",   # blue
         "Layer 2":            "#7c3aed",   # violet
+        "DeFi":               "#8b5cf6",   # violet
         "Stablecoin":         "#16a34a",   # green
         "Exchange Token":     "#0f766e",   # teal
         "Meme Coin":          "#f59e0b",   # amber
@@ -1717,7 +1734,18 @@ def _get_or_create_sector_label(label_name: str, organization_id: int, db) -> in
         "Privacy Coin":       "#475569",   # slate-dark
         "Payments":           "#ca8a04",   # yellow-dark
         "Altcoins":           "#6b7280",   # gray
-    }
+}
+
+
+def _get_or_create_sector_label(label_name: str, organization_id: int, db) -> int | None:
+    """
+    Look up a WatchlistLabel by name for the given org.
+    Creates it if it doesn't exist.
+    Returns the label id or None on error.
+
+    Sector labels use the consistent SECTOR_LABEL_COLOURS map above.
+    """
+    from app.models.signal import WatchlistLabel
 
     try:
         existing = db.query(WatchlistLabel).filter(
@@ -1728,7 +1756,7 @@ def _get_or_create_sector_label(label_name: str, organization_id: int, db) -> in
             return existing.id
 
         # Create new sector label
-        colour = _SECTOR_COLOURS.get(label_name, "#6b7280")  # default gray
+        colour = SECTOR_LABEL_COLOURS.get(label_name, "#6b7280")  # default gray
         new_label = WatchlistLabel(
             organization_id=organization_id,
             name=label_name,
@@ -2321,14 +2349,55 @@ def screen_single_ticker(
             db.commit()
 
 
-@app.task(name="app.tasks.screening.recategorise_watchlist_labels", bind=True)
-def recategorise_watchlist_labels(self, organization_id: int = None, force: bool = False):
+_RECAT_CRYPTO_SUFFIXES = ("-AUD", "-USD", "-USDT", "-BTC", "-ETH")
+
+
+def _watchlist_item_market(item) -> str:
     """
-    Bulk-assign sector labels to all WATCHING watchlist items for the given org
-    based on each stock/coin sector/industry data.
+    Classify a watchlist row into a market bucket: "ASX" | "US" | "CRYPTO".
+
+    Ticker format is authoritative (canonical yfinance: "BHP.AX", "AAPL",
+    "BTC-USD") and is checked before the DB columns — a known Jun 2026 bug
+    left some rows with exchange_key="ASX"/asset_type="EQUITY" for crypto and
+    US tickers, so the columns alone can't be trusted for old rows.
+    """
+    t = (item.ticker or "").upper()
+    if t.endswith(_RECAT_CRYPTO_SUFFIXES) or (item.asset_type or "").upper() == "CRYPTO" \
+            or (item.exchange_key or "").upper().startswith("CRYPTO"):
+        return "CRYPTO"
+    if t.endswith(".AX"):
+        return "ASX"
+    if (item.exchange_key or "").upper() in ("NYSE", "NASDAQ", "US"):
+        return "US"
+    # No .AX suffix and not crypto — canonical yfinance US ticker
+    return "US" if "." not in t else "ASX"
+
+
+@app.task(name="app.tasks.screening.recategorise_watchlist_labels", bind=True)
+def recategorise_watchlist_labels(self, organization_id: int = None, force: bool = False,
+                                  market: str = "ALL"):
+    """
+    Bulk-assign sector/category labels to WATCHING watchlist items for the
+    given org (or all active orgs), optionally scoped to one market.
+
+    market: "ALL" | "ASX" | "US" | "CRYPTO" — items outside the selected
+    market are left completely untouched.
+
+    Label protection model:
+    - Labels the auto-classifier itself owns (any name in SECTOR_LABEL_COLOURS,
+      e.g. "Banks", "Gold", "Crypto Core", "Altcoins") are ALWAYS eligible for
+      re-categorisation — this is what lets an "Altcoins" coin upgrade to
+      "Meme Coin" after the category map improves. (Previously "Crypto Core"/
+      "DeFi"/"Altcoins" were wrongly protected, so crypto items could never be
+      re-categorised without force.)
+    - Any other label (Favourites, High Priority, VCP Forming, Under Review,
+      Crypto Watch, or any user-created custom label) is user intent —
+      preserved unless force=True.
     """
     from app.models.account import Organization
     from app.models.signal import Watchlist, WatchlistStatus
+
+    market = (market or "ALL").strip().upper()
 
     try:
         with get_db() as db:
@@ -2339,6 +2408,7 @@ def recategorise_watchlist_labels(self, organization_id: int = None, force: bool
 
         for org in orgs:
             assigned = 0
+            scoped_count = 0
             with get_db() as db:
                 from app.models.signal import WatchlistLabel
                 items = db.query(Watchlist).filter(
@@ -2346,26 +2416,26 @@ def recategorise_watchlist_labels(self, organization_id: int = None, force: bool
                     Watchlist.status == WatchlistStatus.WATCHING,
                 ).all()
 
-                # User-priority labels are protected from auto-assignment unless force=True.
-                # Sector labels (auto-assigned) are always eligible for re-categorisation.
-                _PROTECTED_NAMES = {
-                    "Favourites", "High Priority", "VCP Forming", "Under Review",
-                    "Crypto Core", "DeFi", "Altcoins", "Crypto Watch",
-                }
-                _protected_ids: set = {
+                if market != "ALL":
+                    items = [i for i in items if _watchlist_item_market(i) == market]
+                scoped_count = len(items)
+
+                # Auto-classifier-owned labels are always re-assignable; every
+                # other label is user-chosen and protected unless force=True.
+                _auto_label_ids: set = {
                     lbl.id for lbl in db.query(WatchlistLabel).filter(
                         WatchlistLabel.organization_id == org.id,
-                        WatchlistLabel.name.in_(_PROTECTED_NAMES),
+                        WatchlistLabel.name.in_(SECTOR_LABEL_COLOURS.keys()),
                     ).all()
                 }
 
                 for item in items:
-                    # Skip only if the current label is a user-priority label and not forcing
-                    if not force and item.label_id and item.label_id in _protected_ids:
+                    # Skip if current label is user-chosen (non-auto) and not forcing
+                    if not force and item.label_id and item.label_id not in _auto_label_ids:
                         continue
                     before = item.label_id
-                    # Guard has already been applied above, so use force=True internally
-                    # to allow overwriting any non-protected sector label
+                    # Guard already applied above — force=True internally so any
+                    # stale auto-assigned label can be overwritten
                     _auto_assign_sector_label(item.ticker, item, org.id, db, force=True)
                     if item.label_id != before:
                         assigned += 1
@@ -2373,13 +2443,27 @@ def recategorise_watchlist_labels(self, organization_id: int = None, force: bool
                 db.add(AuditLog(
                     action=AuditAction.TASK_RUN,
                     organization_id=org.id,
-                    message=f"Watchlist re-categorised: {assigned}/{len(items)} items assigned sector labels (force={force})",
+                    message=(f"Watchlist re-categorised [{market}]: {assigned}/{scoped_count} "
+                             f"items assigned sector labels (force={force})"),
+                    detail={"market": market, "force": force,
+                            "assigned": assigned, "items_in_scope": scoped_count},
                 ))
 
-            logger.info(f"Org {org.name}: re-categorised {assigned}/{len(items)} watchlist items")
+            logger.info(f"Org {org.name}: re-categorised {assigned}/{scoped_count} watchlist items [{market}]")
 
     except Exception as exc:
         logger.error(f"Watchlist re-categorisation failed: {exc}")
+        # Surface the failure in the Task Log — a silent failure here is why the
+        # feature previously looked like "the button does nothing".
+        try:
+            with get_db() as db:
+                db.add(AuditLog(
+                    action=AuditAction.TASK_ERROR,
+                    organization_id=organization_id,
+                    message=f"Watchlist re-categorisation failed [{market}]: {str(exc)[:200]}",
+                ))
+        except Exception:
+            pass
 
 
 @app.task(name="app.tasks.screening.refresh_asx_sector_data", bind=True)
@@ -2414,6 +2498,15 @@ def refresh_asx_sector_data(self, organization_id: int = None):
         gics_map = get_asx_gics_map()
         if not gics_map:
             logger.warning("refresh_asx_sector_data: GICS map empty — ASX fetch failed or unavailable")
+            # Visible in the Task Log — previously this failed silently and the
+            # subsequent re-categorise had only coarse Level-1 sectors to work with.
+            with get_db() as db:
+                db.add(AuditLog(
+                    action=AuditAction.TASK_ERROR,
+                    organization_id=organization_id,
+                    message="ASX GICS sector backfill skipped: ASX export fetch failed/empty — "
+                            "ASX labels will fall back to coarse Level-1 sectors",
+                ))
             return
 
         with get_db() as db:

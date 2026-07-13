@@ -1586,9 +1586,16 @@ async def positions(request: Request, db: Session = Depends(get_db),
     pos_q = db.query(Position).filter(Position.status == TradeStatus.OPEN, Position.organization_id == org_id)
     try:
         if af == "ASX":
-            pos_q = pos_q.filter(Position.exchange_key == "ASX")
+            pos_q = pos_q.filter(Position.exchange_key == "ASX", ~Position.ticker.like("%-%"))
         elif af == "CRYPTO":
-            pos_q = pos_q.filter(Position.asset_type == "CRYPTO")
+            # Suffix-tolerant: rows created before the Jun 2026 exchange_key/asset_type
+            # fix may carry EQUITY/ASX defaults — ticker format is authoritative.
+            pos_q = pos_q.filter(or_(
+                Position.asset_type == "CRYPTO",
+                Position.ticker.like("%-AUD"),
+                Position.ticker.like("%-USD"),
+                Position.ticker.like("%-USDT"),
+            ))
         elif af == "US":
             pos_q = pos_q.filter(Position.exchange_key.in_(["NYSE", "NASDAQ"]))
     except Exception:
@@ -1787,9 +1794,15 @@ async def positions(request: Request, db: Session = Depends(get_db),
     trade_q = db.query(Trade).filter(Trade.organization_id == org_id).order_by(desc(Trade.exit_date))
     try:
         if af == "ASX":
-            trade_q = trade_q.filter(Trade.exchange_key == "ASX")
+            trade_q = trade_q.filter(Trade.exchange_key == "ASX", ~Trade.ticker.like("%-%"))
         elif af == "CRYPTO":
-            trade_q = trade_q.filter(Trade.asset_type == "CRYPTO")
+            # Suffix-tolerant (see positions filter above)
+            trade_q = trade_q.filter(or_(
+                Trade.asset_type == "CRYPTO",
+                Trade.ticker.like("%-AUD"),
+                Trade.ticker.like("%-USD"),
+                Trade.ticker.like("%-USDT"),
+            ))
         elif af == "US":
             trade_q = trade_q.filter(Trade.exchange_key.in_(["NYSE", "NASDAQ"]))
     except Exception:
@@ -1829,9 +1842,15 @@ async def positions(request: Request, db: Session = Depends(get_db),
     all_trade_q = db.query(Trade).filter(Trade.organization_id == org_id)
     try:
         if af == "ASX":
-            all_trade_q = all_trade_q.filter(Trade.exchange_key == "ASX")
+            all_trade_q = all_trade_q.filter(Trade.exchange_key == "ASX", ~Trade.ticker.like("%-%"))
         elif af == "CRYPTO":
-            all_trade_q = all_trade_q.filter(Trade.asset_type == "CRYPTO")
+            # Suffix-tolerant (see positions filter above)
+            all_trade_q = all_trade_q.filter(or_(
+                Trade.asset_type == "CRYPTO",
+                Trade.ticker.like("%-AUD"),
+                Trade.ticker.like("%-USD"),
+                Trade.ticker.like("%-USDT"),
+            ))
         elif af == "US":
             all_trade_q = all_trade_q.filter(Trade.exchange_key.in_(["NYSE", "NASDAQ"]))
     except Exception:
@@ -4182,6 +4201,25 @@ async def watchlist_remove(request: Request, item_id: int, db: Session = Depends
 
 
 # System action endpoints
+def _queue_redirect(queue_fn, ok_url: str, fail_url: str = None):
+    """
+    Queue a Celery task/chain from a dashboard action route and redirect.
+
+    Every action route used to swallow .delay() failures (try/except: pass)
+    and still redirect with a SUCCESS banner — with Redis/the broker down,
+    buttons silently did nothing. A failed .delay() means the message never
+    reached the broker (it will NOT queue itself later), so surface it:
+    redirect with ?msg=queue_failed and the templates render an error alert.
+    """
+    try:
+        queue_fn()
+        return RedirectResponse(ok_url, 302)
+    except Exception as exc:
+        logger.error(f"Task queue failed (broker unreachable?): {exc}")
+        base = (fail_url or ok_url).split("?")[0]
+        return RedirectResponse(f"{base}?msg=queue_failed", 302)
+
+
 @app.post("/action/pause")
 async def action_pause(request: Request, db: Session = Depends(get_db)):
     if not _auth(request):
@@ -4224,15 +4262,14 @@ async def action_run_screener(request: Request, exchange: str = Form("ASX")):
     if not _auth(request):
         return RedirectResponse("/login", 302)
     org_id = request.session.get("organization_id")
-    try:
-        from app.tasks.screening import _run_screen_force
-        _run_screen_force.delay(organization_id=org_id, exchange_key=exchange or "ASX")
-    except Exception:
-        pass
+    from app.tasks.screening import _run_screen_force
     cache.delete_prefix(f"wl_rows:{org_id}:")
     cache.delete_prefix(f"sig_items:{org_id}:")
     cache.delete(f"tw_data:{org_id}")
-    return RedirectResponse("/signals?msg=screen", 302)
+    return _queue_redirect(
+        lambda: _run_screen_force.delay(organization_id=org_id, exchange_key=exchange or "ASX"),
+        "/signals?msg=screen",
+    )
 
 
 @app.post("/action/send-report")
@@ -4241,8 +4278,10 @@ async def action_send_report(request: Request):
         return RedirectResponse("/login", 302)
     org_id = request.session.get("organization_id")
     from app.tasks.reporting import send_daily_report
-    send_daily_report.delay(organization_id=org_id)
-    return RedirectResponse("/", 302)
+    return _queue_redirect(
+        lambda: send_daily_report.delay(organization_id=org_id),
+        "/", fail_url="/admin/health",
+    )
 
 
 @app.post("/action/evaluate-regime")
@@ -4251,8 +4290,10 @@ async def action_evaluate_regime(request: Request, exchange: str = Form("ASX")):
         return RedirectResponse("/login", 302)
     # Super admins allowed in standard views under active organization context
     from app.tasks.screening import evaluate_market_regime_task
-    evaluate_market_regime_task.delay(exchange_key=exchange or "ASX")
-    return RedirectResponse("/admin/health?msg=regime", 302)
+    return _queue_redirect(
+        lambda: evaluate_market_regime_task.delay(exchange_key=exchange or "ASX"),
+        "/admin/health?msg=regime",
+    )
 
 
 @app.post("/action/ping-worker")
@@ -4261,8 +4302,7 @@ async def action_ping_worker(request: Request):
         return RedirectResponse("/login", 302)
     # Super admins allowed in standard views under active organization context
     from app.tasks.reporting import health_check
-    health_check.delay()
-    return RedirectResponse("/admin/health?msg=ping", 302)
+    return _queue_redirect(lambda: health_check.delay(), "/admin/health?msg=ping")
 
 
 @app.post("/action/refresh-data")
@@ -4272,7 +4312,8 @@ async def action_refresh_data(request: Request, exchange: str = Form(None)):
     exchange_key = exchange or None
     is_crypto = exchange_key and (exchange_key == "CRYPTO" or exchange_key.startswith("CRYPTO_"))
     from app.tasks.screening import refresh_price_data, refresh_crypto_universe
-    try:
+
+    def _queue():
         if is_crypto:
             # For crypto, chain: universe bootstrap → price refresh (bootstrap is fast if already seeded)
             from celery import chain as _chain
@@ -4283,9 +4324,11 @@ async def action_refresh_data(request: Request, exchange: str = Form(None)):
             ).delay()
         else:
             refresh_price_data.delay(exchange_key=exchange_key)
-    except Exception:
-        refresh_price_data.delay(exchange_key=exchange_key)
-    return RedirectResponse("/admin/health?msg=data", 302)
+
+    # NOTE: the old fallback re-called refresh_price_data.delay() inside the
+    # except block — with the broker down that second .delay() raised too,
+    # turning a queue failure into an unhandled 500.
+    return _queue_redirect(_queue, "/admin/health?msg=data")
 
 
 @app.post("/action/refresh-fundamentals")
@@ -4296,14 +4339,13 @@ async def action_refresh_fundamentals(request: Request, exchange: str = Form(Non
         return RedirectResponse("/login", 302)
     exchange_key = exchange or None
     from app.tasks.screening import refresh_stock_fundamentals
-    try:
-        refresh_stock_fundamentals.delay(
+    return _queue_redirect(
+        lambda: refresh_stock_fundamentals.delay(
             exchange_key=exchange_key,
             force=(str(force).lower() in ("1", "true", "on", "yes")),
-        )
-    except Exception:
-        pass
-    return RedirectResponse("/admin/health?msg=fundamentals", 302)
+        ),
+        "/admin/health?msg=fundamentals",
+    )
 
 
 @app.get("/stock-story/{ticker:path}")
@@ -4425,11 +4467,10 @@ async def action_refresh_universe(request: Request, scope: str = Form(None)):
         return RedirectResponse("/login", 302)
     organization_id = request.session.get("organization_id")
     from app.tasks.screening import refresh_universe
-    try:
-        refresh_universe.delay(scope=scope or None, organization_id=organization_id)
-    except Exception:
-        pass
-    return RedirectResponse("/admin/health?msg=universe", 302)
+    return _queue_redirect(
+        lambda: refresh_universe.delay(scope=scope or None, organization_id=organization_id),
+        "/admin/health?msg=universe",
+    )
 
 
 @app.post("/action/seed-us-universe")
@@ -4439,38 +4480,49 @@ async def action_seed_us_universe(request: Request, scope: str = Form(None)):
         return RedirectResponse("/login", 302)
     organization_id = request.session.get("organization_id")
     from app.tasks.screening import refresh_us_universe
-    try:
-        refresh_us_universe.delay(scope=scope or None, organization_id=organization_id)
-    except Exception:
-        pass
-    return RedirectResponse("/admin/health?msg=universe_us", 302)
+    return _queue_redirect(
+        lambda: refresh_us_universe.delay(scope=scope or None, organization_id=organization_id),
+        "/admin/health?msg=universe_us",
+    )
 
 
 @app.post("/action/recategorise-labels")
-async def action_recategorise_labels(request: Request, force: str = Form("0")):
+async def action_recategorise_labels(request: Request, force: str = Form("0"),
+                                     market: str = Form("ALL")):
     """
-    Bulk-assign sector labels to watchlist items (all exchanges).
+    Bulk-assign sector/category labels to watchlist items, scoped to the
+    selected market (ALL / ASX / US / CRYPTO).
 
-    Chains refresh_asx_sector_data first so ASX stocks get a precise GICS
-    industry-group string backfilled from the ASX's own export before the
-    keyword/override/crypto classifier in recategorise_watchlist_labels runs
-    — without this, most ASX stocks only ever carry the coarse Level-1
-    sector ("Financials") and can't be distinguished (Banks vs Insurance vs
-    Fund Managers etc.).
+    When ASX is in scope, chains refresh_asx_sector_data first so ASX stocks
+    get a precise GICS industry-group string backfilled from the ASX's own
+    export before the keyword/override/crypto classifier in
+    recategorise_watchlist_labels runs — without this, most ASX stocks only
+    ever carry the coarse Level-1 sector ("Financials") and can't be
+    distinguished (Banks vs Insurance vs Fund Managers etc.). For US/CRYPTO
+    runs the GICS backfill is skipped entirely — it's ASX-only data and just
+    adds a slow network fetch for nothing.
     """
     if not _auth(request):
         return RedirectResponse("/login", 302)
     organization_id = request.session.get("organization_id")
+    market = (market or "ALL").strip().upper()
+    if market not in ("ALL", "ASX", "US", "CRYPTO"):
+        market = "ALL"
     from celery import chain as _chain
     from app.tasks.screening import recategorise_watchlist_labels, refresh_asx_sector_data
-    try:
-        _chain(
-            refresh_asx_sector_data.si(organization_id=organization_id),
-            recategorise_watchlist_labels.si(organization_id=organization_id, force=(force == "1")),
-        ).delay()
-    except Exception:
-        pass
-    return RedirectResponse("/admin/health?msg=recategorise", 302)
+
+    def _queue():
+        if market in ("ALL", "ASX"):
+            _chain(
+                refresh_asx_sector_data.si(organization_id=organization_id),
+                recategorise_watchlist_labels.si(organization_id=organization_id,
+                                                 force=(force == "1"), market=market),
+            ).delay()
+        else:
+            recategorise_watchlist_labels.delay(organization_id=organization_id,
+                                                force=(force == "1"), market=market)
+
+    return _queue_redirect(_queue, "/admin/health?msg=recategorise")
 
 
 @app.post("/action/seed-crypto")
@@ -4479,11 +4531,10 @@ async def action_seed_crypto(request: Request, exchange: str = Form("CRYPTO_INDE
     if not _auth(request):
         return RedirectResponse("/login", 302)
     from app.tasks.screening import refresh_crypto_universe
-    try:
-        refresh_crypto_universe.delay(exchange_key=exchange)
-    except Exception:
-        pass
-    return RedirectResponse("/admin/health?msg=crypto_seed", 302)
+    return _queue_redirect(
+        lambda: refresh_crypto_universe.delay(exchange_key=exchange),
+        "/admin/health?msg=crypto_seed",
+    )
 
 
 @app.post("/action/full-setup")
@@ -4493,8 +4544,7 @@ async def action_full_setup(request: Request):
         return RedirectResponse("/login", 302)
     # Super admins allowed in standard views under active organization context
     from app.tasks.screening import run_full_setup
-    run_full_setup.delay()
-    return RedirectResponse("/admin/tasks?msg=setup", 302)
+    return _queue_redirect(lambda: run_full_setup.delay(), "/admin/tasks?msg=setup")
 
 
 @app.post("/action/dismiss-onboarding")
@@ -4532,15 +4582,14 @@ async def action_force_screen(request: Request, exchange: str = Form("ASX")):
     if not _auth(request):
         return RedirectResponse("/login", 302)
     org_id = request.session.get("organization_id")
-    try:
-        from app.tasks.screening import _run_screen_force
-        _run_screen_force.delay(organization_id=org_id, exchange_key=exchange or "ASX")
-    except Exception:
-        pass
+    from app.tasks.screening import _run_screen_force
     cache.delete_prefix(f"wl_rows:{org_id}:")
     cache.delete_prefix(f"sig_items:{org_id}:")
     cache.delete(f"tw_data:{org_id}")
-    return RedirectResponse("/signals?msg=screen", 302)
+    return _queue_redirect(
+        lambda: _run_screen_force.delay(organization_id=org_id, exchange_key=exchange or "ASX"),
+        "/signals?msg=screen",
+    )
 
 
 @app.post("/action/force-screen-async")
@@ -4575,8 +4624,10 @@ async def action_force_breakout_check(request: Request, exchange: str = Form("AS
     if not _auth(request):
         return RedirectResponse("/login", 302)
     from app.tasks.trading import check_entry_triggers
-    check_entry_triggers.delay(exchange_key=exchange or "ASX")
-    return RedirectResponse("/admin/tasks?msg=breakout", 302)
+    return _queue_redirect(
+        lambda: check_entry_triggers.delay(exchange_key=exchange or "ASX"),
+        "/admin/tasks?msg=breakout",
+    )
 
 
 @app.post("/action/force-exit-check")
@@ -4584,8 +4635,10 @@ async def action_force_exit_check(request: Request, exchange: str = Form("ASX"))
     if not _auth(request):
         return RedirectResponse("/login", 302)
     from app.tasks.trading import check_exit_rules_task
-    check_exit_rules_task.delay(exchange_key=exchange or "ASX")
-    return RedirectResponse("/admin/tasks?msg=exit_check", 302)
+    return _queue_redirect(
+        lambda: check_exit_rules_task.delay(exchange_key=exchange or "ASX"),
+        "/admin/tasks?msg=exit_check",
+    )
 
 
 @app.post("/action/force-position-sync")
@@ -4593,8 +4646,10 @@ async def action_force_position_sync(request: Request):
     if not _auth(request):
         return RedirectResponse("/login", 302)
     from app.tasks.trading import sync_ibkr_positions_task
-    sync_ibkr_positions_task.delay()
-    return RedirectResponse("/admin/tasks?msg=positions", 302)
+    return _queue_redirect(
+        lambda: sync_ibkr_positions_task.delay(),
+        "/admin/tasks?msg=positions",
+    )
 
 
 @app.post("/action/force-stop-sync")
@@ -4602,8 +4657,10 @@ async def action_force_stop_sync(request: Request):
     if not _auth(request):
         return RedirectResponse("/login", 302)
     from app.tasks.trading import sync_stop_orders
-    sync_stop_orders.delay()
-    return RedirectResponse("/admin/tasks?msg=stops", 302)
+    return _queue_redirect(
+        lambda: sync_stop_orders.delay(),
+        "/admin/tasks?msg=stops",
+    )
 
 
 
@@ -8864,7 +8921,8 @@ async def sa_action_refresh_data(request: Request, exchange: str = Form(None)):
     if not _auth(request) or not _is_superadmin(request):
         return RedirectResponse("/login", 302)
     from app.tasks.screening import refresh_price_data, refresh_crypto_universe
-    try:
+
+    def _queue():
         is_crypto = exchange and (exchange == "CRYPTO" or exchange.startswith("CRYPTO_"))
         if is_crypto:
             from celery import chain as _chain
@@ -8875,9 +8933,10 @@ async def sa_action_refresh_data(request: Request, exchange: str = Form(None)):
             ).delay()
         else:
             refresh_price_data.delay(exchange_key=exchange or None)
-    except Exception:
-        refresh_price_data.delay(exchange_key=exchange or None)
-    return RedirectResponse("/superadmin/operations?msg=data", 302)
+
+    # NOTE: the old except-block fallback re-called .delay() — with the broker
+    # down that raised too, turning a queue failure into an unhandled 500.
+    return _queue_redirect(_queue, "/superadmin/operations?msg=data")
 
 
 @app.post("/superadmin/action/refresh-universe")
@@ -8885,11 +8944,10 @@ async def sa_action_refresh_universe(request: Request, scope: str = Form(None)):
     if not _auth(request) or not _is_superadmin(request):
         return RedirectResponse("/login", 302)
     from app.tasks.screening import refresh_universe
-    try:
-        refresh_universe.delay(scope=scope or None, organization_id=None)
-    except Exception:
-        pass
-    return RedirectResponse("/superadmin/operations?msg=universe", 302)
+    return _queue_redirect(
+        lambda: refresh_universe.delay(scope=scope or None, organization_id=None),
+        "/superadmin/operations?msg=universe",
+    )
 
 
 @app.post("/superadmin/action/evaluate-regime")
@@ -8897,8 +8955,10 @@ async def sa_action_evaluate_regime(request: Request, exchange: str = Form("ASX"
     if not _auth(request) or not _is_superadmin(request):
         return RedirectResponse("/login", 302)
     from app.tasks.screening import evaluate_market_regime_task
-    evaluate_market_regime_task.delay(exchange_key=exchange or "ASX")
-    return RedirectResponse("/superadmin/operations?msg=regime", 302)
+    return _queue_redirect(
+        lambda: evaluate_market_regime_task.delay(exchange_key=exchange or "ASX"),
+        "/superadmin/operations?msg=regime",
+    )
 
 
 @app.post("/superadmin/action/seed-crypto")
@@ -8906,11 +8966,10 @@ async def sa_action_seed_crypto(request: Request, exchange: str = Form("CRYPTO_I
     if not _auth(request) or not _is_superadmin(request):
         return RedirectResponse("/login", 302)
     from app.tasks.screening import refresh_crypto_universe
-    try:
-        refresh_crypto_universe.delay(exchange_key=exchange)
-    except Exception:
-        pass
-    return RedirectResponse("/superadmin/operations?msg=crypto_seed", 302)
+    return _queue_redirect(
+        lambda: refresh_crypto_universe.delay(exchange_key=exchange),
+        "/superadmin/operations?msg=crypto_seed",
+    )
 
 
 
@@ -8920,11 +8979,10 @@ async def sa_action_seed_us_universe(request: Request, scope: str = Form(None)):
     if not _auth(request) or not _is_superadmin(request):
         return RedirectResponse("/login", 302)
     from app.tasks.screening import refresh_us_universe
-    try:
-        refresh_us_universe.delay(scope=scope or None)
-    except Exception:
-        pass
-    return RedirectResponse("/superadmin/operations?msg=universe_us", 302)
+    return _queue_redirect(
+        lambda: refresh_us_universe.delay(scope=scope or None),
+        "/superadmin/operations?msg=universe_us",
+    )
 
 
 @app.post("/superadmin/action/run-screener")
@@ -8932,11 +8990,10 @@ async def sa_action_run_screener(request: Request, exchange: str = Form(None)):
     if not _auth(request) or not _is_superadmin(request):
         return RedirectResponse("/login", 302)
     from app.tasks.screening import _run_screen_force
-    try:
-        _run_screen_force.delay(exchange_key=exchange or None, organization_id=None)
-    except Exception:
-        pass
-    return RedirectResponse("/superadmin/operations?msg=screener", 302)
+    return _queue_redirect(
+        lambda: _run_screen_force.delay(exchange_key=exchange or None, organization_id=None),
+        "/superadmin/operations?msg=screener",
+    )
 
 
 @app.post("/superadmin/action/full-setup")
@@ -8944,8 +9001,7 @@ async def sa_action_full_setup(request: Request):
     if not _auth(request) or not _is_superadmin(request):
         return RedirectResponse("/login", 302)
     from app.tasks.screening import run_full_setup
-    run_full_setup.delay()
-    return RedirectResponse("/superadmin/operations?msg=setup", 302)
+    return _queue_redirect(lambda: run_full_setup.delay(), "/superadmin/operations?msg=setup")
 
 
 @app.post("/superadmin/action/ping-worker")
@@ -8953,8 +9009,7 @@ async def sa_action_ping_worker(request: Request):
     if not _auth(request) or not _is_superadmin(request):
         return RedirectResponse("/login", 302)
     from app.tasks.reporting import health_check
-    health_check.delay()
-    return RedirectResponse("/superadmin/operations?msg=ping", 302)
+    return _queue_redirect(lambda: health_check.delay(), "/superadmin/operations?msg=ping")
 
 
 # ===========================================================================

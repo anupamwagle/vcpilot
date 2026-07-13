@@ -42,9 +42,14 @@
 {% if msg == 'ping' %}<div class="alert-success mb-4">Worker ping queued — refresh in ~10 seconds.</div>
 {% elif msg == 'screen' %}<div class="alert-info mb-4">Screener queued — results appear in Signals within minutes.</div>
 {% elif msg == 'report' %}<div class="alert-info mb-4">Daily report queued — Telegram message incoming.</div>
-{% elif msg == 'recategorise' %}<div class="alert-success mb-4">Watchlist label re-categorisation queued — sector labels will be assigned to unlabelled items. Check Task Log.</div>
+{% elif msg == 'recategorise' %}<div class="alert-success mb-4">Watchlist label re-categorisation queued for the selected market — sector/category labels will be (re)assigned. Check Task Log for the result.</div>
 {% elif msg == 'universe' %}<div class="alert-success mb-4">ASX universe refresh queued — constituent list will be updated. Check Task Log.</div>
 {% elif msg == 'universe_us' %}<div class="alert-success mb-4">US universe refresh queued — S&P 500 / NASDAQ-100 stocks will be seeded. Check Task Log for progress.</div>
+{% elif msg == 'data' %}<div class="alert-success mb-4">Price data refresh queued — 2yr OHLCV history will be downloaded. Takes several minutes; check Task Log for progress.</div>
+{% elif msg == 'regime' %}<div class="alert-success mb-4">Market regime evaluation queued — result appears above within a minute.</div>
+{% elif msg == 'fundamentals' %}<div class="alert-success mb-4">Stock Story refresh queued — throttled fetch, stale entries only unless forced. Check Task Log.</div>
+{% elif msg == 'crypto_seed' %}<div class="alert-success mb-4">Crypto universe seeding queued — supported coins will be added/updated. Check Task Log.</div>
+{% elif msg == 'queue_failed' %}<div class="alert-warn mb-4"><strong>Could not queue the task</strong> — the message broker (Redis) appears to be unreachable, so nothing was scheduled. Check that the redis container is running, then try again.</div>
 {% endif %}
 
 {% if is_first_run %}
@@ -266,9 +271,15 @@
     {% endif %}
 
     <form method="post" action="/action/recategorise-labels" style="display:inline-flex;align-items:center;gap:.35rem"
-          title="Backfills precise ASX GICS industry data, then re-assigns sector/category labels across ASX, US and crypto watchlist items (e.g. CBA → Banks, BTC → Crypto Core, UNI → DeFi).">
+          title="Re-assigns sector/category labels to watchlist items in the selected market (e.g. CBA → Banks, AAPL → Technology, BTC → Crypto Core, UNI → DeFi). ASX runs backfill precise GICS industry data first. Auto-assigned labels are always refreshed; your own labels (Favourites, custom groups...) are kept unless Force is selected.">
+      <select name="market" class="input py-1 text-xs" style="width:auto">
+        <option value="ALL">All markets</option>
+        {% if has_asx %}<option value="ASX">ASX only</option>{% endif %}
+        {% if has_us %}<option value="US">US only</option>{% endif %}
+        {% if has_crypto %}<option value="CRYPTO">Crypto only</option>{% endif %}
+      </select>
       <select name="force" class="input py-1 text-xs" style="width:auto">
-        <option value="0">Unlabelled only</option>
+        <option value="0">Keep my labels</option>
         <option value="1">Force (overwrite all)</option>
       </select>
       <button type="submit" class="btn-ghost text-xs py-1.5">&#x1F3F7; Re-categorise Labels</button>

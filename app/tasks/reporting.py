@@ -111,8 +111,28 @@ def send_daily_report(self, organization_id: int = None):
                 logger.info(f"Daily report sent to Org {org.name} (ID: {org.id}): {report}")
             except Exception as org_err:
                 logger.error(f"Failed sending daily report for Org {org.name} (ID: {org.id}): {org_err}")
+                # Surface in the Task Log — otherwise "Send Report" appears to
+                # do nothing (e.g. bad Telegram token, report generation error).
+                try:
+                    with get_db() as db:
+                        db.add(AuditLog(
+                            action=AuditAction.TASK_ERROR,
+                            organization_id=org.id,
+                            message=f"Daily report FAILED: {str(org_err)[:200]}",
+                        ))
+                except Exception:
+                    pass
     except Exception as e:
         logger.error(f"Daily report loop failed: {e}")
+        try:
+            with get_db() as db:
+                db.add(AuditLog(
+                    action=AuditAction.TASK_ERROR,
+                    organization_id=organization_id,
+                    message=f"Daily report loop FAILED: {str(e)[:200]}",
+                ))
+        except Exception:
+            pass
 
 
 @app.task(name="app.tasks.reporting.health_check", bind=True)
