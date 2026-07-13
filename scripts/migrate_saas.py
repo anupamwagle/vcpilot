@@ -1386,7 +1386,8 @@ def migrate():
                     minervini_ref, enabled_globally, is_mandatory, threshold, threshold_label,
                     threshold_min, threshold_max, sort_order, updated_by)
                 VALUES ('exit_failed_breakout', :oid, 'EXIT_DEFENSIVE',
-                    'Exit failed breakout: close back below pivot within 3 days',
+                    '{EQUITY}',
+		    'Exit failed breakout: close back below pivot within 3 days',
                     'A correct breakout should hold above the pivot almost immediately. If a daily '
                     'close falls back below the pivot buy point within this many days of entry, exit '
                     'rather than waiting for the full stop.',
