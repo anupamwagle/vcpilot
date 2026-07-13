@@ -4069,6 +4069,37 @@ async def watchlist_promote(request: Request, item_id: int, db: Session = Depend
         db.commit()
         return RedirectResponse("/watchlist?msg=position_open", 302)
 
+    # Refuse promotion while a live signal already exists for this ticker —
+    # otherwise two Watchlist rows for the same ticker (e.g. re-added after an
+    # earlier promotion never triggered/expired) can each be promoted into
+    # their own duplicate PENDING signal. Mirrors promote_watchlist_item_task's
+    # dedup query exactly (any signal today, or any still-PENDING/TRIGGERED
+    # signal regardless of date) so this fast-fail check and the authoritative
+    # Celery-task check never disagree.
+    from app.models.signal import Signal, SignalStatus
+    existing_signal = db.query(Signal).filter(
+        Signal.ticker == w.ticker,
+        Signal.organization_id == org_id,
+        or_(
+            Signal.signal_date == get_current_date(),
+            Signal.status.in_([SignalStatus.PENDING, SignalStatus.TRIGGERED]),
+        ),
+    ).first()
+    if existing_signal:
+        from app.models.audit import AuditLog, AuditAction
+        db.add(AuditLog(
+            action=AuditAction.TASK_ERROR,
+            actor=request.session.get("email", "dashboard"),
+            user_id=request.session.get("user_id"),
+            organization_id=org_id,
+            ticker=w.ticker,
+            message=(f"Promotion of {w.ticker} refused — signal #{existing_signal.id} "
+                     f"(status={existing_signal.status.value}, from {existing_signal.signal_date}) "
+                     f"already exists for this ticker"),
+        ))
+        db.commit()
+        return RedirectResponse("/watchlist?msg=signal_exists", 302)
+
     # Immediately mark as signalled/processing to prevent double triggers
     w.status = WatchlistStatus.SIGNALLED
     db.commit()
@@ -5813,6 +5844,28 @@ async def trader_watchlist_promote(request: Request, item_id: int, db: Session =
             "ok": False,
             "error": (f"{w.ticker} already has an open position — a new signal cannot "
                       f"trigger while the position is held. Close it first."),
+        }, status_code=409)
+
+    # Refuse promotion while a live signal already exists for this ticker —
+    # otherwise two Watchlist rows for the same ticker can each be promoted
+    # into their own duplicate PENDING signal. Mirrors promote_watchlist_item_task's
+    # dedup query exactly (any signal today, or any still-PENDING/TRIGGERED
+    # signal regardless of date).
+    from app.models.signal import Signal, SignalStatus
+    existing_signal = db.query(Signal).filter(
+        Signal.ticker == w.ticker,
+        Signal.organization_id == org_id,
+        or_(
+            Signal.signal_date == get_current_date(),
+            Signal.status.in_([SignalStatus.PENDING, SignalStatus.TRIGGERED]),
+        ),
+    ).first()
+    if existing_signal:
+        return JSONResponse({
+            "ok": False,
+            "error": (f"{w.ticker} already has a {existing_signal.status.value.lower()} signal "
+                      f"(#{existing_signal.id}, from {existing_signal.signal_date}) — check the "
+                      f"Signals page."),
         }, status_code=409)
 
     ticker = w.ticker

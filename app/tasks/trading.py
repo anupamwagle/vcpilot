@@ -1848,27 +1848,40 @@ def promote_watchlist_item_task(self, item_id: int, organization_id: int, user_e
         stop = close_price * (0.80 if is_crypto else 0.92)
 
         today = get_current_date()
+        # Dedup against (a) any signal at all for today — preserves the original
+        # intent of not re-litigating a ticker the screener/a prior promotion
+        # already evaluated today, regardless of how it resolved — and (b) any
+        # still-PENDING/TRIGGERED signal regardless of date. (b) is the fix: a
+        # PENDING signal from an earlier day that never triggered/expired was
+        # previously invisible to this check (it only looked at
+        # signal_date == today), letting a second promotion create a duplicate
+        # live PENDING signal for the same ticker. Matches the screener's own
+        # dedup pattern in app/tasks/screening.py for the PENDING/TRIGGERED half.
+        from sqlalchemy import or_
         existing = db.query(Signal).filter(
             Signal.ticker == w.ticker,
-            Signal.signal_date == today,
-            Signal.organization_id == organization_id
+            Signal.organization_id == organization_id,
+            or_(
+                Signal.signal_date == today,
+                Signal.status.in_([SignalStatus.PENDING, SignalStatus.TRIGGERED]),
+            ),
         ).first()
 
         if existing:
-            # A Signal for this ticker/date already exists (e.g. created earlier by the
-            # screener and possibly SKIPPED/EXPIRED). Previously we silently flipped the
+            # A live signal for this ticker already exists (e.g. created earlier by the
+            # screener, or a prior manual promotion). Previously we silently flipped the
             # watchlist item to SIGNALLED here with no new visible Signal — from the user's
             # perspective "nothing happened". Surface this clearly via the audit log instead.
             logger.info(f"Manual promotion of {w.ticker}: existing signal #{existing.id} "
-                        f"(status={existing.status.value}) for {today} — not creating a duplicate.")
+                        f"(status={existing.status.value}, date={existing.signal_date}) — not creating a duplicate.")
             db.add(AuditLog(
                 action=AuditAction.TASK_ERROR,
                 ticker=w.ticker,
                 actor=user_email,
                 organization_id=organization_id,
                 message=(f"Manual promotion of {w.ticker} found an existing signal #{existing.id} "
-                         f"(status={existing.status.value}) for {today} — no new signal created. "
-                         f"Check the Signals page for the existing entry."),
+                         f"(status={existing.status.value}, from {existing.signal_date}) — no new signal "
+                         f"created. Check the Signals page for the existing entry."),
             ))
 
         if not existing:

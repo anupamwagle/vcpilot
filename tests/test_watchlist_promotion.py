@@ -201,6 +201,111 @@ def test_promote_task_reverts_status_when_no_price_data(db_session, org_and_acco
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# 2b. Stale cross-day PENDING signal must also block a duplicate promotion
+#     (the reported bug: EDU appeared twice on /signals because a PENDING
+#     signal from an earlier day was invisible to the old signal_date==today
+#     dedup check, letting a second promotion create a second live signal).
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_promote_task_does_not_duplicate_stale_pending_signal_from_earlier_day(
+    db_session, org_and_account, watching_trx_item, trx_price_bar, patch_today
+):
+    """A PENDING signal from a PRIOR day that never triggered/expired must still
+    block a fresh promotion today — this is the exact EDU double-signal bug."""
+    import app.tasks.trading as trading_module
+    from datetime import date as _date
+
+    org, _account = org_and_account
+
+    stale_pending = Signal(
+        ticker="TRX-AUD", exchange_key="CRYPTO_INDEPENDENTRESERVE", asset_type="CRYPTO",
+        currency="AUD", signal_date=_date(2026, 6, 1), status=SignalStatus.PENDING,
+        organization_id=org.id, close_price=0.19, pivot_price=0.19, stop_price=0.15,
+    )
+    db_session.add(stale_pending)
+    db_session.commit()
+    db_session.refresh(stale_pending)
+
+    before_count = db_session.query(Signal).filter(Signal.ticker == "TRX-AUD").count()
+    assert before_count == 1
+
+    trading_module.promote_watchlist_item_task.run(
+        watching_trx_item.id, org.id, "admin@astradigital.com.au", 1
+    )
+
+    after_count = db_session.query(Signal).filter(Signal.ticker == "TRX-AUD").count()
+    assert after_count == 1, "A second PENDING signal must not be created while the earlier one is still live"
+
+    db_session.refresh(watching_trx_item)
+    assert watching_trx_item.status == WatchlistStatus.SIGNALLED
+
+    log = db_session.query(AuditLog).filter(
+        AuditLog.ticker == "TRX-AUD",
+        AuditLog.action == AuditAction.TASK_ERROR,
+    ).order_by(AuditLog.id.desc()).first()
+    assert log is not None
+    assert f"#{stale_pending.id}" in log.message
+
+
+def test_promote_route_refused_when_stale_pending_signal_from_earlier_day(
+    db_session, org_and_account, watching_trx_item
+):
+    """Same scenario via the web route — must refuse before even queuing Celery."""
+    from web.main import watchlist_promote
+    import app.tasks.trading as trading_module
+    from datetime import date as _date
+
+    org, _account = org_and_account
+    calls = []
+    import unittest.mock
+    with unittest.mock.patch.object(trading_module.promote_watchlist_item_task, "delay",
+                                     lambda *a, **kw: calls.append((a, kw))):
+        stale_pending = Signal(
+            ticker="TRX-AUD", exchange_key="CRYPTO_INDEPENDENTRESERVE", asset_type="CRYPTO",
+            currency="AUD", signal_date=_date(2026, 6, 1), status=SignalStatus.PENDING,
+            organization_id=org.id, close_price=0.19, pivot_price=0.19, stop_price=0.15,
+        )
+        db_session.add(stale_pending)
+        db_session.commit()
+
+        response = asyncio.run(
+            watchlist_promote(_fake_request(org.id), watching_trx_item.id, db=db_session)
+        )
+
+    assert response.status_code == 302
+    assert "signal_exists" in response.headers["location"]
+    assert calls == [], "The Celery task must not be queued when a live signal already exists"
+    db_session.refresh(watching_trx_item)
+    assert watching_trx_item.status == WatchlistStatus.WATCHING
+
+
+def test_trader_terminal_promote_refused_when_stale_pending_signal(
+    db_session, org_and_account, watching_trx_item
+):
+    """Same scenario via the JSON trader-terminal promote route."""
+    from web.main import trader_watchlist_promote
+    from datetime import date as _date
+
+    org, _account = org_and_account
+
+    stale_pending = Signal(
+        ticker="TRX-AUD", exchange_key="CRYPTO_INDEPENDENTRESERVE", asset_type="CRYPTO",
+        currency="AUD", signal_date=_date(2026, 6, 1), status=SignalStatus.PENDING,
+        organization_id=org.id, close_price=0.19, pivot_price=0.19, stop_price=0.15,
+    )
+    db_session.add(stale_pending)
+    db_session.commit()
+
+    response = asyncio.run(
+        trader_watchlist_promote(_fake_request(org.id), watching_trx_item.id, db=db_session)
+    )
+
+    assert response.status_code == 409
+    db_session.refresh(watching_trx_item)
+    assert watching_trx_item.status == WatchlistStatus.WATCHING
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # 3. Open-position guard: promotion refused while the ticker is already held
 # ──────────────────────────────────────────────────────────────────────────
 
