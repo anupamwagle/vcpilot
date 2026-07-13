@@ -11,6 +11,81 @@
 
 ---
 
+## Progress Log (updated 13 Jul 2026 — read this before picking up work)
+
+**Done and pushed to `main`:**
+- **Phase 0 (guardrails)** — complete. Baseline established via
+  `docker compose run --rm --no-deps worker-equities pytest -q` (must run this
+  way — no local pytest install on the host). `APP_SECRET_KEY` already rotated.
+- **Batch 1 — critical security, small diffs** (S2, S9, S10, S11, S22, S6, S5, B5)
+  — commit `a264c41`, pushed. Pure Python + one docker-compose.yml healthcheck
+  fix; auto-deployed on the NAS via the existing bind-mount + reload, no manual
+  step needed.
+- **Batch 2 — critical security, coordinated** (S1, S3, S16) — commit `e330643`,
+  pushed. **Confirmed fully deployed**: user set `REDIS_PASSWORD` in the NAS's
+  `.env` and ran `docker compose up -d` there (docker-compose.yml changes don't
+  hot-reload, unlike pure-Python changes — this was the one coordination step
+  needed). Still outstanding, not urgent: an admin needs to click **Register
+  Webhook** on `/admin/comms` per org to start *enforcing* the S1 Telegram
+  secret_token check (it fails open — no functional break — until that's done;
+  the polling fallback `poll_telegram_updates` is unaffected either way).
+- **Batch 5 — bug fixes** (B1, B3, B9, B10, B13) — commit `42490a2`, **committed
+  but not yet pushed**. Full pytest suite green (zero failures) at time of
+  commit. See below for what's fully done vs. what's a deliberate partial/follow-up.
+
+**Batch 5 detail — what's actually done vs. flagged as follow-up:**
+- **B1** — fully done. Triaged and fixed all then-current failures: 3 were
+  genuinely-stale/broken tests (not code bugs), 1 was test flakiness from an
+  untested real time-of-day dependency in `check_breakout` (now frozen in the
+  test, not touched in production code). The CLAUDE.md list of "8 pre-existing
+  failures" is stale — most were already fixed by the earlier
+  TRADING_REMEDIATION_PLAN.md work; only these 4 were still failing as of this
+  session, and now none are.
+- **B3** — partially done, by design. Fixed all ~19 bare `except Exception: pass`
+  blocks in the actual trading-critical surface: `app/tasks/trading.py` (10),
+  `app/broker/ibkr.py` (6), `app/trading/order_executor.py` (1),
+  `app/agent/commands.py` (2 — kill-switch order cancellation path). **~72
+  remain in `web/main.py`**, deliberately not touched — the plan itself
+  carves these out as lower priority ("UI/template helper paths ... can keep
+  swallowing but must log at DEBUG"). Follow-up: sweep `web/main.py` next time
+  bug-fix work is picked up; it's a large, low-risk, mechanical pass better
+  suited to its own item than bundled into a bigger batch.
+- **B9** — fully done. `MCPAuthMiddleware` rewritten to pure ASGI, tests
+  rewritten (they'd been silently `SKIPPED` the whole time — `pytest-asyncio`
+  isn't installed, so the old `@pytest.mark.asyncio` tests never actually ran).
+  Not yet verified against a real Claude Desktop SSE session (the plan's own
+  "Test SSE with a real Claude Desktop session" note) — the pytest coverage is
+  solid but that manual check is still outstanding if anyone wants full
+  confidence before the next deploy.
+- **B10** — fully done. Startup check wired into both `web` (`@app.on_event`)
+  and Celery workers (`@worker_ready.connect`); red banner added to
+  `/admin/health`. Not wired into `beat` (schedules tasks but doesn't execute
+  trading logic directly, so lower value) or `mcp-server` (same toggles aren't
+  read by that process) — deliberate scope decision, not an oversight.
+- **B13** — **intentionally incomplete, by design, not a bug.** Added the
+  `AuditAction.LOGIN` / `LOGIN_FAILED` enum members and `migrate_saas.py`
+  Migration 013 (`ALTER TYPE auditaction ADD VALUE`). Did **not** switch any
+  login/logout call site in `web/main.py` to use them yet. Reason: this app
+  deploys Python changes via git-pull + `uvicorn --reload` with **no gate**,
+  but migrations only run when the one-shot `migrate` service is explicitly
+  restarted via `docker compose up` — never automatically on `git pull`. If a
+  call site wrote `AuditAction.LOGIN` before Migration 013 had actually run
+  against the live Postgres enum type, **every login would 500** until someone
+  noticed and manually reran the migration. **Follow-up (do this before
+  switching call sites):** confirm Migration 013 has run on the NAS
+  (`docker compose up -d` after pulling this commit, or run
+  `python -m scripts.migrate_saas` directly), *then* in a separate change
+  switch `login_post` / `login_verify_otp_post` / `logout` in `web/main.py`
+  to write `AuditAction.LOGIN` / `LOGIN_FAILED` instead of the current
+  `CONFIG_CHANGED` / `TASK_ERROR` reuse.
+
+**Not started:** Batch 3 (auth/session — S7, S8, S18, S14, S15), Batch 4
+(tenant correctness — S4/B2, needs a two-org regression test), Batch 6
+(structure), Batch 7 (platform), Batch 8 (deliberate cutovers). See the table
+below for the full item list per batch.
+
+---
+
 ## Phase 0 — Guardrails (do these BEFORE any fix)
 
 - **P0.1 — Commit the in-flight work.** The working tree has ~300 uncommitted inserted lines across
@@ -208,6 +283,13 @@
 
 ## 2. Bugs — discovered + documented, with fix outline
 
+- ✅ **DONE (13 Jul 2026, commit `42490a2`)** — of the 8 originally documented, 4 were already fixed by
+  the earlier TRADING_REMEDIATION_PLAN.md work (list below is stale on those). The remaining 4 —
+  `test_activity_logging.py::test_skipped_path_not_logged`,
+  `test_us_equity_universe.py::TestIBKRContractRouting::test_asx_still_routes_correctly`,
+  `test_watchlist_vcp_persistence.py::test_upsert_watchlist_persists_vcp_geometry`, plus a newly-found
+  flaky `test_vcp.py::test_check_breakout_fails_low_volume` — are now fixed (3 stale tests, 1 flaky test
+  needing a frozen clock). Full suite is green. See Progress Log above for detail per test.
 - **B1 🔴 — 8 documented failing tests (trading-critical paths). (L)** From CLAUDE.md (verified list,
   re-run per P0.2 to confirm still current):
   `test_activity_logging.py::test_skipped_path_not_logged`,
@@ -221,6 +303,10 @@
   Three of these cover **whether entries open positions at all** — triage each: decide test-stale vs
   code-broken, fix accordingly, one commit per test. Do not weaken assertions to make them pass.
 - **B2 🔴 — Cross-tenant `_get_db_config`** — same as S4 (it is both a bug and a vuln).
+- ⚠️ **PARTIALLY DONE (13 Jul 2026, commit `42490a2`)** — fixed all ~19 in the trading-critical surface:
+  `app/tasks/trading.py` (10), `app/broker/ibkr.py` (6), `app/trading/order_executor.py` (1),
+  `app/agent/commands.py` (2). The ~72 in `web/main.py` are NOT touched (matches this item's own
+  carve-out below) — follow-up item for whoever next picks up bug-fix work.
 - **B3 🟠 — 85 silent `except Exception: pass` blocks, 10 in [app/tasks/trading.py](app/tasks/trading.py). (M)**
   This exact pattern caused the stuck-open-positions live bug (CLAUDE.md #30). **Fix:** in `app/tasks/`,
   `app/broker/`, `app/trading/` replace bare `pass` with `logger.warning(..., exc_info=True)` minimum,
@@ -243,11 +329,18 @@
   `${NOVNC_WEB_DIR:-./docker/novnc}:/novnc:ro` with the default folder committed (or switch to an
   image that ships its own web root).
 - **B8 🟡 — Schema managed by `create_all` + ad-hoc script, Alembic installed but unused.** See A2/M1.
+- ✅ **DONE (13 Jul 2026, commit `42490a2`)** — rewritten as pure ASGI, tests fixed (were silently
+  SKIPPED — no pytest-asyncio installed). Not yet manually verified against a real Claude Desktop SSE
+  session — pytest coverage is solid but that manual check is still outstanding.
 - **B9 🟡 — MCP auth middleware is `BaseHTTPMiddleware` wrapping an SSE stream.**
   [app/mcp/server.py:41](app/mcp/server.py:41) — BaseHTTPMiddleware is known to interfere with
   long-lived streaming responses (buffering/cancellation issues) on some Starlette versions, and it
   holds the DB check inline per request. **Fix:** rewrite as pure ASGI middleware (function wrapping
   `app(scope, receive, send)`), behaviour identical. Test SSE with a real Claude Desktop session.
+- ✅ **DONE (13 Jul 2026, commit `42490a2`)** — `app/utils/startup_checks.py`, wired into web
+  (`@app.on_event("startup")`) and Celery workers (`@worker_ready.connect`), red banner on
+  `/admin/health`. Not wired into `beat`/`mcp-server` (deliberate — neither reads these toggles /
+  executes trading logic directly).
 - **B10 🟡 — Dangerous global toggles silently honoured in prod.** `mock_time_enabled`,
   `mock_current_time`, `ibkr_simulate` are read from DB at runtime ([app/config.py:167-188](app/config.py:167)).
   A leftover row from testing silently fakes the clock or simulates fills. **Fix:** if
@@ -259,6 +352,10 @@
   `_get_db_config` (dict + monotonic timestamp; thread-safe enough for this use). Bounded staleness is
   acceptable — config edits already take effect "eventually" across processes.
 - **B12 🔵 — Reset-token in redirect query string** — covered by S14.
+- ⚠️ **PARTIALLY DONE, BY DESIGN (13 Jul 2026, commit `42490a2`)** — enum members + Migration 013
+  landed. Call sites deliberately NOT switched yet (deploy-ordering hazard — see Progress Log above for
+  the full reasoning). **Follow-up:** once Migration 013 is confirmed to have run in prod, switch
+  `login_post` / `login_verify_otp_post` / `logout` in `web/main.py` to write the new actions.
 - **B13 🔵 — Failed-login audit rows use `TASK_ERROR`/`CONFIG_CHANGED` actions** — add proper
   `AuditAction.LOGIN`/`LOGIN_FAILED` enum members (Postgres enum needs a migrate_saas/Alembic step);
   keep writing the old values until the enum lands to avoid breaking audit-page filters.
@@ -299,15 +396,15 @@ Ordered so each step stands alone.
 
 ## Recommended execution order (for Haiku/Sonnet batches)
 
-| Batch | Items | Risk to prod |
-|---|---|---|
-| 0 | P0.1, P0.2, P0.3 | none (process) |
-| 1 — critical security, small diffs | S2, S9, S10, S11, S22, S6, S5, B5 | very low |
-| 2 — critical security, coordinated | S1 (webhook re-register), S3, S16 (Redis password = one coordinated deploy) | low, needs a deploy window |
-| 3 — auth/session | S7, S8, S18, S14, S15 | low |
-| 4 — tenant correctness | S4/B2 + A4, B11 | medium — needs the two-org regression test |
-| 5 — bug triage | B1 (one commit per test), B3, B9, B10, B13 | low |
-| 6 — structure | A1, A3/S12, A2/M1, M3, M7 | low (pure refactor + tooling) |
+| Batch | Items | Risk to prod | Status |
+|---|---|---|---|
+| 0 | P0.1, P0.2, P0.3 | none (process) | ✅ done |
+| 1 — critical security, small diffs | S2, S9, S10, S11, S22, S6, S5, B5 | very low | ✅ done + pushed (`a264c41`), live on NAS |
+| 2 — critical security, coordinated | S1 (webhook re-register), S3, S16 (Redis password = one coordinated deploy) | low, needs a deploy window | ✅ done + pushed (`e330643`), live on NAS (REDIS_PASSWORD set + `docker compose up -d` run) — outstanding: click Register Webhook per org to *enforce* S1 (fails open until then, no break) |
+| 3 — auth/session | S7, S8, S18, S14, S15 | low | not started |
+| 4 — tenant correctness | S4/B2 + A4, B11 | medium — needs the two-org regression test | not started |
+| 5 — bug triage | B1 (one commit per test), B3, B9, B10, B13 | low | ✅ done, committed (`42490a2`), **not yet pushed** — B3 partial (trading-critical paths only, ~72 in web/main.py deferred), B13 partial by design (enum+migration landed, call sites not switched — see Progress Log) |
+| 6 — structure | A1, A3/S12, A2/M1, M3, M7 | low (pure refactor + tooling) | not started |
 | 7 — platform | A6, A7, M2, M4, M5, M6, A9, A11, A12, A13, S20, S21, B6, B7 | low |
 | 8 — deliberate cutovers | A8/S17, A5/S13, A10, B4 | scheduled prod changes |
 
