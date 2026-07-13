@@ -1384,7 +1384,7 @@ def migrate():
             conn.execute(text("""
                 INSERT INTO rule_configs (rule_id, organization_id, category, label, description,
                     minervini_ref, enabled_globally, is_mandatory, threshold, threshold_label,
-                    threshold_min, threshold_max, sort_order, updated_by)
+                    threshold_min, threshold_max, sort_order, asset_types, updated_by)
                 VALUES ('exit_failed_breakout', :oid, 'EXIT_DEFENSIVE',
 		    'Exit failed breakout: close back below pivot within 3 days',
                     'A correct breakout should hold above the pivot almost immediately. If a daily '
@@ -1392,7 +1392,7 @@ def migrate():
                     'rather than waiting for the full stop.',
                     'Cut a failed breakout fast — don''t wait for the full stop',
                     true, false, 3.0, 'Max days after entry to apply this check', 1.0, 10.0, 60.5,
-                    'migration_012')
+                    'BOTH', 'migration_012')
             """), {"oid": oid})
         conn.commit()
         logger.info("Migration 012 complete.")
