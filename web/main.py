@@ -16,8 +16,18 @@ from sqlalchemy import desc, or_
 from sqlalchemy.exc import IntegrityError
 from loguru import logger
 
-app = FastAPI(title="AstraTrade", docs_url=None, redoc_url=None)
-app.add_middleware(SessionMiddleware, secret_key=os.getenv("APP_SECRET_KEY", "changeme-secret"))
+_app_secret_key = os.getenv("APP_SECRET_KEY", "changeme-secret")
+if os.getenv("APP_ENV", "development") == "production":
+    if not _app_secret_key or _app_secret_key.startswith("changeme"):
+        logger.critical("APP_SECRET_KEY is missing or using its default value — refusing to start in production. Set a strong secret (e.g. `openssl rand -hex 32`).")
+        raise RuntimeError("APP_SECRET_KEY must be set to a non-default value in production")
+    _superadmin_password = os.getenv("SUPERADMIN_PASSWORD", "superadmin-pass")
+    if not _superadmin_password or _superadmin_password in ("superadmin-pass", "changeme") or _superadmin_password.startswith("changeme"):
+        logger.critical("SUPERADMIN_PASSWORD is missing or using its default value — refusing to start in production.")
+        raise RuntimeError("SUPERADMIN_PASSWORD must be set to a non-default value in production")
+
+app = FastAPI(title="AstraTrade", docs_url=None, redoc_url=None, openapi_url=None)
+app.add_middleware(SessionMiddleware, secret_key=_app_secret_key)
 
 # ---------------------------------------------------------------------------
 # User Activity Logging — records who used which feature (access + changes),
@@ -721,6 +731,13 @@ def _auth(request: Request):
     return request.session.get("authenticated", False)
 
 
+def _safe_next(next_url: str) -> str:
+    """Only allow same-site relative redirect targets to prevent open redirects."""
+    if not isinstance(next_url, str) or not next_url or not next_url.startswith("/") or next_url.startswith("//") or "\\" in next_url:
+        return "/"
+    return next_url
+
+
 def _is_superadmin(request: Request) -> bool:
     return request.session.get("user_role") == "superadmin"
 
@@ -752,7 +769,7 @@ async def login_get(request: Request, next: str = Query(""), switch: str = Query
     # Only auto-redirect if they aren't explicitly trying to switch.
     if _auth(request) and not switch:
         if next:
-            return RedirectResponse(next, 302)
+            return RedirectResponse(_safe_next(next), 302)
         return RedirectResponse("/", 302)
     current_email = request.session.get("email", "") if _auth(request) else ""
     return templates.TemplateResponse("login.html", {"request": request, "error": None, "next": next, "current_email": current_email})
@@ -766,6 +783,7 @@ async def login_post(
     next: str = Form(""),
     db: Session = Depends(get_db)
 ):
+    import hmac
     from app.config import settings
     from app.models.auth import User, verify_password
     from app.models.account import Organization
@@ -774,7 +792,7 @@ async def login_post(
 
     from app.models.audit import AuditLog, AuditAction
     # 1. Check Super Admin from .env
-    if email_clean == settings.superadmin_email.strip().lower() and password == settings.superadmin_password:
+    if email_clean == settings.superadmin_email.strip().lower() and hmac.compare_digest(password.encode(), settings.superadmin_password.encode()):
         default_org = db.query(Organization).order_by(Organization.id).first()
         request.session["authenticated"] = True
         request.session["user_role"] = "superadmin"
@@ -784,7 +802,7 @@ async def login_post(
         db.add(AuditLog(action=AuditAction.CONFIG_CHANGED, actor=settings.superadmin_email, message="Super Admin logged in from web dashboard", organization_id=default_org.id if default_org else 1))
         db.commit()
         if next:
-            return RedirectResponse(next, 302)
+            return RedirectResponse(_safe_next(next), 302)
         return RedirectResponse("/", 302)
 
     # 2. Check Database Users
@@ -807,7 +825,7 @@ async def login_post(
         db.add(AuditLog(action=AuditAction.CONFIG_CHANGED, actor=user.email, user_id=user.id, organization_id=user.organization_id, message=f"User {user.email} logged in from web dashboard"))
         db.commit()
         if next:
-            return RedirectResponse(next, 302)
+            return RedirectResponse(_safe_next(next), 302)
         return RedirectResponse("/", 302)
 
     db.add(AuditLog(action=AuditAction.TASK_ERROR, actor=email_clean, message=f"Failed login attempt for email {email_clean}"))
@@ -875,10 +893,13 @@ async def login_request_otp(
     """
     
     email_sent = send_email(user.email, subject, html_content)
-    
-    # In development mode, append debug otp to url if email delivery is offline/disabled
-    debug_param = f"&debug_otp={otp}" if (settings.smtp_host == "smtp.gmail.com" and not email_sent) or (not settings.smtp_username) else ""
-    
+
+    if not email_sent and settings.app_env != "development":
+        return templates.TemplateResponse("login.html", {"request": request, "error": "Failed to send OTP email. Please contact your administrator.", "next": next}, status_code=500)
+
+    # In development mode only, append debug otp to url if email delivery is offline/disabled
+    debug_param = f"&debug_otp={otp}" if settings.app_env == "development" and ((settings.smtp_host == "smtp.gmail.com" and not email_sent) or (not settings.smtp_username)) else ""
+
     import urllib.parse
     next_param = f"&next={urllib.parse.quote(next)}" if next else ""
     return RedirectResponse(f"/login/verify-otp?email={user.email}{debug_param}{next_param}", 302)
@@ -891,6 +912,9 @@ async def login_verify_otp_get(
     debug_otp: str = Query(None),
     next: str = Query("")
 ):
+    from app.config import settings
+    if settings.app_env != "development":
+        debug_otp = None
     return templates.TemplateResponse("verify_otp.html", {"request": request, "email": email, "debug_otp": debug_otp, "error": None, "next": next})
 
 
@@ -932,7 +956,7 @@ async def login_verify_otp_post(
     request.session["email"] = user.email
 
     if next:
-        return RedirectResponse(next, 302)
+        return RedirectResponse(_safe_next(next), 302)
     return RedirectResponse("/", 302)
 
 
@@ -4287,8 +4311,12 @@ async def stock_story(request: Request, ticker: str, db: Session = Depends(get_d
             db.rollback()
         except Exception:
             pass
-        return JSONResponse({"error": str(exc), "trace": traceback.format_exc()},
-                            status_code=500)
+        logger.error(f"stock-story failed: {exc}\n{traceback.format_exc()}")
+        from app.config import settings
+        body = {"error": str(exc)}
+        if settings.app_env == "development":
+            body["trace"] = traceback.format_exc()
+        return JSONResponse(body, status_code=500)
 
 
 @app.post("/action/refresh-universe")
@@ -4508,7 +4536,12 @@ async def trader_data(request: Request, db: Session = Depends(get_db)):
             db.rollback()  # leave session clean so get_db teardown commit doesn't re-raise
         except Exception:
             pass
-        return JSONResponse({"error": str(exc), "trace": trace}, status_code=500)
+        logger.error(f"trader/data failed: {exc}\n{trace}")
+        from app.config import settings
+        body = {"error": str(exc)}
+        if settings.app_env == "development":
+            body["trace"] = trace
+        return JSONResponse(body, status_code=500)
 
 
 async def _trader_data_inner(request: Request, db):
@@ -5022,7 +5055,12 @@ async def trader_prices(request: Request, db: Session = Depends(get_db)):
             db.rollback()
         except Exception:
             pass
-        return JSONResponse({"error": str(exc), "trace": trace}, status_code=500)
+        logger.error(f"trader/prices failed: {exc}\n{trace}")
+        from app.config import settings
+        body = {"error": str(exc)}
+        if settings.app_env == "development":
+            body["trace"] = trace
+        return JSONResponse(body, status_code=500)
 
 
 def _trader_prices_inner(request: Request, db):
@@ -5267,7 +5305,12 @@ async def trader_exit_checks(request: Request, db: Session = Depends(get_db)):
         return JSONResponse({"positions": results, "display_tz": display_tz})
     except Exception as exc:
         import traceback
-        return JSONResponse({"error": str(exc), "trace": traceback.format_exc()}, status_code=500)
+        logger.error(f"trader/exit-checks failed: {exc}\n{traceback.format_exc()}")
+        from app.config import settings
+        body = {"error": str(exc)}
+        if settings.app_env == "development":
+            body["trace"] = traceback.format_exc()
+        return JSONResponse(body, status_code=500)
 
 
 # ===========================================================================
@@ -5298,7 +5341,12 @@ async def trader_watchlist_data(request: Request, db: Session = Depends(get_db))
             db.rollback()
         except Exception:
             pass
-        return JSONResponse({"error": str(exc), "trace": traceback.format_exc()}, status_code=500)
+        logger.error(f"trader/watchlist/data failed: {exc}\n{traceback.format_exc()}")
+        from app.config import settings
+        body = {"error": str(exc)}
+        if settings.app_env == "development":
+            body["trace"] = traceback.format_exc()
+        return JSONResponse(body, status_code=500)
 
 
 def _trader_watchlist_data_inner(request: Request, db):
@@ -8897,7 +8945,8 @@ async def mcp_oauth_token(request: Request, db: Session = Depends(get_db)):
 
     logger.info(
         f"mcp_oauth_token request: content_type={content_type}, grant_type={grant_type}, "
-        f"client_id={client_id}, code={code}, code_verifier={code_verifier}, redirect_uri={req_redirect_uri}"
+        f"client_id={client_id}, code_present={bool(code)}, code_verifier_present={bool(code_verifier)}, "
+        f"redirect_uri={req_redirect_uri}"
     )
 
     if grant_type not in ("client_credentials", "authorization_code"):

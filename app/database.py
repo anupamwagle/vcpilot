@@ -2,6 +2,7 @@
 AstraTrade — Database Setup
 SQLAlchemy engine, session factory, and Base for all models.
 """
+import os
 from contextlib import contextmanager
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
@@ -15,7 +16,10 @@ engine = create_engine(
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,
-    echo=(settings.app_env == "development"),
+    # Opt-in only — SQL echo prints every statement including system_configs
+    # values (IBKR/Telegram/crypto secrets), so it must never be tied to
+    # app_env (whose default is "development").
+    echo=os.getenv("SQL_ECHO", "").lower() in ("1", "true", "yes"),
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)

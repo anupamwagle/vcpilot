@@ -63,7 +63,10 @@ def test_superadmin_activity_access_control(db_session, org_and_account):
     res = asyncio.run(superadmin_activity(request=req, db=db_session))
     assert res.status_code == 200
 
-def test_login_logout_otp_audit_logging(db_session, org_and_account):
+def test_login_logout_otp_audit_logging(db_session, org_and_account, monkeypatch):
+    import app.utils.email as email_module
+    monkeypatch.setattr(email_module, "send_email", lambda *a, **k: True)
+
     org, _ = org_and_account
     
     # Seed a user with Super Admin role

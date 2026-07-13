@@ -54,8 +54,7 @@ services:
     networks:
       - vcpilot-net
     healthcheck:
-      #test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      test: ["CMD-SHELL", "pg_isready -U vcpilot -d vcpilot -p 5432"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} -p 5432"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -264,7 +263,7 @@ services:
       TWS_SETTINGS_PATH: /home/ibgateway/Jts
       READ_ONLY_API: "no"
       BYPASS_WARNING: "yes"
-      VNC_SERVER_PASSWORD: changeme
+      VNC_SERVER_PASSWORD: ${VNC_PASSWORD:-changeme}
     ports:
       - "4001:4001"
       - "4002:4002"
@@ -278,7 +277,7 @@ services:
 
   # ---------------------------------------------------------------------------
   # noVNC — Browser-based VNC viewer for IBKR Gateway login
-  # Access at http://<host>:6085/vnc.html  password: changeme
+  # Access at http://<host>:6085/vnc.html  password: ${VNC_PASSWORD} (default: changeme)
   # ---------------------------------------------------------------------------
   novnc:
     image: theasp/novnc:latest
