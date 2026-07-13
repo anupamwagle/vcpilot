@@ -155,10 +155,12 @@ def test_get_logged_as_feature_access(db_session):
 
 def test_skipped_path_not_logged(db_session):
     client = _make_client()
+    # /__login is test-harness-only setup (not a real app route, not skip-listed)
+    # that authenticates the session mid-request — it's expected to log under the
+    # fallback "Other" feature, same as any unmapped path would. That's incidental
+    # to this test; the thing under test is that /api/echo (skip-listed) does not.
     client.get("/__login")
     client.post("/api/echo", json={"a": 1})  # /api/ is in the skip list
-    assert _activity_rows(db_session, feature="Other") == []
-    # nothing logged for the skipped /api/echo path
     assert all(r.detail["path"] != "/api/echo" for r in _activity_rows(db_session))
 
 

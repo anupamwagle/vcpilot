@@ -75,8 +75,8 @@ class IBKRBroker:
                         self.paper_mode = paper_val.lower() in ("true", "1", "yes")
                 finally:
                     db.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"IBKRBroker init: failed to load org {organization_id} config (ibkr_account/ibkr_paper_mode) — falling back to defaults: {e}", exc_info=True)
 
         # gnzsnz/ib-gateway exposes the API via socat on 4004 (paper) / 4003
         # (live). The gateway's internal 4001/4002 are bound to localhost inside
@@ -166,8 +166,8 @@ class IBKRBroker:
         try:
             from ib_insync import util
             util.patchAsyncio()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"IBKRBroker connect: util.patchAsyncio() failed (usually harmless/already-patched): {e}")
 
         # Build the list of ports to try. The gnzsnz/ib-gateway image runs the
         # gateway bound to 127.0.0.1:4001/4002 inside the container and exposes
@@ -222,8 +222,8 @@ class IBKRBroker:
                     )
                     try:
                         self._ib.disconnect()
-                    except Exception:
-                        pass
+                    except Exception as disconnect_e:
+                        logger.debug(f"IBKR connect: cleanup disconnect after failed attempt raised (harmless): {disconnect_e}")
 
         IBKRBroker._last_fail_times[key] = time.time()
         self.last_error = (
@@ -451,8 +451,8 @@ class IBKRBroker:
                 try:
                     if parent.log:
                         reason = parent.log[-1].message or ""
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Bracket {ticker}: could not read rejection reason from order log: {e}")
                 msg = f"IBKR {pstatus}" + (f": {reason}" if reason else "")
                 logger.error(f"Bracket REJECTED for {ticker}: {msg}")
                 return {"status": "error", "error": msg, "ticker": ticker,
@@ -467,8 +467,8 @@ class IBKRBroker:
                 for t in trades:
                     try:
                         self._ib.cancelOrder(t.order)
-                    except Exception:
-                        pass
+                    except Exception as cancel_e:
+                        logger.warning(f"Bracket {ticker}: failed to cancel stuck-pending order {t.order}: {cancel_e}", exc_info=True)
                 self._ib.sleep(1)
                 return {"status": "error", "error": msg, "ticker": ticker,
                         "order_status": pstatus}
@@ -559,8 +559,8 @@ class IBKRBroker:
                 try:
                     if trade.log:
                         reason = trade.log[-1].message or ""
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Market sell {ticker}: could not read rejection reason from order log: {e}")
                 msg = f"IBKR {status}" + (f": {reason}" if reason else "")
                 logger.error(f"Market sell REJECTED for {ticker}: {msg}")
                 return {"status": "error", "error": msg, "ticker": ticker, "order_status": status}

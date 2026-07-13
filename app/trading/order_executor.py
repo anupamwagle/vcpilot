@@ -302,8 +302,8 @@ def execute_signal_order(
             f"Target: A${(target_1 or entry_price*1.20):.4f}\n"
             f"Source: {data_source} | Broker: {broker_name}"
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"execute_signal_order: order-placed notification failed for {ticker} (order itself already succeeded): {e}", exc_info=True)
 
     return {
         "ok":           True,

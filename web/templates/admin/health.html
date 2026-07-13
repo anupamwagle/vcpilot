@@ -6,6 +6,22 @@
 
 {# ── Flash messages ─────────────────────────────────────────────── #}
 {% set msg = request.query_params.get('msg', '') %}
+
+{% if dangerous_toggles %}
+<div class="alert-danger mb-4" style="align-items:flex-start;flex-direction:column;gap:.5rem">
+  <div style="display:flex;align-items:center;gap:.625rem">
+    <svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+    <strong>Dangerous testing toggle(s) enabled in production</strong>
+  </div>
+  <ul style="font-size:.8125rem;margin-left:1.75rem;list-style:disc">
+    {% for flag in dangerous_toggles %}
+    <li>{{ flag }}</li>
+    {% endfor %}
+  </ul>
+  <p style="font-size:.8125rem;margin-left:1.75rem">These are meant for testing only — a leftover toggle can silently fake the clock or simulate fills instead of trading for real. Turn off on the <a href="/superadmin/rules" style="text-decoration:underline">Super Admin Rules</a> page if this wasn't intentional.</p>
+</div>
+{% endif %}
+
 {% if worker_status == 'offline' %}
 <div class="alert-danger mb-4">
   <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>

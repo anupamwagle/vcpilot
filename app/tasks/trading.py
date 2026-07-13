@@ -118,8 +118,8 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                         message=f"[{exchange_key}] Entry check @ {now_str}: market closed — skipping",
                     ))
                 _db.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"check_entry_triggers [{exchange_key}]: market-closed audit write failed: {e}", exc_info=True)
         logger.debug(f"check_entry_triggers [{exchange_key}]: market closed — skipping")
         return
     logger.info(f"check_entry_triggers [{exchange_key}]: running intraday entry scan")
@@ -135,8 +135,8 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                     message=f"[{exchange_key}] Entry check @ {now_str}: scanning for breakout triggers",
                 ))
             _db.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"check_entry_triggers [{exchange_key}]: scan-started audit write failed: {e}", exc_info=True)
 
     with get_db() as db:
         from app.models.account import Organization
@@ -267,8 +267,8 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                         organization_id=org.id,
                         message=f"[{exchange_key}] Entry check: 0 pending signals — nothing to do",
                     ))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"check_entry_triggers [{exchange_key}]: no-pending-signals audit write failed: {e}", exc_info=True)
                 continue
 
             # Check market regime for this exchange
@@ -1027,8 +1027,8 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
                     _db.add(AuditLog(action=AuditAction.TASK_RUN, organization_id=org.id,
                                      message=f"[{exchange_key}] Exit check @ {now_str}: market closed — skipping"))
                 _db.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"check_exit_rules_task [{exchange_key}]: market-closed audit write failed: {e}", exc_info=True)
         return
 
     with get_db() as db:
@@ -1066,8 +1066,8 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
             with get_db() as _db:
                 _db.add(AuditLog(action=AuditAction.TASK_RUN, organization_id=org.id,
                                  message=f"[{exchange_key}] Exit check: evaluating {len(positions)} open position(s)"))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"check_exit_rules_task [{exchange_key}]: evaluating-count audit write failed: {e}", exc_info=True)
 
         for pos in positions:
             try:
@@ -1078,8 +1078,8 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
                                              ticker=pos.ticker, message=f"Exit check @ {now_str}: skipped — no stop price set",
                                              entity_type="Position", entity_id=str(pos.id),
                                              detail={"result": "skipped", "reason": "no_stop_price"}))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"check_exit_rules_task: no-stop-price audit write failed for {pos.ticker}: {e}", exc_info=True)
                     continue
 
                 df = get_price_history(pos.ticker, period="6mo")
@@ -1090,8 +1090,8 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
                                              ticker=pos.ticker, message=f"Exit check @ {now_str}: skipped — no price data",
                                              entity_type="Position", entity_id=str(pos.id),
                                              detail={"result": "skipped", "reason": "no_price_data"}))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"check_exit_rules_task: no-price-data audit write failed for {pos.ticker}: {e}", exc_info=True)
                     continue
 
                 latest  = df.iloc[-1]
@@ -1262,7 +1262,7 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
                     break
 
             except Exception as e:
-                logger.error(f"Exit check error for {pos.ticker} (Org: {org.name}): {e}")
+                logger.error(f"Exit check error for {pos.ticker} (Org: {org.name}): {e}", exc_info=True)
                 try:
                     with get_db() as _db:
                         _db.add(AuditLog(action=AuditAction.TASK_RUN, organization_id=org.id,
@@ -1270,8 +1270,8 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
                                          message=f"Exit check @ {now_str}: error — {type(e).__name__}: {e}",
                                          entity_type="Position", entity_id=str(pos.id),
                                          detail={"result": "error", "error": str(e)}))
-                except Exception:
-                    pass
+                except Exception as audit_e:
+                    logger.warning(f"check_exit_rules_task: error-audit write failed for {pos.ticker}: {audit_e}", exc_info=True)
 
 
 @app.task(name="app.tasks.trading.sync_stop_orders", bind=True)
@@ -1523,7 +1523,7 @@ def sync_stop_orders(self):
                             f"P&L: {_csym}{realised_pnl:+.2f}"
                         )
                     except Exception as notify_err:
-                        logger.error(f"sync_stop_orders: notification failed for {pos.ticker}: {notify_err}")
+                        logger.error(f"sync_stop_orders: notification failed for {pos.ticker}: {notify_err}", exc_info=True)
                         try:
                             with get_db() as _db3:
                                 _db3.add(AuditLog(
@@ -1533,8 +1533,8 @@ def sync_stop_orders(self):
                                     entity_type="TelegramNotification",
                                     message=f"⚠️ Stop-out alert failed to send for {pos.ticker}: {notify_err}",
                                 ))
-                        except Exception:
-                            pass
+                        except Exception as audit_e:
+                            logger.warning(f"sync_stop_orders: notification-failure audit write failed for {pos.ticker}: {audit_e}", exc_info=True)
                     continue
 
                 # ── ATR-based trailing stop ───────────────────────────────
@@ -1760,8 +1760,8 @@ def refresh_live_prices_cache_task(self):
                 message=f"[CRYPTO] Live price cache: refreshed {updated}/{len(crypto_tickers)} watchlist tickers",
                 detail={"updated": updated, "total": len(crypto_tickers)},
             ))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"refresh_live_prices_cache_task: audit write failed: {e}", exc_info=True)
 
 
 @app.task(name="app.tasks.trading.promote_watchlist_item_task", bind=True)

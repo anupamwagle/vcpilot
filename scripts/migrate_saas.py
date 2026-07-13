@@ -1397,6 +1397,31 @@ def migrate():
         conn.commit()
         logger.info("Migration 012 complete.")
 
+    # ── Migration 013 — B13: LOGIN / LOGIN_FAILED auditaction enum values ──────
+    # Adds the enum values only — no call site writes them yet (see the
+    # AuditAction docstring in app/models/audit.py). Deliberately split from
+    # switching login_post/login_verify_otp_post/logout over to them: this app
+    # deploys Python changes via git-pull + uvicorn --reload with no gate, but
+    # this migration only runs when the one-shot `migrate` service is
+    # (re)started via `docker compose up`, not on every git pull — so writing
+    # a not-yet-existent enum value from freshly-reloaded code would 500 every
+    # login until someone manually reran the migration. Land this migration
+    # first, confirm it has run in prod, then switch the call sites in a
+    # separate follow-up change.
+    logger.info("Running migration 013 — LOGIN/LOGIN_FAILED auditaction enum values...")
+    with engine.connect() as conn:
+        try:
+            ac_conn = conn.execution_options(isolation_level="AUTOCOMMIT")
+            for val in ("LOGIN", "LOGIN_FAILED"):
+                try:
+                    ac_conn.execute(text(f"ALTER TYPE auditaction ADD VALUE IF NOT EXISTS '{val}'"))
+                    logger.info(f"Ensured auditaction enum value '{val}'.")
+                except Exception as e:
+                    logger.debug(f"Migration 013 enum add skipped for '{val}': {str(e)[:120]}")
+        except Exception as e:
+            logger.debug(f"Migration 013 enum block skipped: {str(e)[:120]}")
+        logger.info("Migration 013 complete.")
+
     logger.info("SaaS/Multi-tenant migration and seeding complete!")
 
 

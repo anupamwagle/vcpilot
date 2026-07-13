@@ -431,11 +431,16 @@ class TestIBKRContractRouting:
         assert contract.currency == "USD"
 
     def test_asx_still_routes_correctly(self):
+        """ASX orders route through SMART with primaryExchange="ASX", not direct
+        exchange="ASX" routing — direct routing trips IBKR's Error 10311 API
+        precaution, which silently discards the order. See _build_contract's
+        docstring in app/broker/ibkr.py."""
         from app.broker.ibkr import IBKRBroker
         broker = IBKRBroker.__new__(IBKRBroker)
         broker.ib = MagicMock()
         contract = broker._build_contract("BHP", "ASX")
-        assert contract.exchange == "ASX"
+        assert contract.exchange == "SMART"
+        assert contract.primaryExchange == "ASX"
         assert contract.currency == "AUD"
 
 

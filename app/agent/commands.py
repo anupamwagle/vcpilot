@@ -309,8 +309,8 @@ class AgentCommandHandler:
                         try:
                             if order.ibkr_order_id and broker.cancel_order(order.ibkr_order_id):
                                 cancelled += 1
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(f"Kill switch: failed to cancel order {order.id} ({order.ticker}, ibkr_order_id={order.ibkr_order_id}): {e}", exc_info=True)
         except Exception as e:
             logger.warning(f"Kill switch: cancel working orders failed: {e}")
         return f" Cancelled {cancelled} working entry order(s)." if cancelled else ""
@@ -408,8 +408,8 @@ class AgentCommandHandler:
             stk = db.query(Stock).filter(Stock.ticker.in_(candidates)).first()
             if stk:
                 return stk.ticker
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"ticker resolution: stocks-table lookup failed for {candidates}, falling back to heuristic: {e}")
 
         # Default fallback: if it doesn't have a suffix and looks like an equity, append .AX
         if "." not in raw and "-" not in raw:

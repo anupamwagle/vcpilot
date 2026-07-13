@@ -9,6 +9,7 @@ Beat command: celery -A app.tasks.celery_app beat --loglevel=info
 """
 from celery import Celery
 from celery.schedules import crontab, timedelta
+from celery.signals import worker_ready
 from app.config import settings
 
 app = Celery(
@@ -385,3 +386,11 @@ app.conf.update(
         },
     },
 )
+
+
+@worker_ready.connect
+def _on_worker_ready(**kwargs):
+    """Surface dangerous global toggles (mock_time_enabled, ibkr_simulate)
+    left on in production — see app/utils/startup_checks.py."""
+    from app.utils.startup_checks import warn_if_dangerous_toggles_enabled
+    warn_if_dangerous_toggles_enabled("worker")

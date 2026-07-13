@@ -184,7 +184,22 @@ def test_check_breakout_fails_price_extended():
     assert not results["vcp_breakout_price"].passed
 
 
-def test_check_breakout_fails_low_volume():
+def test_check_breakout_fails_low_volume(monkeypatch):
+    # check_breakout projects today's volume for the rest of the ASX session
+    # when called during market hours (10:00-16:12 Sydney), which makes a raw
+    # 40%-of-avg volume cross the 150% threshold if run with few minutes
+    # elapsed since open — flaky depending on wall-clock time. Freeze "now" to
+    # 3am Sydney (market closed) so the projection is skipped and the raw
+    # volume ratio (the thing this test actually checks) is deterministic.
+    import datetime as datetime_module
+
+    class _FixedDateTime:
+        @staticmethod
+        def now(tz=None):
+            return datetime_module.datetime(2026, 1, 1, 3, 0)
+
+    monkeypatch.setattr(datetime_module, "datetime", _FixedDateTime)
+
     df = _flat_df(close=52.0, volume=200_000)  # 200k/500k = 40% < 150%
     results = check_breakout("BHP.AX", df, pivot_price=51.0, avg_vol_50=500_000, engine=Eng())
     assert not results["vcp_breakout_volume"].passed

@@ -76,7 +76,7 @@ def test_upsert_watchlist_persists_vcp_geometry(db_session, org_and_account):
     from app.models.market import Stock, PriceBar
 
     org, _acct = org_and_account
-    db_session.add(Stock(ticker="CSL.AX", exchange_key="ASX", asset_type="EQUITY", currency="AUD"))
+    db_session.add(Stock(ticker="CSL.AX", exchange_code="CSL", exchange_key="ASX", asset_type="EQUITY", currency="AUD"))
     db_session.add(PriceBar(ticker="CSL.AX", exchange_key="ASX", date=date(2026, 6, 29),
                             open=280, high=300, low=270, close=295, volume=1_000_000,
                             high_52w=305, atr_14=5.0))

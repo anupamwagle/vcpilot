@@ -23,8 +23,6 @@ from typing import Any, Dict, Optional
 from loguru import logger
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app.mcp.auth import (
@@ -38,37 +36,53 @@ from app.mcp.auth import (
 # Auth middleware
 # ---------------------------------------------------------------------------
 
-class MCPAuthMiddleware(BaseHTTPMiddleware):
+class MCPAuthMiddleware:
     """
     Validates Bearer JWT on every request to the MCP sub-app.
     On success, sets the org context ContextVar for the duration of the request.
+
+    Pure-ASGI middleware (not BaseHTTPMiddleware) — BaseHTTPMiddleware buffers
+    the whole response before forwarding it to the client, which is known to
+    interfere with long-lived streaming responses (GET /sse). This
+    implementation passes the original scope/receive/send straight through to
+    the wrapped app once auth succeeds, so the SSE stream is untouched.
     """
 
     # Paths that don't need a token (none under /mcp, but left as extension point)
     _PUBLIC_PATHS: set = set()
 
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
+    def __init__(self, app):
+        self.app = app
 
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+
+        path = scope.get("path", "")
         if path in self._PUBLIC_PATHS:
-            return await call_next(request)
+            return await self.app(scope, receive, send)
 
-        auth_header = request.headers.get("Authorization", "")
+        headers = {k.decode("latin1").lower(): v.decode("latin1")
+                   for k, v in scope.get("headers", [])}
+        auth_header = headers.get("authorization", "")
+
         if not auth_header.startswith("Bearer "):
-            return JSONResponse(
+            response = JSONResponse(
                 {"error": "unauthorized", "detail": "Missing Bearer token"},
                 status_code=401,
                 headers={"WWW-Authenticate": 'Bearer realm="AstraTrade MCP"'},
             )
+            return await response(scope, receive, send)
 
         token = auth_header[len("Bearer "):]
         payload = decode_access_token(token)
         if payload is None:
-            return JSONResponse(
+            response = JSONResponse(
                 {"error": "unauthorized", "detail": "Invalid or expired token"},
                 status_code=401,
                 headers={"WWW-Authenticate": 'Bearer realm="AstraTrade MCP"'},
             )
+            return await response(scope, receive, send)
 
         # Validate credential is still active in DB (catches revocations)
         credential_id = payload.get("credential_id")
@@ -83,17 +97,18 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
                         MCPCredential.organization_id == org_id,
                     ).first()
                     if not cred or not cred.is_valid:
-                        return JSONResponse(
+                        response = JSONResponse(
                             {"error": "unauthorized", "detail": "Credential has been revoked or expired"},
                             status_code=401,
                         )
+                        return await response(scope, receive, send)
                     # Update last_used_at (best-effort)
                     try:
                         from datetime import datetime
                         cred.last_used_at = datetime.utcnow()
                         db.commit()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"MCPAuthMiddleware: last_used_at update failed (non-fatal): {e}")
             except Exception as e:
                 logger.warning(f"MCPAuthMiddleware DB check failed (non-fatal): {e}")
 
@@ -106,11 +121,9 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
         set_mcp_context(ctx)
 
         try:
-            response = await call_next(request)
+            await self.app(scope, receive, send)
         finally:
             clear_mcp_context()
-
-        return response
 
 
 # ---------------------------------------------------------------------------

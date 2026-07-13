@@ -29,6 +29,12 @@ if os.getenv("APP_ENV", "development") == "production":
 app = FastAPI(title="AstraTrade", docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(SessionMiddleware, secret_key=_app_secret_key)
 
+
+@app.on_event("startup")
+async def _startup_safety_checks():
+    from app.utils.startup_checks import warn_if_dangerous_toggles_enabled
+    warn_if_dangerous_toggles_enabled("web")
+
 # ---------------------------------------------------------------------------
 # User Activity Logging — records who used which feature (access + changes),
 # with parameters and source IP, into audit_logs. Surfaced in the Super Admin
@@ -6096,12 +6102,21 @@ async def admin_health(request: Request, db: Session = Depends(get_db)):
         # Live price cache refresh — every 5 min for crypto watchlist tickers
         "live_prices_crypto": _lr(["Live price cache", "live price cache"], "CRYPTO") if has_crypto else None,
     }
+    from app.config import settings as _settings
+    dangerous_toggles = []
+    if _settings.app_env == "production":
+        if _settings.mock_time_enabled:
+            dangerous_toggles.append(f"Mock time is ENABLED (mock_current_time={_settings.mock_current_time!r})")
+        if _settings.ibkr_simulate_live:
+            dangerous_toggles.append("IBKR simulate mode is ENABLED — fills are simulated, not real")
+
     ctx.update({"capital":float(account.capital_aud) if account else 0,"is_paper_account":account.is_paper if account else True,
         "recent_logs":[{"action":str(l.action).replace("AuditAction.",""),"ticker":l.ticker or "—","message":(l.message or "")[:80],"actor":l.actor,"time":_fmt_dt(str(l.created_at),display_tz)} for l in logs],
         "has_asx":has_asx,"has_us":has_us,"has_crypto":has_crypto,"active_exchanges":active_exchanges,"exchange_regimes":exchange_regimes,
         "stock_count":stock_count,"crypto_count":crypto_count,"price_bar_count":price_bar_count,"today_bars":today_bars,
         "equity_signal_count":esig,"crypto_signal_count":csig,"equity_wl_count":ewl,"crypto_wl_count":cwl,
-        "signal_count_today":esig+csig,"watchlist_count":ewl+cwl,"is_first_run":stock_count==0 and crypto_count==0,"task_runs":task_runs})
+        "signal_count_today":esig+csig,"watchlist_count":ewl+cwl,"is_first_run":stock_count==0 and crypto_count==0,"task_runs":task_runs,
+        "dangerous_toggles":dangerous_toggles})
     return templates.TemplateResponse("admin/health.html", ctx)
 
 

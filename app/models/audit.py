@@ -49,6 +49,15 @@ class AuditAction(str, enum.Enum):
     TASK_RUN            = "TASK_RUN"     # Periodic task fired + summary
     TASK_ERROR          = "TASK_ERROR"   # Error inside a task
 
+    # Auth events (B13 — added 13 Jul 2026). Not yet used by any call site:
+    # the Postgres enum type needs migrate_saas Migration 013 to run in prod
+    # first (ALTER TYPE ... ADD VALUE), since these deploy via git-pull +
+    # auto-reload with no guaranteed migration-before-code ordering. Login/
+    # logout call sites keep writing CONFIG_CHANGED/TASK_ERROR until a
+    # follow-up change switches them over post-migration.
+    LOGIN                = "LOGIN"          # Successful login
+    LOGIN_FAILED         = "LOGIN_FAILED"   # Failed login attempt
+
 
 class AuditLog(Base):
     """
