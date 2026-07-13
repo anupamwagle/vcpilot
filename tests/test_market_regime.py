@@ -142,6 +142,31 @@ def test_insufficient_data_for_dist_days():
     assert results["regime_distribution_days"].passed
 
 
+# --- crypto single-criterion regime (regression: used to be stuck at CAUTION) ---
+
+def test_crypto_bull_when_index_above_200ma():
+    regime, _ = evaluate_market_regime(
+        _index_df(close=5500, ma200_base=4000),   # BTC well above its 200MA
+        _universe_df(50, 150),
+        Eng(),
+        exchange_key="CRYPTO_INDEPENDENTRESERVE",
+    )
+    assert regime == MarketRegime.BULL
+
+
+def test_crypto_bear_when_index_below_200ma():
+    # Previously a crypto market could NEVER reach BEAR: with only the single
+    # index rule enabled, 0/1 fell through to CAUTION. Below 200MA must be BEAR.
+    regime, results = evaluate_market_regime(
+        _index_df(close=3000, ma200_base=5000),   # BTC below its 200MA
+        _universe_df(50, 150),
+        Eng(),
+        exchange_key="CRYPTO_INDEPENDENTRESERVE",
+    )
+    assert regime == MarketRegime.BEAR
+    assert not results["regime_index_above_200ma"].passed
+
+
 # --- helpers ---
 
 def test_is_trading_allowed_bull():

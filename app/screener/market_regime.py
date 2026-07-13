@@ -117,8 +117,10 @@ def evaluate_market_regime(
                 (recent["close"] < recent["prev_close"] * 0.998) &
                 (recent["volume"] > recent["prev_vol"])
             ]
-            dist_count = len(dist) - 1  # Exclude first row (NaN shift)
-            dist_count = max(0, dist_count)
+            # The first row's shift is NaN, so it can never satisfy the filter —
+            # `dist` already holds only genuine distribution days. (The old
+            # `len(dist) - 1` under-counted by one every time.)
+            dist_count = len(dist)
         else:
             dist_count = 0
         passed = dist_count <= max_dist_days
@@ -134,6 +136,12 @@ def evaluate_market_regime(
         regime = MarketRegime.BULL  # No rules = no filter
     elif criteria_passed == total_enabled:
         regime = MarketRegime.BULL
+    elif is_crypto or total_enabled == 1:
+        # Crypto has a single binary criterion (BTC vs its 200MA). "CAUTION" is
+        # meaningless for one rule, and the old >= total_enabled-1 branch meant a
+        # crypto market could NEVER reach BEAR (0/1 always fell to CAUTION).
+        # Above 200MA is handled by the BULL branch above; anything else = BEAR.
+        regime = MarketRegime.BEAR
     elif criteria_passed >= total_enabled - 1:
         regime = MarketRegime.CAUTION
     else:

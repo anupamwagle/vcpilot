@@ -602,7 +602,12 @@ def refresh_price_data(self, exchange_key: str = None):
                     query = query.filter(Stock.exchange_key.in_(["NYSE", "NASDAQ"]))
                 else:
                     query = query.filter(Stock.exchange_key == exchange_key)
-            tickers = [s.ticker for s in query.all()]
+            _stocks = query.all()
+            tickers = [s.ticker for s in _stocks]
+            # Authoritative ticker -> exchange_key map so each PriceBar is labelled
+            # with its real exchange (the column default "ASX" was silently applied
+            # to every ticker before, breaking per-exchange regime breadth queries).
+            stock_exchange_map = {s.ticker: (s.exchange_key or "ASX") for s in _stocks}
 
         if not tickers:
             # Auto-bootstrap crypto universe if this is a crypto exchange refresh
@@ -614,7 +619,9 @@ def refresh_price_data(self, exchange_key: str = None):
                 # Re-query after bootstrap
                 with get_db() as db:
                     query = db.query(Stock).filter(Stock.is_active == True, Stock.blacklisted == False, Stock.asset_type == "CRYPTO")
-                    tickers = [s.ticker for s in query.all()]
+                    _stocks = query.all()
+                    tickers = [s.ticker for s in _stocks]
+                    stock_exchange_map = {s.ticker: (s.exchange_key or "ASX") for s in _stocks}
             if not tickers:
                 with get_db() as db:
                     db.add(AuditLog(
@@ -681,6 +688,9 @@ def refresh_price_data(self, exchange_key: str = None):
                 else:
                     bar = existing
 
+                # Label the bar with its real exchange (fixes/backfills the old
+                # default-"ASX"-for-everything bug that broke regime breadth).
+                bar.exchange_key = stock_exchange_map.get(ticker) or bar.exchange_key or "ASX"
                 bar.open      = _safe_float(latest.get("open"))
                 bar.high      = _safe_float(latest.get("high"))
                 bar.low       = _safe_float(latest.get("low"))
@@ -752,25 +762,44 @@ def evaluate_market_regime_task(self, exchange_key: str = "ASX"):
             return
 
         today = get_current_date()
+        from datetime import timedelta as _td
         with get_db() as db:
-            if exchange_key == "CRYPTO":
-                bars = db.query(PriceBar).filter(
-                    PriceBar.date == today,
-                    PriceBar.exchange_key.like("CRYPTO_%")
-                ).all()
-            elif exchange_key == "US":
-                bars = db.query(PriceBar).filter(
-                    PriceBar.date == today,
-                    PriceBar.exchange_key.in_(["NYSE", "NASDAQ"])
-                ).all()
+            # Resolve the breadth universe via the authoritative Stock table.
+            # PriceBar.exchange_key was historically left at its "ASX" default for
+            # every ticker, so filtering bars on PriceBar.exchange_key silently
+            # returned nothing for US/crypto (and a polluted set for ASX) — which
+            # zeroed out breadth and biased every equity market toward BEAR.
+            stock_q = db.query(Stock.ticker).filter(
+                Stock.is_active == True, Stock.blacklisted == False
+            )
+            if exchange_key == "CRYPTO" or (exchange_key or "").startswith("CRYPTO_"):
+                stock_q = stock_q.filter(Stock.asset_type == "CRYPTO")
+            elif exchange_key in ("US", "NYSE", "NASDAQ"):
+                stock_q = stock_q.filter(Stock.exchange_key.in_(["NYSE", "NASDAQ"]))
             else:
-                bars = db.query(PriceBar).filter(
-                    PriceBar.date == today,
-                    PriceBar.exchange_key == exchange_key
+                stock_q = stock_q.filter(Stock.exchange_key == exchange_key)
+            exch_tickers = [t[0] for t in stock_q.all()]
+
+            # Use each stock's MOST RECENT bar rather than requiring an exact
+            # date==today match — US/crypto bars lag AEST by a calendar day and a
+            # missing same-day refresh must not collapse breadth to 0%.
+            latest: dict = {}
+            cutoff = today - _td(days=14)
+            for _i in range(0, len(exch_tickers), 500):  # chunk to stay within SQL param limits
+                chunk = exch_tickers[_i:_i + 500]
+                if not chunk:
+                    continue
+                rows = db.query(
+                    PriceBar.ticker, PriceBar.date, PriceBar.close, PriceBar.ma_200
+                ).filter(
+                    PriceBar.ticker.in_(chunk), PriceBar.date >= cutoff
                 ).all()
+                for _tk, _dt, _close, _ma200 in rows:
+                    if _tk not in latest or _dt > latest[_tk][0]:
+                        latest[_tk] = (_dt, _close, _ma200)
             universe_data = [
-                {"ticker": b.ticker, "close": float(b.close or 0), "ma_200": float(b.ma_200 or 0)}
-                for b in bars if b.close and b.ma_200
+                {"ticker": _tk, "close": float(_c), "ma_200": float(_m)}
+                for _tk, (_d, _c, _m) in latest.items() if _c and _m
             ]
         universe_df = pd.DataFrame(universe_data) if universe_data else pd.DataFrame(columns=["ticker","close","ma_200"])
 
