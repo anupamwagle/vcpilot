@@ -2015,9 +2015,9 @@ async def cancel_open_order(ibkr_order_id: int, request: Request, db: Session = 
     from fastapi.responses import JSONResponse
     if not _auth(request):
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
-    
+
     org_id = request.session.get("organization_id")
-    
+
     def _do_cancel():
         # Setup event loop for ib_insync worker thread
         import asyncio as _asyncio
@@ -2030,11 +2030,8 @@ async def cancel_open_order(ibkr_order_id: int, request: Request, db: Session = 
         with IBKRBroker(organization_id=org_id) as b:
             if not b.is_connected:
                 return False, "Not connected to IBKR"
-            success = b.cancel_order(ibkr_order_id)
-            if success:
-                # Pump event loop so gateway processes cancellation
-                b._ib.sleep(1)
-            return success, ""
+            # cancel_order now returns (bool, str)
+            return b.cancel_order(ibkr_order_id)
             
     try:
         success, error = await asyncio.to_thread(_do_cancel)
@@ -2072,6 +2069,45 @@ async def cancel_open_order(ibkr_order_id: int, request: Request, db: Session = 
     except Exception as e:
         from loguru import logger
         logger.error(f"Failed to cancel order {ibkr_order_id}: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/positions/open-orders/cancel-all")
+async def cancel_all_open_orders(request: Request):
+    """Cancel ALL open orders on the account using IBKR reqGlobalCancel().
+
+    This is the only reliable way to cancel orders placed by any client session
+    (bracket children, orders from disconnected workers, TWS orders).
+    Individual cancel (cancel_order) only works for orders placed by the current
+    client ID session.
+    """
+    import asyncio
+    from fastapi.responses import JSONResponse
+    if not _auth(request):
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+
+    org_id = request.session.get("organization_id")
+
+    def _do_cancel_all():
+        import asyncio as _asyncio
+        try:
+            _asyncio.get_running_loop()
+        except RuntimeError:
+            _asyncio.set_event_loop(_asyncio.new_event_loop())
+        from app.broker.ibkr import IBKRBroker
+        with IBKRBroker(organization_id=org_id) as b:
+            if not b.is_connected:
+                return False, "Not connected to IBKR"
+            return b.cancel_all_orders()
+
+    try:
+        success, message = await asyncio.to_thread(_do_cancel_all)
+        if not success:
+            return JSONResponse({"error": message}, status_code=400)
+        return JSONResponse({"status": "success", "message": message})
+    except Exception as e:
+        from loguru import logger
+        logger.error(f"cancel_all_open_orders failed: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 

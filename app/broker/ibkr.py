@@ -611,19 +611,21 @@ class IBKRBroker:
             logger.error(f"Market sell failed for {ticker}: {e}")
             return {"status": "error", "error": str(e), "ticker": ticker}
 
-    def cancel_order(self, ibkr_order_id: int) -> bool:
+    def cancel_order(self, ibkr_order_id: int) -> tuple[bool, str]:
         """Cancel an active IBKR order by orderId.
 
-        MUST call reqAllOpenOrders() + sleep() before searching openTrades() —
-        the same pattern used by get_open_orders(). Without this, openTrades()
-        only returns orders placed by the current client session and misses
-        bracket children and orders from other sessions/TWS — causing every
-        UI cancel to fail with "not found" even though the order is visible in
-        the open orders panel.
+        Returns (True, "") on success or (False, reason_str) on failure.
+
+        IBKR only allows cancelling orders that belong to the current client ID
+        session. Orders placed by other sessions (e.g. bracket children submitted
+        by a previous Celery worker, or orders placed directly in TWS) are visible
+        via reqAllOpenOrders() but cannot be cancelled via cancelOrder() — IBKR
+        will silently ignore or reject the request. Use cancel_all_orders()
+        (reqGlobalCancel) to cancel everything across all client IDs at once.
         """
         if not self.is_connected:
             logger.info(f"Simulation: cancel order {ibkr_order_id}")
-            return True
+            return True, ""
         try:
             # Pull ALL open orders into the ib_insync cache (same as get_open_orders)
             self._ib.reqAllOpenOrders()
@@ -634,15 +636,54 @@ class IBKRBroker:
                     self._ib.cancelOrder(trade.order)
                     self._ib.sleep(1)   # let gateway process the cancel
                     logger.info(f"Cancelled IBKR order {ibkr_order_id}")
-                    return True
+                    return True, ""
             logger.warning(
                 f"cancel_order: orderId {ibkr_order_id} not found in {len(open_trades)} "
-                f"open trades after reqAllOpenOrders — order may have already filled or been cancelled"
+                f"open trades after reqAllOpenOrders — it may belong to a different client "
+                f"session (use Cancel All / reqGlobalCancel to cancel cross-session orders)"
             )
-            return False
+            return False, (
+                f"Order {ibkr_order_id} cannot be cancelled — it was placed by a different "
+                f"IBKR client session (e.g. a bracket child or a previous worker). "
+                f"Use the 'Cancel All' button to cancel all orders on this account."
+            )
         except Exception as e:
             logger.error(f"Cancel order failed: {e}")
-            return False
+            return False, str(e)
+
+    def cancel_all_orders(self) -> tuple[bool, str]:
+        """Cancel ALL open orders on this account across all client IDs.
+
+        Uses reqGlobalCancel() — the only IBKR call that can cancel orders
+        regardless of which client session or TWS placed them. This is the
+        correct tool when you need to clear bracket children, stale pre-submitted
+        orders, or orders from disconnected sessions.
+
+        Returns (True, cancelled_count_str) on success or (False, error) on failure.
+        """
+        if not self.is_connected:
+            logger.info("Simulation: global cancel all orders")
+            return True, "simulated"
+        try:
+            # Snapshot how many orders exist before cancelling
+            self._ib.reqAllOpenOrders()
+            self._ib.sleep(0.5)
+            before = len(self._ib.openTrades())
+
+            self._ib.reqGlobalCancel()
+            self._ib.sleep(2)   # give gateway time to process all cancellations
+
+            # Re-check how many remain
+            self._ib.reqAllOpenOrders()
+            self._ib.sleep(0.5)
+            after = len(self._ib.openTrades())
+
+            cancelled = before - after
+            logger.info(f"reqGlobalCancel: {before} orders before → {after} after ({cancelled} cancelled)")
+            return True, f"Sent global cancel — {cancelled} order(s) cancelled ({after} remaining)"
+        except Exception as e:
+            logger.error(f"cancel_all_orders failed: {e}")
+            return False, str(e)
 
     def get_open_positions(self, exchange_key: str = None) -> list[dict]:
         """

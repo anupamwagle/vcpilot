@@ -172,7 +172,15 @@ details.why-exit .why-det{display:block;font-size:.7rem;line-height:1.45;color:v
       <p class="section-title">IBKR Open Orders</p>
       <p class="text-xs" style="color:var(--text-subtle)">Live working orders on the broker (includes unfilled entry orders, active stop losses, and take profits).</p>
     </div>
-    <button type="button" onclick="loadOpenOrders()" class="btn-admin text-xs" style="background:var(--surface-alt)">↻ Refresh</button>
+    <div style="display:flex;gap:.5rem;align-items:center">
+      <button type="button" id="cancel-all-btn" onclick="cancelAllOrders()"
+        class="btn-admin text-xs"
+        style="background:rgba(220,38,38,.15);color:var(--neg);border:1px solid rgba(220,38,38,.4);font-weight:600"
+        title="Cancel ALL open orders on IBKR (reqGlobalCancel — works for all sessions including bracket children)">
+        🗑 Cancel All Orders
+      </button>
+      <button type="button" onclick="loadOpenOrders()" class="btn-admin text-xs" style="background:var(--surface-alt)">↻ Refresh</button>
+    </div>
   </div>
   <div id="open-orders-body" class="p-4 text-xs" style="color:var(--text-subtle)">Loading broker orders…</div>
 </div>
@@ -299,7 +307,7 @@ loadOpenOrders();
 vcInterval(loadOpenOrders, 20000);
 
 async function cancelOpenOrder(orderId) {
-  if (!confirm("Are you sure you want to cancel this order on IBKR?")) return;
+  if (!confirm("Cancel this order on IBKR?")) return;
   try {
     const res = await fetch(`/positions/open-orders/${orderId}/cancel`, {
       method: "POST",
@@ -307,15 +315,37 @@ async function cancelOpenOrder(orderId) {
     });
     const d = await res.json();
     if (res.ok && d.status === "success") {
-      // Reload the UI immediately to reflect the change
       loadOpenOrders();
-      // If there's a loadPositions func, reload positions too in case we deleted a phantom position
-      if (typeof window.location.reload === "function") window.location.reload();
+      setTimeout(function(){ window.location.reload(); }, 800);
     } else {
       alert("Failed to cancel: " + (d.error || "Unknown error"));
     }
   } catch (err) {
     alert("Request failed: " + err);
+  }
+}
+
+async function cancelAllOrders() {
+  if (!confirm("Cancel ALL open orders on IBKR?\n\nThis will cancel every working order on the account (all brackets, stops, entries).\nThis cannot be undone.")) return;
+  const btn = document.getElementById('cancel-all-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Cancelling…'; }
+  try {
+    const res = await fetch('/positions/open-orders/cancel-all', {
+      method: 'POST',
+      headers: { 'Accept': 'application/json' }
+    });
+    const d = await res.json();
+    if (res.ok && d.status === 'success') {
+      alert('✅ ' + (d.message || 'All orders cancelled.'));
+      loadOpenOrders();
+      setTimeout(function(){ window.location.reload(); }, 1200);
+    } else {
+      alert('Failed to cancel all: ' + (d.error || 'Unknown error'));
+    }
+  } catch (err) {
+    alert('Request failed: ' + err);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '🗑 Cancel All Orders'; }
   }
 }
 </script>
