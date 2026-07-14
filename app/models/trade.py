@@ -6,7 +6,7 @@ import enum
 from datetime import datetime, date
 from sqlalchemy import (
     Column, Integer, String, Boolean, DateTime, Date,
-    Enum, Numeric, Text, JSON, ForeignKey
+    Enum, Numeric, Text, JSON, ForeignKey, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -319,8 +319,21 @@ class Trade(Base):
     All P&L fields are stored in both native currency and AUD equivalent.
     """
     __tablename__ = "trades"
+    # DB-level uniqueness guard (T-DEDUP-4): a second Trade cannot be inserted
+    # for the same position_id. Combined with the application-level guards in
+    # tasks/trading.py (T-DEDUP-1/2/3), this makes duplicate closed-trade rows
+    # impossible even under concurrent Celery task execution.
+    # position_id is nullable so rows created before this column existed
+    # (and broker-sync rows without a matching position) are unaffected.
+    __table_args__ = (
+        UniqueConstraint("position_id", name="uq_trades_position_id"),
+    )
 
     id              = Column(Integer, primary_key=True)
+    # position_id links back to the Position that originated this Trade.
+    # Nullable: rows from before this column was added + broker-sync rows
+    # that have no corresponding Position will have NULL here.
+    position_id     = Column(Integer, ForeignKey("positions.id"), nullable=True, index=True)
     ticker          = Column(String(32), nullable=False, index=True)
     exchange_key    = Column(String(32), nullable=False, default="ASX")
     asset_type      = Column(String(16), nullable=False, default="EQUITY")

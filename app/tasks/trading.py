@@ -1253,15 +1253,26 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
 
                     with get_db() as db:
                         if exit_sig.exit_type == "FULL":
+                            # Idempotency guard (T-DEDUP-1): re-fetch the position inside this
+                            # write session and bail if it was already closed by a concurrent
+                            # task (sync_ibkr_positions_task, sync_order_status, etc.). Without
+                            # this check all three tasks could race to insert a Trade row for
+                            # the same position in separate sessions, producing duplicates.
                             position_obj = db.query(Position).get(pos.id)
-                            if position_obj:
-                                position_obj.status = TradeStatus.CLOSED
+                            if not position_obj or position_obj.status != TradeStatus.OPEN:
+                                logger.warning(
+                                    f"check_exit_rules_task: {pos.ticker} (pos_id={pos.id}) already "
+                                    f"closed — skipping duplicate Trade insert (T-DEDUP-1)"
+                                )
+                                break
+                            position_obj.status = TradeStatus.CLOSED
                             trade = Trade(
                                 ticker=pos.ticker, account_id=pos.account_id,
                                 organization_id=org.id, signal_id=pos.signal_id,
                                 exchange_key=pos.exchange_key,
                                 asset_type=getattr(pos, "asset_type", "EQUITY"),
                                 currency=_pos_currency,
+                                position_id=pos.id,
                                 entry_date=pos.entry_date, exit_date=today,
                                 hold_days=(today - pos.entry_date).days,
                                 entry_price=pos.entry_price, exit_price=current,
@@ -1523,6 +1534,7 @@ def sync_stop_orders(self):
                                 qty=p.qty,
                                 entry_price=p.entry_price,
                                 exit_price=current_price,
+                                position_id=p.id,
                                 gross_pnl_aud=round(realised_pnl, 2),
                                 net_pnl_aud=round(realised_pnl, 2),  # crypto — no commission
                                 # Stored as a FRACTION (e.g. -0.0443 for -4.43%), not a raw
@@ -2229,6 +2241,17 @@ def sync_ibkr_positions_task(self, organization_id: int | None = None):
                 for sym, pos in (db_by_sym.items() if not skip_orphan_close else []):
                     if sym in ib_by_sym:
                         continue
+                    # Idempotency guard (T-DEDUP-2): skip if position was already closed by
+                    # check_exit_rules_task or sync_order_status in a concurrent run. db_by_sym
+                    # was built at query time; by the time we reach this loop another task may
+                    # have already committed a CLOSED status and Trade row. Re-checking here
+                    # prevents a second BROKER_SYNC Trade being inserted for the same position.
+                    if pos.status != TradeStatus.OPEN:
+                        logger.warning(
+                            f"sync_ibkr_positions_task: {pos.ticker} (pos_id={pos.id}) "
+                            f"already closed — skipping BROKER_SYNC Trade insert (T-DEDUP-2)"
+                        )
+                        continue
                     entry_price = float(pos.entry_price or 0)
                     close_price = float(pos.current_price or pos.entry_price or 0)
                     qty = float(pos.qty or 0)
@@ -2245,6 +2268,7 @@ def sync_ibkr_positions_task(self, organization_id: int | None = None):
                         hold_days=(today - pos.entry_date).days if pos.entry_date else 0,
                         entry_price=pos.entry_price,
                         exit_price=close_price,
+                        position_id=pos.id,
                         qty=pos.qty,
                         gross_pnl_aud=round(pnl_aud, 2),
                         net_pnl_aud=round(pnl_aud, 2),
@@ -2687,6 +2711,18 @@ def sync_order_status(self, organization_id: int | None = None):
                             float(pos.target_1) if pos.target_1 else None,
                         )
 
+                        # Idempotency guard (T-DEDUP-3): open_positions was snapshotted at the
+                        # start of this task's session. By the time we reach this loop,
+                        # check_exit_rules_task or sync_ibkr_positions_task may have already
+                        # committed a CLOSED status and a Trade row for this position. Re-check
+                        # the live DB status before inserting to prevent a duplicate Trade.
+                        if pos.status != TradeStatus.OPEN:
+                            logger.warning(
+                                f"sync_order_status: {pos.ticker} (pos_id={pos.id}) already closed "
+                                f"— skipping duplicate Trade insert from sell fill (T-DEDUP-3)"
+                            )
+                            continue
+
                         pos.status = TradeStatus.CLOSED
                         db.add(Trade(
                             ticker=pos.ticker, exchange_key=pos.exchange_key, asset_type=pos.asset_type,
@@ -2699,6 +2735,7 @@ def sync_order_status(self, organization_id: int | None = None):
                             net_pnl_aud=round(pnl_aud - commission_aud, 2),
                             pnl_pct=round(pnl_pct, 6),
                             initial_stop=pos.initial_stop, exit_reason=exit_reason, is_paper=pos.is_paper,
+                            position_id=pos.id,
                             cgt_eligible_discount=((today - pos.entry_date).days > 365) if pos.entry_date else False,
                         ))
                         summary["closed"] += 1
