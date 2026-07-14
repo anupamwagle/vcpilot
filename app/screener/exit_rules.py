@@ -72,11 +72,22 @@ def evaluate_exit_rules(
     # -------------------------------------------------------------------------
     # Hard Stop Loss (MANDATORY — cannot be disabled via DB)
     # -------------------------------------------------------------------------
+    # NOTE: use current_price (the live intraday feed passed in by the caller),
+    # NOT `close` (the EOD daily-bar close from df_daily). During ASX market
+    # hours yfinance may return a partial in-session bar as df.iloc[-1], so
+    # `close` is ambiguous (sometimes yesterday's final, sometimes today's
+    # mid-session price depending on fetch timing). current_price is always the
+    # dedicated intraday quote and is unambiguous.
+    # NOTE: for equity (IBKR) positions this signal is intentionally suppressed
+    # in check_exit_rules_task — equity stop execution is owned entirely by
+    # sync_stop_orders which checks for a live broker bracket stop before acting
+    # (CLAUDE.md #37/#30). evaluate_exit_rules still sets the signal so it is
+    # visible in the backtester and for crypto positions.
     rule_id = "exit_stop_loss"
-    if close <= current_stop:
+    if current_price <= current_stop:
         signals.append(ExitSignal(
             should_exit=True, reason=ExitReason.STOP_LOSS, exit_type="FULL",
-            message=f"Stop hit: close {close:.3f} ≤ stop {current_stop:.3f}",
+            message=f"Stop hit: price {current_price:.3f} ≤ stop {current_stop:.3f}",
             rule_id=rule_id
         ))
         return signals  # Stop hit — exit immediately, don't evaluate other rules

@@ -1138,12 +1138,27 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
                     pivot_price=float(pos.pivot_price) if getattr(pos, "pivot_price", None) else None,
                 )
 
+                _is_crypto_pos = (pos.asset_type == "CRYPTO" or (pos.exchange_key and pos.exchange_key.startswith("CRYPTO_")))
                 has_exit = any(s.should_exit for s in exit_signals)
+                # For non-crypto equity positions the STOP_LOSS signal is delegated to
+                # sync_stop_orders; don't label it as an "EXIT triggered" in the audit log.
+                _actionable_exits = [
+                    s for s in exit_signals
+                    if s.should_exit and not (not _is_crypto_pos and s.reason == ExitReason.STOP_LOSS)
+                ]
+                _stop_deferred = (
+                    not _is_crypto_pos
+                    and any(s.should_exit and s.reason == ExitReason.STOP_LOSS for s in exit_signals)
+                )
                 pnl_pct_val = round((current - float(pos.entry_price)) / float(pos.entry_price) * 100, 2)
-                if has_exit:
-                    triggered_sig = next(s for s in exit_signals if s.should_exit)
+                if _actionable_exits:
+                    triggered_sig = _actionable_exits[0]
                     msg = (f"Exit check @ {now_str}: EXIT triggered — {triggered_sig.reason} | "
                            f"Price ${current:.3f} | P&L {pnl_pct_val:+.1f}% | Reason: {triggered_sig.message}")
+                elif _stop_deferred:
+                    msg = (f"Exit check @ {now_str}: stop breach — price ${current:.3f} ≤ stop "
+                           f"${float(pos.current_stop):.3f} | P&L {pnl_pct_val:+.1f}% | "
+                           f"(deferred to sync_stop_orders — broker bracket stop active)")
                 else:
                     # Summarise which exit rules were evaluated and NOT triggered
                     not_triggered = [s.message for s in exit_signals if not s.should_exit and s.message]
@@ -1158,15 +1173,33 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
                                          detail={"position_id": pos.id, "close": current,
                                                  "stop": float(pos.current_stop),
                                                  "pnl_pct": pnl_pct_val,
-                                                 "result": "exit_triggered" if has_exit else "holding",
+                                                 "result": ("exit_triggered" if _actionable_exits
+                                                            else "stop_breach_deferred" if _stop_deferred
+                                                            else "holding"),
                                                  "hold_days": (today - pos.entry_date).days}))
                         _db.commit()
                 except Exception as e:
                     logger.error(f"Exit check audit write failed for {pos.ticker}: {e}")
 
-                is_crypto = (pos.asset_type == "CRYPTO" or (pos.exchange_key and pos.exchange_key.startswith("CRYPTO_")))
+                is_crypto = _is_crypto_pos   # reuse — already computed above
                 for exit_sig in exit_signals:
                     if not exit_sig.should_exit:
+                        continue
+
+                    # CLAUDE.md #37/#30: equity stop execution is owned entirely by
+                    # sync_stop_orders, which checks for a live broker bracket stop
+                    # before acting and never closes the DB position optimistically.
+                    # If check_exit_rules_task also acted on STOP_LOSS for equities it
+                    # would (a) submit a duplicate SELL on top of the existing bracket
+                    # stop — creating a naked short when both fill — and (b) mark the
+                    # position CLOSED before the real fill is confirmed by
+                    # sync_order_status (T1). Skip STOP_LOSS here for non-crypto
+                    # positions; sync_stop_orders handles it correctly.
+                    if not is_crypto and exit_sig.reason == ExitReason.STOP_LOSS:
+                        logger.debug(
+                            f"check_exit_rules_task: skipping STOP_LOSS for equity {pos.ticker} "
+                            f"— delegated to sync_stop_orders (CLAUDE.md #37/#30)"
+                        )
                         continue
 
                     qty_to_sell = float(pos.qty)
