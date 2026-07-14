@@ -1647,6 +1647,16 @@ async def positions(request: Request, db: Session = Depends(get_db),
     for p in positions:
         entry = float(p.entry_price or 0)
         curr  = float(p.current_price or entry)
+        # Overlay the live_price Redis cache when present — update_position_pnl_task
+        # writes it for BOTH crypto and equity positions. Without this, a freshly
+        # (re)imported position shows CURRENT == entry and P&L 0.0% until the DB
+        # column catches up, even while alerts elsewhere quote the real price.
+        try:
+            _lp = cache.get(f"live_price:{p.ticker}")
+            if _lp and not _lp.get("_failed") and _lp.get("price"):
+                curr = float(_lp["price"])
+        except Exception:
+            pass
         stop  = float(p.current_stop or 0)
         qty   = float(p.qty or 0)
         if entry > 0 and stop > 0:
@@ -1948,13 +1958,23 @@ async def positions_open_orders(request: Request):
                     if oids:     conds.append(_Order.ibkr_order_id.in_(oids))
                     if sig_ids:  conds.append(_Order.signal_id.in_(sig_ids))
                     if conds:
+                        from datetime import datetime as _dtm, timedelta as _tdl
+                        # IBKR orderIds are session/client-scoped and RECYCLE across
+                        # gateway restarts — matching an old DB row by orderId alone
+                        # produced nonsense like "placed 30 Jun" on a DAY order.
+                        # permId is globally unique and reconnect-stable, so those
+                        # matches are always trusted; orderId/signal matches only
+                        # count when the DB row is recent (all entries are DAY TIF).
+                        _recent_cutoff = _dtm.utcnow() - _tdl(days=5)
                         with _appdb() as _db:
                             db_orders = _db.query(_Order).filter(
                                 _Order.organization_id == org_id, _or(*conds)
-                            ).all()
+                            ).order_by(_Order.id).all()
                             by_perm = {d.perm_id: d for d in db_orders if d.perm_id}
-                            by_oid  = {d.ibkr_order_id: d for d in db_orders if d.ibkr_order_id}
-                            by_sig  = {d.signal_id: d for d in db_orders if d.signal_id}
+                            _recent = [d for d in db_orders
+                                       if (d.created_at or _dtm.utcnow()) >= _recent_cutoff]
+                            by_oid  = {d.ibkr_order_id: d for d in _recent if d.ibkr_order_id}
+                            by_sig  = {d.signal_id: d for d in _recent if d.signal_id}
                             if sig_ids:
                                 sigs = {s.id: s for s in _db.query(_Signal).filter(
                                     _Signal.id.in_(sig_ids)).all()}

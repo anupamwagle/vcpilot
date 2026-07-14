@@ -1417,8 +1417,8 @@ def sync_stop_orders(self):
                                 ).first()
                                 _db.add(AuditLog(
                                     action=AuditAction.TASK_RUN, organization_id=org.id, ticker=pos.ticker,
-                                    message=(f"⚠ stop breach alert — {pos.ticker} price {_sym}{_eq_price:.3f} is "
-                                             f"through stop {_sym}{_eq_stop:.3f}; the broker's own bracket stop "
+                                    message=(f"⚠ stop breach alert — {pos.ticker} price {_sym}{_eq_price:.4f} is "
+                                             f"through stop {_sym}{_eq_stop:.4f}; the broker's own bracket stop "
                                              f"should be executing — check IBKR Gateway if this persists"),
                                     detail={"source": "sync_stop_orders", "result": "breach_alert_only",
                                             "price": _eq_price, "stop": _eq_stop},
@@ -1429,7 +1429,7 @@ def sync_stop_orders(self):
                                     notifier = get_notifier(organization_id=org.id)
                                     notifier.send(
                                         f"⚠️ *Stop Breach — Broker Stop Should Fire*\n"
-                                        f"{pos.ticker} price {_sym}{_eq_price:.3f} is through stop {_sym}{_eq_stop:.3f}\n"
+                                        f"{pos.ticker} price {_sym}{_eq_price:.4f} is through stop {_sym}{_eq_stop:.4f}\n"
                                         f"The broker's own bracket order should execute shortly — "
                                         f"check IBKR Gateway if this persists."
                                     )
