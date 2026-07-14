@@ -612,17 +612,33 @@ class IBKRBroker:
             return {"status": "error", "error": str(e), "ticker": ticker}
 
     def cancel_order(self, ibkr_order_id: int) -> bool:
+        """Cancel an active IBKR order by orderId.
+
+        MUST call reqAllOpenOrders() + sleep() before searching openTrades() —
+        the same pattern used by get_open_orders(). Without this, openTrades()
+        only returns orders placed by the current client session and misses
+        bracket children and orders from other sessions/TWS — causing every
+        UI cancel to fail with "not found" even though the order is visible in
+        the open orders panel.
+        """
         if not self.is_connected:
             logger.info(f"Simulation: cancel order {ibkr_order_id}")
             return True
         try:
+            # Pull ALL open orders into the ib_insync cache (same as get_open_orders)
+            self._ib.reqAllOpenOrders()
+            self._ib.sleep(0.5)   # pump loop so openOrder* messages are processed
             open_trades = self._ib.openTrades()
             for trade in open_trades:
                 if trade.order.orderId == ibkr_order_id:
                     self._ib.cancelOrder(trade.order)
+                    self._ib.sleep(1)   # let gateway process the cancel
                     logger.info(f"Cancelled IBKR order {ibkr_order_id}")
                     return True
-            logger.warning(f"Order {ibkr_order_id} not found in open trades")
+            logger.warning(
+                f"cancel_order: orderId {ibkr_order_id} not found in {len(open_trades)} "
+                f"open trades after reqAllOpenOrders — order may have already filled or been cancelled"
+            )
             return False
         except Exception as e:
             logger.error(f"Cancel order failed: {e}")

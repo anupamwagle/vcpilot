@@ -2039,7 +2039,7 @@ async def cancel_open_order(ibkr_order_id: int, request: Request, db: Session = 
     try:
         success, error = await asyncio.to_thread(_do_cancel)
         if not success:
-            return JSONResponse({"error": error or "Could not cancel order on broker"}, status_code=400)
+            return JSONResponse({"error": error or f"Order {ibkr_order_id} not found in IBKR open orders — it may have already filled or been cancelled at the broker."}, status_code=400)
             
         # Sync DB: If this was the parent entry order, wipe the Phantom Position
         from app.models.trade import Order, OrderStatus, Position
