@@ -194,35 +194,103 @@ async function loadOpenOrders(){
         + (d.account || 'the account') + '. (Filled orders appear under Open Positions.)</span>';
       return;
     }
-    const rows = d.orders.map(function(o){
-      const px = (o.order_type === 'STP')
-        ? ('stop ' + (o.stop_price != null ? o.stop_price : ''))
-        : (o.limit_price != null ? ('@ ' + o.limit_price) : '');
-      const s = (o.status || '');
-      const col = s.toLowerCase().indexOf('cancel') > -1 ? 'var(--neg)'
-                : (s === 'Filled' ? 'var(--pos)' : 'var(--text)');
-      
-      const cancelBtn = `<button onclick="cancelOpenOrder(${o.ibkr_order_id})" title="Cancel this order" class="ml-2 hover:bg-white/10 rounded px-1 transition-colors" style="color:var(--neg)">✕</button>`;
+    // ── Group legs into brackets via orderRef (astratrade-{signal_id}) ──
+    const groups = {}, groupOrder = [];
+    d.orders.forEach(function(o){
+      const ref = o.order_ref || '';
+      const key = (ref.indexOf('astratrade-') === 0 || ref.indexOf('stopsell-') === 0)
+        ? ref : ('single-' + o.ibkr_order_id);
+      if(!groups[key]){ groups[key] = []; groupOrder.push(key); }
+      groups[key].push(o);
+    });
 
-      return '<tr class="tbl-row border-b last:border-0" style="border-color:var(--border)">'
-        + '<td class="p-2 font-mono">' + o.ticker + '</td>'
-        + '<td class="p-2">' + o.action + '</td>'
-        + '<td class="p-2 text-right">' + o.qty + '</td>'
-        + '<td class="p-2">' + o.order_type + ' ' + px + '</td>'
-        + '<td class="p-2">' + (o.tif || '') + '</td>'
-        + '<td class="p-2" style="color:' + col + '">' + s
-          + (o.remaining ? (' (' + o.remaining + ' left)') : '') 
-          + (s !== 'Filled' && s.indexOf('Cancel') === -1 ? cancelBtn : '')
-          + '</td>'
-        + '</tr>';
-    }).join('');
+    const fmtPx = function(v){
+      if(v == null || isNaN(v)) return '';
+      return '$' + Number(v).toFixed(Math.abs(v) < 1 ? 3 : 2);
+    };
+    const chip = function(txt, color){
+      return '<span class="px-1.5 py-0.5 rounded text-[10px] font-semibold tracking-wide" '
+        + 'style="color:' + color + ';border:1px solid ' + color + '">' + txt + '</span>';
+    };
+
+    function roleInfo(o){
+      const ref = o.order_ref || '';
+      if(ref.indexOf('stopsell-') === 0) return {rank: 0, html: chip('STOP SELL', 'var(--neg)')};
+      if(ref.indexOf('astratrade-') !== 0) return {rank: 3, html: ''};
+      if(o.action === 'BUY') return {rank: 0, html: chip('ENTRY', 'var(--t-accent)')};
+      const t = o.order_type || '';
+      if(t.indexOf('STP') > -1 && t.indexOf('LMT') === -1) return {rank: 2, html: chip('STOP', 'var(--neg)')};
+      return {rank: 1, html: chip('TARGET', 'var(--pos)')};
+    }
+
+    function statusPill(o){
+      const s = o.status || '';
+      let c = 'var(--text-muted)', label = s;
+      if(s === 'Filled')                  { c = 'var(--pos)'; }
+      else if(s === 'Submitted')          { c = 'var(--pos)';  label = 'Working'; }
+      else if(s === 'PreSubmitted')       { c = 'var(--warn)'; label = 'Pre-submitted'; }
+      else if(s.indexOf('Cancel') > -1 || s === 'Inactive'){ c = 'var(--neg)'; }
+      if(o.filled > 0 && o.remaining > 0) label += ' · ' + o.filled + '/' + o.qty;
+      return chip(label, c);
+    }
+
+    function priceCell(o){
+      const t = o.order_type || '';
+      if(t === 'STP LMT') return 'trig ' + fmtPx(o.stop_price) + ' <span style="color:var(--text-subtle)">→</span> lim ' + fmtPx(o.limit_price);
+      if(t.indexOf('STP') > -1) return 'stop ' + fmtPx(o.stop_price);
+      if(o.limit_price != null) return 'limit ' + fmtPx(o.limit_price);
+      return '<span style="color:var(--text-subtle)">market</span>';
+    }
+
+    let html = '';
+    groupOrder.forEach(function(key){
+      const legs = groups[key].slice().sort(function(a, b){ return roleInfo(a).rank - roleInfo(b).rank; });
+      const first = legs[0];
+      const placed = legs.map(function(l){ return l.placed_at; }).filter(Boolean)[0] || '—';
+      const src = first.source || 'External/manual';
+      // Bracket header: ticker · source · placed
+      html += '<tr style="background:var(--surface-alt)">'
+        + '<td class="p-2" colspan="4" style="border-top:1px solid var(--border)">'
+        +   '<span class="font-mono font-bold text-sm">' + first.ticker + '</span>'
+        +   '<span class="text-[10px] ml-1" style="color:var(--text-subtle)">' + (first.currency || '') + '</span>'
+        +   '<span class="ml-3 text-[11px]" style="color:var(--text-muted)">' + src + '</span>'
+        + '</td>'
+        + '<td class="p-2 text-right text-[11px]" colspan="4" style="color:var(--text-subtle);border-top:1px solid var(--border)">'
+        +   (legs.length > 1 ? 'bracket · ' + legs.length + ' legs · ' : '') + 'placed ' + placed
+        + '</td></tr>';
+      legs.forEach(function(o){
+        const sideColor = o.action === 'BUY' ? 'var(--pos)' : 'var(--neg)';
+        const s = o.status || '';
+        const cancelBtn = (s !== 'Filled' && s.indexOf('Cancel') === -1)
+          ? '<button onclick="cancelOpenOrder(' + o.ibkr_order_id + ')" title="Cancel this order on IBKR" '
+            + 'class="hover:bg-white/10 rounded px-1.5 transition-colors" style="color:var(--neg)">✕</button>'
+          : '';
+        html += '<tr class="tbl-row border-b last:border-0" style="border-color:var(--border)">'
+          + '<td class="p-2 pl-5">' + roleInfo(o).html + '</td>'
+          + '<td class="p-2 font-semibold" style="color:' + sideColor + '">' + o.action + '</td>'
+          + '<td class="p-2 text-right font-mono">' + o.qty + '</td>'
+          + '<td class="p-2 font-mono" style="white-space:nowrap">' + priceCell(o) + '</td>'
+          + '<td class="p-2 text-[11px]" style="color:var(--text-muted)">' + (o.order_type || '') + '</td>'
+          + '<td class="p-2 text-[11px]" style="color:var(--text-muted)">' + (o.tif || '') + '</td>'
+          + '<td class="p-2">' + statusPill(o) + '</td>'
+          + '<td class="p-2 text-right">' + cancelBtn + '</td>'
+          + '</tr>';
+      });
+    });
+
     el.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-left text-xs">'
       + '<thead><tr style="background:var(--surface-alt)">'
-      + '<th class="p-2">Ticker</th><th class="p-2">Side</th><th class="p-2 text-right">Qty</th>'
-      + '<th class="p-2">Type</th><th class="p-2">TIF</th><th class="p-2">Status</th>'
-      + '</tr></thead><tbody>' + rows + '</tbody></table></div>'
+      + '<th class="p-2 pl-5 font-semibold text-[10px] uppercase tracking-wider" style="color:var(--text-subtle)">Role</th>'
+      + '<th class="p-2 font-semibold text-[10px] uppercase tracking-wider" style="color:var(--text-subtle)">Side</th>'
+      + '<th class="p-2 text-right font-semibold text-[10px] uppercase tracking-wider" style="color:var(--text-subtle)">Qty</th>'
+      + '<th class="p-2 font-semibold text-[10px] uppercase tracking-wider" style="color:var(--text-subtle)">Price</th>'
+      + '<th class="p-2 font-semibold text-[10px] uppercase tracking-wider" style="color:var(--text-subtle)">Type</th>'
+      + '<th class="p-2 font-semibold text-[10px] uppercase tracking-wider" style="color:var(--text-subtle)">TIF</th>'
+      + '<th class="p-2 font-semibold text-[10px] uppercase tracking-wider" style="color:var(--text-subtle)">Status</th>'
+      + '<th class="p-2"></th>'
+      + '</tr></thead><tbody>' + html + '</tbody></table></div>'
       + '<p class="text-xs mt-2" style="color:var(--text-subtle)">Account ' + (d.account || '—')
-      + ' · ' + d.orders.length + ' working order(s)</p>';
+      + ' · ' + groupOrder.length + ' order group(s) · ' + d.orders.length + ' working order(s)</p>';
   }catch(e){
     el.innerHTML = '<span style="color:var(--neg)">Failed to load broker orders.</span>';
   }

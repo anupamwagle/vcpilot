@@ -192,6 +192,12 @@ class IBKRBroker:
                 candidate_ids.append(c)
 
         last_exc = None
+        port_errors: dict = {}   # port -> "ExcName: msg" of the most telling failure
+        # 8s proved too tight in practice: when the gateway is mid account-sync
+        # for another client (e.g. the web container's persistent connection),
+        # a new client's handshake can legitimately take longer, and the old
+        # timeout produced spurious "handshake never completed" failures.
+        _CONNECT_TIMEOUT = int(os.environ.get("IBKR_CONNECT_TIMEOUT", "20"))
         for port in candidate_ports:
             for cid in candidate_ids:
                 try:
@@ -200,7 +206,7 @@ class IBKRBroker:
                         host=self.host,
                         port=port,
                         clientId=cid,
-                        timeout=8,
+                        timeout=_CONNECT_TIMEOUT,
                         readonly=False,
                     )
                     self._connected = True
@@ -216,6 +222,14 @@ class IBKRBroker:
                     return True
                 except Exception as e:
                     last_exc = e
+                    # Prefer a Timeout over a ConnectionRefused as the port's
+                    # "telling" error: refused just means nothing listens there
+                    # (normal for the other mode's socat port), while a timeout
+                    # means socat accepted TCP but the API handshake stalled —
+                    # that's the diagnosis-worthy one.
+                    prev = port_errors.get(port, "")
+                    if not prev or "Refused" in prev or "refused" in prev:
+                        port_errors[port] = f"{type(e).__name__}: {e}"
                     logger.warning(
                         f"IBKR connect attempt failed (port={port} clientId={cid}): "
                         f"{type(e).__name__}: {e}"
@@ -226,11 +240,28 @@ class IBKRBroker:
                         logger.debug(f"IBKR connect: cleanup disconnect after failed attempt raised (harmless): {disconnect_e}")
 
         IBKRBroker._last_fail_times[key] = time.time()
+        # Per-port summary — quoting only the LAST exception was actively
+        # misleading: in paper mode the final fallback hits the live socat port
+        # (4003), whose ConnectionRefused is expected noise that used to bury
+        # the real story (handshake timeout on the paper port 4004).
+        _per_port = "; ".join(f"port {p}: {msg}" for p, msg in port_errors.items())
+        _primary = candidate_ports[0]
+        _hint = ""
+        if "Timeout" in port_errors.get(_primary, ""):
+            _hint = (
+                f" Handshake timed out on the {'paper' if self.paper_mode else 'live'} port {_primary} "
+                f"after {_CONNECT_TIMEOUT}s — gateway may be busy with another client's account sync, "
+                f"mid-restart, or its API settings block the connection; retry, and restart the ibkr "
+                f"container if it persists."
+            )
+        elif "Refused" in port_errors.get(_primary, "") or "refused" in port_errors.get(_primary, ""):
+            _hint = (
+                f" Connection REFUSED on the {'paper' if self.paper_mode else 'live'} port {_primary} — "
+                f"the gateway's socat for this mode isn't listening; check IBKR_PAPER_MODE matches the "
+                f"gateway login and that the ibkr container is fully started."
+            )
         self.last_error = (
-            f"{type(last_exc).__name__}: {last_exc} "
-            f"(host={self.host}, tried ports {candidate_ports} clientIds {candidate_ids}). "
-            f"TCP reachable but API handshake never completed — check the gateway "
-            f"socat port (paper=4004/live=4003) and API settings."
+            f"IBKR connect failed (host={self.host}, clientIds {candidate_ids}): {_per_port}.{_hint}"
         )
         logger.error(f"IBKR connection failed after retries: {self.last_error!r}")
         return False

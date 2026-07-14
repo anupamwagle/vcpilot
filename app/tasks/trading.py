@@ -1731,6 +1731,7 @@ def refresh_live_prices_cache_task(self):
                 crypto_tickers.add(ticker_val)
 
     updated = 0
+    failed: list[str] = []
     for ticker in crypto_tickers:
         try:
             result = get_intraday_price(ticker, asset_type="CRYPTO")
@@ -1747,18 +1748,29 @@ def refresh_live_prices_cache_task(self):
                 updated += 1
             else:
                 cache.set(f"live_price:{ticker}", {"_failed": True}, expire_seconds=120)
+                failed.append(ticker)
         except Exception as e:
             logger.debug(f"refresh_live_prices_cache_task: error for {ticker}: {e}")
+            failed.append(ticker)
 
     logger.debug(f"refresh_live_prices_cache_task: refreshed {updated}/{len(crypto_tickers)} crypto tickers")
 
     # Write audit log so the health page can display last-run time for this task.
+    # Name the failures — "8/21" alone looks like a bug, but the misses are
+    # usually coins with no live source on the configured exchange (e.g. -USD
+    # pairs on an AUD-only exchange, or coins not in IR_SYMBOL_MAP that should
+    # be purged via "Re-seed Crypto Universe").
+    _fail_note = ""
+    if failed:
+        _sample = ", ".join(sorted(failed)[:10])
+        _fail_note = f" — {len(failed)} no live source: {_sample}" + ("…" if len(failed) > 10 else "")
     try:
         with get_db() as _db:
             _db.add(AuditLog(
                 action=AuditAction.TASK_RUN,
-                message=f"[CRYPTO] Live price cache: refreshed {updated}/{len(crypto_tickers)} watchlist tickers",
-                detail={"updated": updated, "total": len(crypto_tickers)},
+                message=(f"[CRYPTO] Live price cache: refreshed {updated}/{len(crypto_tickers)} "
+                         f"watchlist tickers{_fail_note}"),
+                detail={"updated": updated, "total": len(crypto_tickers), "failed": sorted(failed)},
             ))
     except Exception as e:
         logger.warning(f"refresh_live_prices_cache_task: audit write failed: {e}", exc_info=True)

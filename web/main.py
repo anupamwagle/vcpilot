@@ -1915,6 +1915,86 @@ async def positions_open_orders(request: Request):
                 # Scope to this org's account when the gateway exposes multiple.
                 if acct:
                     orders = [o for o in orders if not o.get("account") or o.get("account") == acct]
+
+                # Enrich with DB linkage. IBKR doesn't expose placement time on
+                # open orders, but our own Order rows carry submitted_at, and the
+                # orderRef ("astratrade-{signal_id}" / "stopsell-{position_id}")
+                # ties bracket legs back to their Signal — without this, working
+                # entry brackets for TRIGGERED signals look like mystery orders,
+                # since TRIGGERED signals are hidden from the Signals page and no
+                # Position exists until the entry leg fills (CLAUDE.md #36/#39).
+                try:
+                    from app.database import get_db as _appdb
+                    from app.models.trade import Order as _Order
+                    from app.models.signal import Signal as _Signal
+                    from sqlalchemy import or_ as _or
+                    import pytz as _pytz
+                    _tz = _pytz.timezone("Australia/Sydney")
+
+                    perm_ids = [o["perm_id"] for o in orders if o.get("perm_id")]
+                    oids     = [o["ibkr_order_id"] for o in orders if o.get("ibkr_order_id")]
+                    sig_ids: set = set()
+                    for o in orders:
+                        ref = o.get("order_ref") or ""
+                        if ref.startswith("astratrade-"):
+                            try:
+                                sig_ids.add(int(ref.split("-", 1)[1]))
+                            except ValueError:
+                                pass
+
+                    by_perm, by_oid, by_sig, sigs = {}, {}, {}, {}
+                    conds = []
+                    if perm_ids: conds.append(_Order.perm_id.in_(perm_ids))
+                    if oids:     conds.append(_Order.ibkr_order_id.in_(oids))
+                    if sig_ids:  conds.append(_Order.signal_id.in_(sig_ids))
+                    if conds:
+                        with _appdb() as _db:
+                            db_orders = _db.query(_Order).filter(
+                                _Order.organization_id == org_id, _or(*conds)
+                            ).all()
+                            by_perm = {d.perm_id: d for d in db_orders if d.perm_id}
+                            by_oid  = {d.ibkr_order_id: d for d in db_orders if d.ibkr_order_id}
+                            by_sig  = {d.signal_id: d for d in db_orders if d.signal_id}
+                            if sig_ids:
+                                sigs = {s.id: s for s in _db.query(_Signal).filter(
+                                    _Signal.id.in_(sig_ids)).all()}
+
+                    def _fmt(ts):
+                        if ts is None:
+                            return None
+                        try:
+                            return _pytz.utc.localize(ts).astimezone(_tz).strftime("%d %b %H:%M")
+                        except Exception:
+                            return str(ts)[:16]
+
+                    for o in orders:
+                        ref = o.get("order_ref") or ""
+                        sid = None
+                        if ref.startswith("astratrade-"):
+                            try:
+                                sid = int(ref.split("-", 1)[1])
+                            except ValueError:
+                                pass
+                        # Bracket CHILD legs have no DB Order row of their own —
+                        # fall back to the parent order (matched via signal_id)
+                        # for the placement timestamp.
+                        dbo = (by_perm.get(o.get("perm_id"))
+                               or by_oid.get(o.get("ibkr_order_id"))
+                               or (by_sig.get(sid) if sid else None))
+                        o["placed_at"] = _fmt((dbo.submitted_at or dbo.created_at) if dbo else None)
+                        if sid:
+                            sig = sigs.get(sid)
+                            st = str(sig.status).replace("SignalStatus.", "") if sig else "?"
+                            o["source"] = f"Signal #{sid} · {st}"
+                        elif ref.startswith("stopsell-"):
+                            o["source"] = f"Stop-sell · position #{ref.split('-', 1)[1]}"
+                        elif dbo:
+                            o["source"] = "AstraTrade"
+                        else:
+                            o["source"] = "External/manual"
+                except Exception as _enrich_e:
+                    logger.debug(f"open-orders DB enrichment failed: {_enrich_e}")
+
                 return {"connected": True, "account": acct, "orders": orders}
         except Exception as e:
             return {"connected": False, "error": str(e)[:200], "orders": []}

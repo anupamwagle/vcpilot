@@ -652,9 +652,14 @@ def refresh_price_data(self, exchange_key: str = None):
 
         # Store latest bar for each stock
         today = get_current_date()
+        stored = 0
+        skipped_empty = 0
+        skipped_stale = 0
+        stale_sample: list[str] = []
         with get_db() as db:
             for ticker, df in all_prices.items():
                 if df is None or df.empty:
+                    skipped_empty += 1
                     continue
                 latest = df.iloc[-1]
                 bar_date_str = str(latest["date"])
@@ -673,6 +678,9 @@ def refresh_price_data(self, exchange_key: str = None):
                 _asx_only = exchange_key in ("ASX", None) and not _stock_is_crypto
                 _acceptable_dates = {str(today), str(today - _td(days=1))} if not _asx_only else {str(today)}
                 if bar_date_str not in _acceptable_dates:
+                    skipped_stale += 1
+                    if len(stale_sample) < 15:
+                        stale_sample.append(f"{ticker}@{bar_date_str}")
                     continue
 
                 bar_date = latest["date"] if hasattr(latest["date"], "year") else today
@@ -711,14 +719,24 @@ def refresh_price_data(self, exchange_key: str = None):
                 bar.pct_from_52w_low  = _safe_float(latest.get("pct_from_52w_low"))
                 bar.atr_14    = _safe_float(latest.get("atr_14"))
                 bar.rs_rating = _safe_float(rs_ratings.get(ticker))
+                stored += 1
 
-
+            # Full breakdown: yfinance can return nothing for some tickers
+            # (fetched < universe) and the freshness gate can reject old bars
+            # (stored < fetched) — "refreshed for N stocks" alone hid both gaps.
+            _unfetched = len(tickers) - len(all_prices)
             db.add(AuditLog(
                 action=AuditAction.TASK_RUN,
-                message=f"[{exchange_key or 'ALL'}] Price data refreshed for {len(all_prices)} stocks",
+                message=(f"[{exchange_key or 'ALL'}] Price data refreshed: {stored}/{len(tickers)} "
+                         f"bars stored ({_unfetched} no data from source, {skipped_empty} empty, "
+                         f"{skipped_stale} stale/old-date skipped)"),
+                detail={"universe": len(tickers), "fetched": len(all_prices), "stored": stored,
+                        "no_data": _unfetched, "empty": skipped_empty,
+                        "stale_date": skipped_stale, "stale_sample": stale_sample},
             ))
 
-        logger.info(f"Price data refreshed for {len(all_prices)} stocks")
+        logger.info(f"Price data refreshed: {stored}/{len(tickers)} bars stored "
+                    f"({_unfetched} unfetched, {skipped_stale} stale)")
 
         # After the daily price refresh, opportunistically top up Stock Story
         # data — but only for EQUITIES, only what's stale, and capped/throttled
@@ -757,8 +775,16 @@ def evaluate_market_regime_task(self, exchange_key: str = "ASX"):
     try:
         benchmark = EXCHANGE_BENCHMARKS.get(exchange_key, "^GSPC")
         index_df = get_price_history(benchmark, period="1y")
-        if index_df is None:
+        if index_df is None or len(index_df) == 0:
             logger.warning(f"Could not fetch benchmark {benchmark} for regime check ({exchange_key})")
+            # Surface in the Task Log — otherwise the regime silently stays
+            # stale/"Not evaluated" and the Evaluate button appears dead.
+            with get_db() as db:
+                db.add(AuditLog(
+                    action=AuditAction.TASK_ERROR,
+                    message=(f"[{exchange_key}] Market regime NOT evaluated: benchmark "
+                             f"{benchmark} price fetch failed/empty (yfinance outage?)"),
+                ))
             return
 
         today = get_current_date()
@@ -1772,10 +1798,15 @@ def _get_or_create_sector_label(label_name: str, organization_id: int, db) -> in
         return None
 
 
-def _auto_assign_sector_label(ticker: str, wl_item, organization_id: int, db, force: bool = False):
+def _auto_assign_sector_label(ticker: str, wl_item, organization_id: int, db, force: bool = False) -> str | None:
     """
     Auto-assign a sector WatchlistLabel to the watchlist item based on the
     stock's ticker (deterministic override map) or sector/industry data.
+
+    Returns the resolved label NAME when a label was determined (whether or not
+    it differs from the current one), or None when no label could be resolved
+    (item keeps whatever label it had). Callers doing bulk runs use this to
+    report changed / already-correct / unmatched counts.
 
     Only assigns if:
     - The item has no label yet (or force=True to override any non-default label)
@@ -1797,7 +1828,7 @@ def _auto_assign_sector_label(ticker: str, wl_item, organization_id: int, db, fo
 
     # Skip if already has a label and not forcing
     if wl_item.label_id and not force:
-        return
+        return None
 
     stock = db.query(Stock).filter(Stock.ticker == ticker).first()
     sector     = (stock.sector     if stock else "") or ""
@@ -1832,11 +1863,13 @@ def _auto_assign_sector_label(ticker: str, wl_item, organization_id: int, db, fo
                 logger.warning(f"Live sector/industry fetch failed for {ticker}: {e}")
 
     if not label_name:
-        return
+        return None
 
     label_id = _get_or_create_sector_label(label_name, organization_id, db)
     if label_id:
         wl_item.label_id = label_id
+        return label_name
+    return None
 
 
 def _watchlist_geometry_fields(ticker: str, vcp_result, db) -> dict:
@@ -2407,7 +2440,6 @@ def recategorise_watchlist_labels(self, organization_id: int = None, force: bool
                 orgs = db.query(Organization).filter(Organization.is_active == True).all()
 
         for org in orgs:
-            assigned = 0
             scoped_count = 0
             with get_db() as db:
                 from app.models.signal import WatchlistLabel
@@ -2429,27 +2461,47 @@ def recategorise_watchlist_labels(self, organization_id: int = None, force: bool
                     ).all()
                 }
 
+                changed = 0
+                already_correct = 0
+                unmatched = 0
+                protected = 0
+                unmatched_tickers: list[str] = []
                 for item in items:
                     # Skip if current label is user-chosen (non-auto) and not forcing
                     if not force and item.label_id and item.label_id not in _auto_label_ids:
+                        protected += 1
                         continue
                     before = item.label_id
                     # Guard already applied above — force=True internally so any
                     # stale auto-assigned label can be overwritten
-                    _auto_assign_sector_label(item.ticker, item, org.id, db, force=True)
+                    resolved = _auto_assign_sector_label(item.ticker, item, org.id, db, force=True)
                     if item.label_id != before:
-                        assigned += 1
+                        changed += 1
+                    elif resolved:
+                        already_correct += 1
+                    else:
+                        unmatched += 1
+                        if len(unmatched_tickers) < 25:
+                            unmatched_tickers.append(item.ticker)
 
+                # "changed" alone reads like a failure when most items are already
+                # correctly labelled (e.g. "5/754") — report the full breakdown.
                 db.add(AuditLog(
                     action=AuditAction.TASK_RUN,
                     organization_id=org.id,
-                    message=(f"Watchlist re-categorised [{market}]: {assigned}/{scoped_count} "
-                             f"items assigned sector labels (force={force})"),
-                    detail={"market": market, "force": force,
-                            "assigned": assigned, "items_in_scope": scoped_count},
+                    message=(f"Watchlist re-categorised [{market}]: {scoped_count} in scope — "
+                             f"{changed} changed, {already_correct} already correct, "
+                             f"{unmatched} unmatched (no sector data)"
+                             + (f", {protected} user-labelled (protected)" if protected else "")
+                             + f" (force={force})"),
+                    detail={"market": market, "force": force, "items_in_scope": scoped_count,
+                            "changed": changed, "already_correct": already_correct,
+                            "unmatched": unmatched, "protected": protected,
+                            "unmatched_sample": unmatched_tickers},
                 ))
 
-            logger.info(f"Org {org.name}: re-categorised {assigned}/{scoped_count} watchlist items [{market}]")
+            logger.info(f"Org {org.name}: re-categorised [{market}] — {changed} changed, "
+                        f"{already_correct} same, {unmatched} unmatched of {scoped_count}")
 
     except Exception as exc:
         logger.error(f"Watchlist re-categorisation failed: {exc}")
@@ -2536,6 +2588,18 @@ def refresh_asx_sector_data(self, organization_id: int = None):
 
     except Exception as exc:
         logger.error(f"refresh_asx_sector_data failed: {exc}")
+        # Surface in the Task Log — a silent crash here means the chained
+        # re-categorise runs with coarse/blank ASX sector data and most ASX
+        # items come back "unmatched" with no explanation.
+        try:
+            with get_db() as db:
+                db.add(AuditLog(
+                    action=AuditAction.TASK_ERROR,
+                    organization_id=organization_id,
+                    message=f"ASX GICS sector backfill FAILED: {str(exc)[:200]}",
+                ))
+        except Exception:
+            pass
 
 
 # ===========================================================================
