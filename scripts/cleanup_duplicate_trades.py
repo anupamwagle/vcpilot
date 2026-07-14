@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 cleanup_duplicate_trades.py
 ===========================
@@ -16,12 +16,14 @@ All higher-id rows in the group are deleted.
 
 Usage
 -----
-    # Dry run — prints report, makes no changes
+    # Dry run -- prints report, makes no changes
     python scripts/cleanup_duplicate_trades.py
 
-    # Execute — commits deletions after printing report
+    # Execute -- commits deletions after printing report
     python scripts/cleanup_duplicate_trades.py --execute
 """
+
+from __future__ import print_function
 
 import sys
 import os
@@ -43,7 +45,7 @@ def find_duplicates(session):
     """
     Return a dict mapping (ticker, account_id, org_id, entry_date, exit_date)
     to the list of Trade rows in that group (sorted ascending by id).
-    Only groups with >1 row are returned.
+    Only groups with more than one row are returned.
     """
     rows = (
         session.query(
@@ -60,7 +62,7 @@ def find_duplicates(session):
         .all()
     )
 
-    groups: dict = defaultdict(list)
+    groups = defaultdict(list)
     for row in rows:
         key = (row.ticker, row.account_id, row.organization_id, row.entry_date, row.exit_date)
         groups[key].append(row)
@@ -72,23 +74,23 @@ def main():
     execute = "--execute" in sys.argv
 
     print("=" * 70)
-    print("AstraTrade — Duplicate Trade Cleanup Script")
+    print("AstraTrade - Duplicate Trade Cleanup Script")
     print("=" * 70)
     if not execute:
         print("MODE: DRY RUN (pass --execute to commit deletions)\n")
     else:
-        print("MODE: *** EXECUTE — deletions will be committed ***\n")
+        print("MODE: *** EXECUTE - deletions will be committed ***\n")
 
     session = SessionLocal()
     try:
         duplicates = find_duplicates(session)
 
         if not duplicates:
-            print("✅  No duplicate trade rows found. Nothing to do.")
+            print("OK  No duplicate trade rows found. Nothing to do.")
             return
 
         total_to_delete = 0
-        all_delete_ids: list[int] = []
+        all_delete_ids = []
 
         for (ticker, acct_id, org_id, entry_date, exit_date), rows in sorted(duplicates.items()):
             keep_id = rows[0].id
@@ -97,13 +99,21 @@ def main():
             total_to_delete += len(delete_rows)
             all_delete_ids.extend(delete_ids)
 
-            print(f"  {ticker}  entry={entry_date}  exit={exit_date}  acct={acct_id}  org={org_id}")
-            print(f"    KEEP  --> id={keep_id}  reason={rows[0].exit_reason}  pnl={rows[0].net_pnl_aud}")
+            print("  {ticker}  entry={entry}  exit={exit_d}  acct={acct}  org={org}".format(
+                ticker=ticker, entry=entry_date, exit_d=exit_date, acct=acct_id, org=org_id,
+            ))
+            print("    KEEP   --> id={id}  reason={reason}  pnl={pnl}".format(
+                id=keep_id, reason=rows[0].exit_reason, pnl=rows[0].net_pnl_aud,
+            ))
             for r in delete_rows:
-                print(f"    DELETE--> id={r.id}  reason={r.exit_reason}  pnl={r.net_pnl_aud}")
+                print("    DELETE --> id={id}  reason={reason}  pnl={pnl}".format(
+                    id=r.id, reason=r.exit_reason, pnl=r.net_pnl_aud,
+                ))
             print()
 
-        print(f"Summary: {len(duplicates)} duplicate group(s), {total_to_delete} row(s) to delete.")
+        print("Summary: {n} duplicate group(s), {d} row(s) to delete.".format(
+            n=len(duplicates), d=total_to_delete,
+        ))
         print()
 
         if not execute:
@@ -111,8 +121,9 @@ def main():
             return
 
         # Confirm before deleting
-        confirm = input(f"Type 'yes' to delete {total_to_delete} row(s): ").strip().lower()
-        if confirm != "yes":
+        confirm = raw_input if sys.version_info[0] < 3 else input
+        answer = confirm("Type 'yes' to delete {n} row(s): ".format(n=total_to_delete)).strip().lower()
+        if answer != "yes":
             print("Aborted.")
             return
 
@@ -121,26 +132,26 @@ def main():
         for i in range(0, len(all_delete_ids), 100):
             batch = all_delete_ids[i:i + 100]
             session.execute(
-                text("DELETE FROM trades WHERE id IN :ids"),
-                {"ids": tuple(batch)},
+                text("DELETE FROM trades WHERE id = ANY(:ids)"),
+                {"ids": batch},
             )
             deleted += len(batch)
 
         session.commit()
-        print(f"\nDone. {deleted} duplicate trade row(s) deleted.")
+        print("\nDone. {n} duplicate trade row(s) deleted.".format(n=deleted))
 
         # Final verification
         remaining = find_duplicates(session)
         if remaining:
-            print(f"\nWARNING: {len(remaining)} duplicate group(s) still exist after cleanup!")
+            print("\nWARNING: {n} duplicate group(s) still exist after cleanup!".format(n=len(remaining)))
             for key, rows in remaining.items():
-                print(f"   {key}: ids={[r.id for r in rows]}")
+                print("   {k}: ids={ids}".format(k=key, ids=[r.id for r in rows]))
         else:
             print("Verification passed -- no duplicate groups remain.")
 
     except Exception as e:
         session.rollback()
-        print(f"\nError: {e}")
+        print("\nError: {e}".format(e=e))
         raise
     finally:
         session.close()
