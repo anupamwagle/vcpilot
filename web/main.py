@@ -1522,7 +1522,7 @@ async def home(
         except Exception:
             _val = "—"
         _flag, _label = _exc_flag_label.get(_exc, ("", _exc.replace("CRYPTO_", "")))
-        regimes_list.append({"flag": _flag, "label": _label, "val": _val})
+        regimes_list.append({"key": _exc, "flag": _flag, "label": _label, "val": _val})
 
     total_invested = round(sum(p.get("invested_aud", 0) for p in pos_data), 2)
     available_capital = round(capital - total_invested, 2)
@@ -6054,6 +6054,15 @@ async def trader_watchlist_promote(request: Request, item_id: int, db: Session =
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_root():
     return RedirectResponse("/admin/health", 302)
+
+
+@app.get("/admin/logs")
+async def admin_logs_alias(request: Request, tab: str = Query("tasks")):
+    """Unified Logs surface alias — the three log views share one tab bar
+    (see admin/_logs_tabs.html) and present as a single page; this alias lets
+    /admin/logs?tab=audit|tasks|data deep-link to the right one."""
+    target = {"audit": "/admin/audit", "data": "/admin/data-log"}.get(tab, "/admin/tasks")
+    return RedirectResponse(target, 302)
 
 
 @app.get("/admin/tasks", response_class=HTMLResponse)

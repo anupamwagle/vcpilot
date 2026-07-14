@@ -240,13 +240,31 @@
 
 <!-- ── Quick actions ──────────────────────────────────────────── -->
 <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.75rem">
+
+  {# Run Screener — wired to the live progress widget below (runScreener JS) #}
+  <div style="display:inline-flex;align-items:center;gap:.35rem">
+    {% if regimes and regimes|length > 1 %}
+    <select id="screen-exchange" class="input py-1 text-xs" style="width:auto">
+      {% for r in regimes %}
+      <option value="{{ r.key if 'key' in r else r.label }}">{{ r.flag }} {{ r.label }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
+    <button id="run-screener-btn" onclick="runScreener()" type="button" class="btn-primary text-xs py-1.5">
+      🔍 <span id="run-screener-label">Run Screener</span>
+    </button>
+  </div>
+
+  <a href="/trader" hx-boost="false" class="btn-ghost text-xs py-1.5">⚡ Trader Terminal</a>
+  <a href="/admin/health" class="btn-ghost text-xs py-1.5">💊 System Health</a>
+
   {% if trading_active %}
-  <form method="post" action="/action/pause" class="sm:hidden">
-    <button type="submit" class="btn-ghost">⏸ Pause</button>
+  <form method="post" action="/action/pause" style="margin-left:auto">
+    <button type="submit" class="btn-ghost text-xs py-1.5">⏸ Pause Trading</button>
   </form>
   {% elif trading_paused and worker_status == 'online' %}
-  <form method="post" action="/action/resume" class="sm:hidden">
-    <button type="submit" class="btn-primary">▶ Resume</button>
+  <form method="post" action="/action/resume" style="margin-left:auto">
+    <button type="submit" class="btn-primary text-xs py-1.5">▶ Resume Trading</button>
   </form>
   {% endif %}
 </div>
@@ -501,16 +519,14 @@ function _swFinish(finalMsg) {
   </div>
 </div>
 
-<!-- ── Automated System Checks ──────────────────────────────────── -->
+<!-- ── Automated System Checks (collapsed reference — full detail lives on
+        System Health & Logs; keeping it folded keeps the dashboard focused) ── -->
 <div class="card overflow-hidden mt-6">
-  <div class="section-head">
-    <h2 class="section-title" style="display:flex;align-items:center;gap:.5rem">
-      <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
-      </svg>
-      Automated System Checks
-    </h2>
-  </div>
+  <details class="card-toggle">
+  <summary>
+    <span class="section-title" style="font-size:.875rem">Automated System Checks</span>
+    <span class="text-xs font-normal" style="color:var(--text-subtle)">· schedule &amp; last results · full detail on <a href="/admin/health" style="color:var(--t-accent)" onclick="event.stopPropagation()">System Health</a></span>
+  </summary>
   <div class="tbl-wrap">
     <table class="tbl">
       <thead>
@@ -555,6 +571,7 @@ function _swFinish(finalMsg) {
       </tbody>
     </table>
   </div>
+  </details>
 </div>
 
 <!-- ── Watchlist Market Data ───────────────────────────────────── -->

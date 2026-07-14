@@ -1,40 +1,28 @@
 {% extends "base.html" %}
-{% block title %}Task Log{% endblock %}
-{% block page_title %}Task Log · Live{% endblock %}
+{% block title %}Logs · Live Stream{% endblock %}
+{% block page_title %}Logs{% endblock %}
 
 {% block content %}
 
 {% set msg = request.query_params.get('msg') %}
+{% set logs_tab = 'tasks' %}
+{% include "admin/_logs_tabs.html" %}
+
 {% if msg == 'setup' %}
 <div class="alert-info mb-4">
   <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
   <div><strong>Full setup queued.</strong> Universe → price data → regime → screen. Takes 5–20 min. Progress appears below as tasks complete.</div>
 </div>
 {% elif msg == 'cleared' %}
-<div class="alert-success mb-4">
-  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
-  Task run entries cleared from the database.
-</div>
+<div class="alert-success mb-4">Task run entries cleared from the database.</div>
 {% elif msg == 'breakout' %}
-<div class="alert-success mb-4">
-  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
-  Intraday breakout check triggered on the worker.
-</div>
+<div class="alert-success mb-4">Intraday breakout check triggered on the worker.</div>
 {% elif msg == 'exit_check' %}
-<div class="alert-success mb-4">
-  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
-  Intraday exit rules evaluation triggered on the worker.
-</div>
+<div class="alert-success mb-4">Intraday exit rules evaluation triggered on the worker.</div>
 {% elif msg == 'positions' %}
-<div class="alert-success mb-4">
-  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
-  Position synchronization with IBKR triggered.
-</div>
+<div class="alert-success mb-4">Position synchronisation with IBKR triggered.</div>
 {% elif msg == 'stops' %}
-<div class="alert-success mb-4">
-  <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
-  Stop orders synchronization with IBKR triggered.
-</div>
+<div class="alert-success mb-4">Stop orders synchronisation with IBKR triggered.</div>
 {% elif msg == 'queue_failed' %}
 <div class="alert-warn mb-4">
   <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
@@ -42,124 +30,99 @@
 </div>
 {% endif %}
 
-{# ── Status bar ────────────────────────────────────────────────────── #}
-<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem;margin-bottom:1.25rem">
-  <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
-    <span id="stream-badge" style="display:inline-flex;align-items:center;gap:.375rem;font-size:.75rem;font-weight:600;padding:.25rem .625rem;border-radius:9999px;background:var(--pos-bg);color:var(--pos);border:1px solid var(--bull-border)">
-      <span style="display:inline-block;width:.5rem;height:.5rem;border-radius:9999px;background:var(--pos)"></span>
-      Live
-    </span>
-    <span style="font-size:.8125rem;color:var(--text-muted)">Auto-updates every 3s · times in {{ display_tz }}</span>
+{# ── Manual triggers toolbar ─────────────────────────────────────────── #}
+<div class="card mb-4 overflow-hidden">
+  <div class="section-head">
+    <p class="section-title">Manual Triggers</p>
+    {% if user_role == 'superadmin' %}
+    <a href="/superadmin/operations" class="text-xs" style="color:var(--a-accent);text-decoration:none"
+       onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">Price / Universe / Regime → Central Ops →</a>
+    {% endif %}
   </div>
-  <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-    <button onclick="clearView()" class="btn-ghost text-xs py-1 px-3">Clear view</button>
-    <button onclick="togglePause()" id="pause-btn" class="btn-ghost text-xs py-1 px-3">⏸ Pause</button>
-    <form method="post" action="/admin/tasks/clear-log"
-          onsubmit="return confirm('Delete all TASK_RUN entries from the database? Other audit events are kept.')">
-      <button type="submit" class="btn-ghost text-xs py-1 px-3" style="color:var(--neg);border-color:var(--neg)">🗑 Clear DB log</button>
-    </form>
+  <div class="p-3" style="display:flex;flex-wrap:wrap;gap:1.25rem;align-items:center">
+
+    <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+      <span class="field-label" style="margin:0">Screener</span>
+      <form method="post" action="/action/force-screen" style="display:inline-flex;align-items:center;gap:.25rem">
+        {% if has_asx or has_us or has_crypto %}
+        <select name="exchange" class="input py-0.5 text-xs" style="width:auto;padding-top:.15rem;padding-bottom:.15rem">
+          {% if has_asx %}<option value="ASX">🇦🇺 ASX</option>{% endif %}
+          {% if has_us %}<option value="US">🇺🇸 US</option>{% endif %}
+          {% if has_crypto %}<option value="CRYPTO">₿ Crypto</option>{% endif %}
+        </select>
+        {% endif %}
+        <button class="btn-primary text-xs py-1">🔍 Force Screen</button>
+      </form>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;border-left:1px solid var(--border);padding-left:1.25rem">
+      <span class="field-label" style="margin:0">Intraday</span>
+      <form method="post" action="/action/force-breakout-check" style="display:inline-flex;align-items:center;gap:.25rem">
+        {% if has_asx or has_us or has_crypto %}
+        <select name="exchange" class="input py-0.5 text-xs" style="width:auto;padding-top:.15rem;padding-bottom:.15rem">
+          {% if has_asx %}<option value="ASX">🇦🇺 ASX</option>{% endif %}
+          {% if has_us %}<option value="US">🇺🇸 US</option>{% endif %}
+          {% if has_crypto %}<option value="CRYPTO">₿ Crypto</option>{% endif %}
+        </select>
+        {% endif %}
+        <button class="btn-ghost text-xs py-1">🎯 Breakout Check</button>
+      </form>
+      <form method="post" action="/action/force-exit-check" style="display:inline-flex;align-items:center;gap:.25rem">
+        {% if has_asx or has_us or has_crypto %}
+        <select name="exchange" class="input py-0.5 text-xs" style="width:auto;padding-top:.15rem;padding-bottom:.15rem">
+          {% if has_asx %}<option value="ASX">🇦🇺 ASX</option>{% endif %}
+          {% if has_us %}<option value="US">🇺🇸 US</option>{% endif %}
+          {% if has_crypto %}<option value="CRYPTO">₿ Crypto</option>{% endif %}
+        </select>
+        {% endif %}
+        <button class="btn-ghost text-xs py-1">🛑 Exit Check</button>
+      </form>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;border-left:1px solid var(--border);padding-left:1.25rem">
+      <span class="field-label" style="margin:0">Broker</span>
+      <form method="post" action="/action/force-position-sync"><button class="btn-ghost text-xs py-1">⚖️ Position Sync</button></form>
+      <form method="post" action="/action/force-stop-sync"><button class="btn-ghost text-xs py-1">⚙️ Stop Sync</button></form>
+      <form method="post" action="/action/ping-worker"><button class="btn-ghost text-xs py-1">⚡ Ping Worker</button></form>
+    </div>
+
   </div>
-</div>
-
-{# ── Data counters ─────────────────────────────────────────────────── #}
-<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
-  <div class="stat-card"><p class="field-label">Universe</p>
-    <p id="cnt-stocks" class="text-xl font-bold" style="color:var(--text)">{{ stock_count }}</p>
-    <p class="text-xs" style="color:var(--text-subtle)">stocks loaded{% if has_us %} (ASX + US){% elif has_crypto %} (ASX + Crypto){% endif %}</p></div>
-  <div class="stat-card"><p class="field-label">Price Bars</p>
-    <p id="cnt-bars" class="text-xl font-bold" style="color:var(--text)">{{ "{:,}".format(price_bar_count) }}</p>
-    <p class="text-xs" style="color:var(--text-subtle)">total OHLCV rows</p></div>
-  <div class="stat-card"><p class="field-label">Today's Signals</p>
-    <p id="cnt-signals" class="text-xl font-bold" style="color:var(--t-accent)">{{ signal_count_today }}</p>
-    <p class="text-xs" style="color:var(--text-subtle)">from screener</p></div>
-  <div class="stat-card"><p class="field-label">Watchlist</p>
-    <p id="cnt-watchlist" class="text-xl font-bold" style="color:var(--a-accent)">{{ watchlist_count }}</p>
-    <p class="text-xs" style="color:var(--text-subtle)">being watched</p></div>
-</div>
-
-{# ── Quick triggers ────────────────────────────────────────────────── #}
-<div class="card p-3 mb-4" style="display:flex;flex-wrap:wrap;gap:1rem;align-items:center">
-
-  {# Org-scoped: screener #}
-  <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
-    <span style="font-size:.75rem;font-weight:600;color:var(--text-muted)">Screen:</span>
-    <form method="post" action="/action/force-screen" style="display:inline-flex;align-items:center;gap:.25rem">
-      {% if has_asx or has_us or has_crypto %}
-      <select name="exchange" class="input py-0.5 text-xs" style="width:auto;padding-top:.15rem;padding-bottom:.15rem">
-        {% if has_asx %}<option value="ASX">🇦🇺 ASX</option>{% endif %}
-        {% if has_us %}<option value="US">🇺🇸 US</option>{% endif %}
-        {% if has_crypto %}<option value="CRYPTO">₿ Crypto</option>{% endif %}
-      </select>
-      {% endif %}
-      <button class="btn-primary text-xs py-1">🔍 Force Screen</button>
-    </form>
-  </div>
-
-  {# Org-scoped: intraday #}
-  <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;border-left:1px solid var(--border);padding-left:1rem">
-    <span style="font-size:.75rem;font-weight:600;color:var(--text-muted)">Intraday:</span>
-
-    <form method="post" action="/action/force-breakout-check" style="display:inline-flex;align-items:center;gap:.25rem">
-      {% if has_asx or has_us or has_crypto %}
-      <select name="exchange" class="input py-0.5 text-xs" style="width:auto;padding-top:.15rem;padding-bottom:.15rem">
-        {% if has_asx %}<option value="ASX">🇦🇺 ASX</option>{% endif %}
-        {% if has_us %}<option value="US">🇺🇸 US</option>{% endif %}
-        {% if has_crypto %}<option value="CRYPTO">₿ Crypto</option>{% endif %}
-      </select>
-      {% endif %}
-      <button class="btn-ghost text-xs py-1">🎯 Breakout Check</button>
-    </form>
-
-    <form method="post" action="/action/force-exit-check" style="display:inline-flex;align-items:center;gap:.25rem">
-      {% if has_asx or has_us or has_crypto %}
-      <select name="exchange" class="input py-0.5 text-xs" style="width:auto;padding-top:.15rem;padding-bottom:.15rem">
-        {% if has_asx %}<option value="ASX">🇦🇺 ASX</option>{% endif %}
-        {% if has_us %}<option value="US">🇺🇸 US</option>{% endif %}
-        {% if has_crypto %}<option value="CRYPTO">₿ Crypto</option>{% endif %}
-      </select>
-      {% endif %}
-      <button class="btn-ghost text-xs py-1">🛑 Exit Check</button>
-    </form>
-  </div>
-
-  {# Syncs + worker #}
-  <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;border-left:1px solid var(--border);padding-left:1rem">
-    <span style="font-size:.75rem;font-weight:600;color:var(--text-muted)">Syncs:</span>
-    <form method="post" action="/action/force-position-sync"><button class="btn-ghost text-xs py-1">⚖️ Position Sync</button></form>
-    <form method="post" action="/action/force-stop-sync"><button class="btn-ghost text-xs py-1">⚙️ Stop Sync</button></form>
-    <form method="post" action="/action/ping-worker"><button class="btn-ghost text-xs py-1">⚡ Ping Worker</button></form>
-  </div>
-
-  {% if user_role == 'superadmin' %}
-  <a href="/superadmin/operations" class="text-xs" style="color:var(--a-accent);text-decoration:underline;margin-left:auto">⚙️ Price / Universe / Regime → Central Ops</a>
-  {% endif %}
 </div>
 
 {# ── Live feed ─────────────────────────────────────────────────────── #}
 <div class="card overflow-hidden">
   <div class="section-head" style="flex-wrap:wrap;gap:.5rem">
-    <div style="display:flex;align-items:center;gap:.625rem">
-      <p class="section-title">Audit Event Stream</p>
-      <span id="event-count" style="font-size:.7rem;font-weight:600;padding:.15rem .5rem;border-radius:.3rem;background:var(--surface-alt);color:var(--text-muted);border:1px solid var(--border)">0 new</span>
+    <div style="display:flex;align-items:center;gap:.625rem;flex-wrap:wrap">
+      <span id="stream-badge" style="display:inline-flex;align-items:center;gap:.375rem;font-size:.72rem;font-weight:700;padding:.2rem .6rem;border-radius:9999px;background:var(--pos-bg);color:var(--pos);border:1px solid var(--bull-border)">
+        <span style="display:inline-block;width:.45rem;height:.45rem;border-radius:9999px;background:var(--pos)" class="animate-pulse"></span>
+        Live
+      </span>
+      <p class="section-title">Event Stream</p>
+      <span id="event-count" class="tag" style="font-size:.68rem">0 new</span>
+      <span class="text-xs hidden sm:inline" style="color:var(--text-subtle)">times in {{ display_tz }}</span>
     </div>
     <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
       {% if exchange_filters is defined and exchange_filters %}
-      {# Exchange filter pills for the live stream #}
-      <span style="font-size:.7rem;color:var(--text-subtle)">Filter:</span>
       <button onclick="setStreamExchange('ALL')" id="exc-ALL"
-              style="font-size:.7rem;padding:.15rem .55rem;border-radius:9999px;border:1px solid var(--border);cursor:pointer;background:var(--t-accent);color:#fff;border-color:var(--t-accent)">All</button>
+              style="font-size:.7rem;padding:.15rem .55rem;border-radius:9999px;border:1px solid var(--t-accent);cursor:pointer;background:var(--t-accent);color:#fff">All</button>
       {% for ef in exchange_filters %}
       {% if ef.key != 'ALL' %}
       <button onclick="setStreamExchange('{{ ef.key }}')" id="exc-{{ ef.key }}"
               style="font-size:.7rem;padding:.15rem .55rem;border-radius:9999px;border:1px solid var(--border);cursor:pointer;background:transparent;color:var(--text-muted)">{{ ef.flag }} {{ ef.label }}</button>
       {% endif %}
       {% endfor %}
+      <span style="width:1px;height:1rem;background:var(--border)"></span>
       {% endif %}
-      <span style="font-size:.75rem;color:var(--text-subtle);margin-left:.25rem">Newest first · click row to expand</span>
+      <button onclick="clearView()" class="btn-ghost text-xs py-1 px-2.5">Clear view</button>
+      <button onclick="togglePause()" id="pause-btn" class="btn-ghost text-xs py-1 px-2.5">⏸ Pause</button>
+      <form method="post" action="/admin/tasks/clear-log"
+            onsubmit="return confirm('Delete all TASK_RUN entries from the database? Other audit events are kept.')">
+        <button type="submit" class="btn-ghost text-xs py-1 px-2.5" style="color:var(--neg);border-color:var(--neg)">🗑 Clear DB</button>
+      </form>
     </div>
   </div>
 
-  <div id="log-feed" style="font-size:.75rem;max-height:65vh;overflow-y:auto">
+  <div id="log-feed" style="font-size:.75rem;max-height:70vh;overflow-y:auto">
     {% if seed_logs %}
       {% for log in seed_logs %}
       {# ── Server-rendered seed row ── #}
@@ -301,6 +264,11 @@
   const feed=document.getElementById('log-feed');
   const cntBadge=document.getElementById('event-count');
 
+  function setCnt(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  }
+
   async function poll() {
     if (paused) return;
     try {
@@ -308,10 +276,10 @@
       if (!res.ok) return;
       const data = await res.json();
       if (data.counts) {
-        document.getElementById('cnt-stocks').textContent    = data.counts.stocks;
-        document.getElementById('cnt-bars').textContent      = Number(data.counts.bars).toLocaleString();
-        document.getElementById('cnt-signals').textContent   = data.counts.signals;
-        document.getElementById('cnt-watchlist').textContent = data.counts.watchlist;
+        setCnt('cnt-stocks',    data.counts.stocks);
+        setCnt('cnt-bars',      Number(data.counts.bars).toLocaleString());
+        setCnt('cnt-signals',   data.counts.signals);
+        setCnt('cnt-watchlist', data.counts.watchlist);
       }
       if (data.logs && data.logs.length) {
         document.getElementById('empty-state')?.remove();

@@ -1,75 +1,98 @@
 {% extends "base.html" %}
-{% block title %}Audit Log{% endblock %}
-{% block page_title %}Audit Log{% endblock %}
+{% block title %}Logs · Audit Trail{% endblock %}
+{% block page_title %}Logs{% endblock %}
 
 {% block content %}
 
-<!-- Exchange filter pills -->
-{% set base_url = "/admin/audit" %}
-{% set extra_params %}action={{ filter_action }}&ticker={{ filter_ticker }}&actor={{ filter_actor }}{% endset %}
-{% include "components/exchange_filter.html" %}
+{% set logs_tab = 'audit' %}
+{% include "admin/_logs_tabs.html" %}
 
-<!-- Filters -->
-<form method="get" action="/admin/audit"
-      style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:.75rem;padding:1rem;background:var(--surface);border:1px solid var(--border);border-radius:.75rem;margin-bottom:1.25rem">
-  <input type="hidden" name="exchange" value="{{ active_exchange_filter }}">
-  <div style="flex:1;min-width:9rem">
-    <label class="field-label">Action</label>
-    <select name="action" class="input">
-      {% for action in actions %}
-      <option value="{{ action }}" {% if action == filter_action %}selected{% endif %}>{{ action }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div style="flex:0 0 8rem">
-    <label class="field-label">Ticker</label>
-    <input type="text" name="ticker" value="{{ filter_ticker }}" placeholder="BHP / AAPL / BTC" class="input" style="text-transform:uppercase"/>
-  </div>
-  <div style="flex:0 0 12rem">
-    <label class="field-label">Actor / User</label>
-    <input type="text" name="actor" value="{{ filter_actor }}" placeholder="dashboard, agent, system…" class="input"/>
-  </div>
-  <div style="display:flex;gap:.5rem;align-items:flex-end">
-    <button type="submit" class="btn-admin" style="padding:.5rem 1.25rem">Filter</button>
-    <a href="/admin/audit" class="btn-ghost" style="padding:.5rem 1rem">Clear</a>
-  </div>
-</form>
-
-<!-- Log table -->
 <div class="card overflow-hidden">
-  <div class="section-head">
-    <p class="section-title">Event Log</p>
-    <span class="tag">{{ logs|length }} records shown · append-only</span>
+
+  {# ── Header + inline filter toolbar ─────────────────────────────── #}
+  <div class="section-head-r">
+    <div style="display:flex;align-items:center;gap:.625rem">
+      <p class="section-title">Audit Trail</p>
+      <span class="tag" style="font-size:.68rem">{{ logs|length }} records · append-only</span>
+    </div>
+    {% if exchange_filters is defined and exchange_filters|length > 1 %}
+    <div style="display:flex;align-items:center;gap:.375rem;flex-wrap:wrap">
+      {% for ef in exchange_filters %}
+      <a href="/admin/audit?exchange={{ ef.key }}&action={{ filter_action }}&ticker={{ filter_ticker }}&actor={{ filter_actor }}"
+         style="font-size:.7rem;padding:.15rem .6rem;border-radius:9999px;text-decoration:none;border:1px solid
+                {% if active_exchange_filter == ef.key or (ef.key == 'ALL' and active_exchange_filter in ('', 'ALL')) %}var(--t-accent);background:var(--t-accent);color:#fff
+                {% else %}var(--border);background:transparent;color:var(--text-muted){% endif %}">
+        {{ ef.flag }} {{ ef.label }}
+      </a>
+      {% endfor %}
+    </div>
+    {% endif %}
   </div>
+
+  <form method="get" action="/admin/audit"
+        style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:.75rem;padding:.75rem 1rem;background:var(--surface-alt);border-bottom:1px solid var(--border)">
+    <input type="hidden" name="exchange" value="{{ active_exchange_filter }}">
+    <div style="flex:1;min-width:9rem;max-width:16rem">
+      <label class="field-label">Action</label>
+      <select name="action" class="input py-1.5">
+        {% for action in actions %}
+        <option value="{{ action }}" {% if action == filter_action %}selected{% endif %}>{{ action }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="flex:0 0 8rem">
+      <label class="field-label">Ticker</label>
+      <input type="text" name="ticker" value="{{ filter_ticker }}" placeholder="BHP / AAPL / BTC" class="input py-1.5" style="text-transform:uppercase"/>
+    </div>
+    <div style="flex:0 0 12rem">
+      <label class="field-label">Actor / User</label>
+      <input type="text" name="actor" value="{{ filter_actor }}" placeholder="dashboard, agent, system…" class="input py-1.5"/>
+    </div>
+    <div style="display:flex;gap:.5rem;align-items:flex-end">
+      <button type="submit" class="btn-admin text-xs" style="padding:.45rem 1.1rem">Filter</button>
+      <a href="/admin/audit" class="btn-ghost text-xs" style="padding:.45rem .9rem">Clear</a>
+    </div>
+  </form>
+
+  {# ── Log table ──────────────────────────────────────────────────── #}
   {% if logs %}
   <div class="table-responsive">
-    <table class="tbl">
+    <table class="tbl tbl-dense">
       <thead><tr>
-        <th style="width:7rem">Time</th>
+        <th style="width:7.5rem">Time</th>
         <th>Action</th>
-        <th style="width:5rem">Actor</th>
+        <th style="width:9rem">Actor</th>
         <th style="width:6rem">Ticker</th>
         <th>Message</th>
-        <th style="width:6rem">Before</th>
-        <th style="width:6rem">After</th>
+        <th style="width:6rem" class="tr">Before</th>
+        <th style="width:6rem" class="tr">After</th>
       </tr></thead>
       <tbody>
         {% for log in logs %}
         <tr>
-          <td class="mono" style="font-size:.7rem;color:var(--text-subtle)">{{ log.time }}</td>
-          <td><span class="tag-admin" style="font-size:.7rem">{{ log.action }}</span></td>
-          <td class="actor-cell" style="font-size:.75rem;color:var(--text-muted)" title="{{ log.actor }}">{{ log.actor }}</td>
-          <td class="mono" style="font-size:.75rem">{{ log.ticker }}</td>
-          <td style="font-size:.75rem;color:var(--text-muted);max-width:20rem" class="truncate">{{ log.message }}</td>
-          <td class="mono" style="font-size:.7rem;color:var(--text-subtle)">{{ log.before }}</td>
-          <td class="mono" style="font-size:.7rem;color:{% if log.after not in ('—','') %}var(--pos){% else %}var(--text-subtle){% endif %}">{{ log.after }}</td>
+          <td class="mono" style="font-size:.7rem;color:var(--text-subtle);white-space:nowrap">{{ log.time }}</td>
+          <td>
+            {% if log.action == 'TASK_ERROR' %}<span class="tag tag-neg" style="font-size:.68rem">{{ log.action }}</span>
+            {% elif log.action in ('ORDER_PLACED','ORDER_FILLED','SIGNAL_GENERATED','TRADING_RESUMED') %}<span class="tag tag-pos" style="font-size:.68rem">{{ log.action }}</span>
+            {% elif log.action in ('POSITION_CLOSED','TRADING_PAUSED') %}<span class="tag tag-neg" style="font-size:.68rem">{{ log.action }}</span>
+            {% elif log.action in ('CONFIG_CHANGED','RULE_TOGGLED','RULE_THRESHOLD_SET','MANUAL_OVERRIDE') %}<span class="tag tag-admin" style="font-size:.68rem">{{ log.action }}</span>
+            {% else %}<span class="tag" style="font-size:.68rem">{{ log.action }}</span>{% endif %}
+          </td>
+          <td class="actor-cell" style="font-size:.72rem;color:var(--text-muted)" title="{{ log.actor }}">{{ log.actor }}</td>
+          <td class="mono" style="font-size:.72rem">{{ log.ticker }}</td>
+          <td style="font-size:.72rem;color:var(--text-muted);max-width:24rem" class="truncate" title="{{ log.message }}">{{ log.message }}</td>
+          <td class="mono tr" style="font-size:.7rem;color:var(--text-subtle)">{{ log.before }}</td>
+          <td class="mono tr" style="font-size:.7rem;color:{% if log.after not in ('—','') %}var(--pos){% else %}var(--text-subtle){% endif %}">{{ log.after }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
   {% else %}
-  <div class="empty"><p class="empty-title">No log entries match your filters</p></div>
+  <div class="empty">
+    <p class="empty-title">No log entries match your filters</p>
+    <p class="empty-sub">Try clearing the filters, or check the Live Stream tab for recent activity.</p>
+  </div>
   {% endif %}
 </div>
 {% endblock %}

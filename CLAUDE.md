@@ -653,6 +653,7 @@ All rules have `enabled_globally=True` by default. Admin can toggle any non-mand
 - `GET /admin/audit` — Filterable audit log (scoped to organization)
 - `GET /admin/tasks` — Live Task Log: streams new audit events (scoped to organization)
 - `GET /admin/data-log` — Data Log: intraday entry check snapshots from `entry_check_logs`; filters by time window/ticker/confirmed; auto-refresh via `/admin/data-log/poll`
+- **Unified Logs surface (14 Jul 2026):** `/admin/tasks` (Live Stream), `/admin/audit` (Audit Trail) and `/admin/data-log` (Entry Checks) share one segmented tab bar (`admin/_logs_tabs.html`, set `logs_tab` before including) and present as a single "Logs" page — one sidebar entry, `GET /admin/logs?tab=tasks|audit|data` redirects to the right view. The three URLs/routes/poll endpoints are intentionally unchanged so action-route redirects and tests keep working. The Task Log's data counters were removed (they live on System Health); its poll JS null-guards the `cnt-*` elements. System Health was reorganised the same day: per-market "Markets" table (regime + last price/screen/entry-check runs merged from `task_runs`), data-state strip inside the same card, grouped Actions toolbar, collapsible schedule reference. Dashboard: Run Screener button restored (the `runScreener()` widget JS existed but no button was wired to it), Automated System Checks collapsed into a `card-toggle`.
 
 **Super Admin Area (SaaS Operators):**
 - `GET /superadmin/organizations` — List organizations and allocate tiers (Bronze, Silver, Gold)

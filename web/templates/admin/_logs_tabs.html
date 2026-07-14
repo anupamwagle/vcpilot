@@ -1,0 +1,31 @@
+{# ── Shared segmented tab bar for the unified Logs surface ──────────────
+   Rendered at the top of /admin/tasks, /admin/audit and /admin/data-log so
+   the three views present as ONE "Logs" page with tabs. `logs_tab` must be
+   set by the including template: 'tasks' | 'audit' | 'data'. #}
+<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem;margin-bottom:1rem">
+  <div class="card" style="display:inline-flex;gap:.25rem;padding:.3rem">
+    {% for key, href, icon, label in [
+      ('tasks', '/admin/tasks',    '⚡', 'Live Stream'),
+      ('audit', '/admin/audit',    '🗒️', 'Audit Trail'),
+      ('data',  '/admin/data-log', '📡', 'Entry Checks'),
+    ] %}
+    <a href="{{ href }}"
+       style="display:inline-flex;align-items:center;gap:.4rem;padding:.45rem .9rem;border-radius:.5rem;
+              font-size:.8125rem;font-weight:600;text-decoration:none;transition:all 150ms;
+              {% if logs_tab == key %}background:var(--a-accent);color:#fff
+              {% else %}color:var(--text-muted);background:transparent{% endif %}"
+       {% if logs_tab != key %}
+       onmouseover="this.style.background='var(--surface-alt)'"
+       onmouseout="this.style.background='transparent'"
+       {% endif %}>
+      <span>{{ icon }}</span>{{ label }}
+      {% if key == 'tasks' %}<span style="display:inline-block;width:.4rem;height:.4rem;border-radius:9999px;background:{% if logs_tab == key %}#fff{% else %}var(--pos){% endif %}" class="animate-pulse"></span>{% endif %}
+    </a>
+    {% endfor %}
+  </div>
+  <span class="text-xs" style="color:var(--text-subtle)">
+    {% if logs_tab == 'tasks' %}Operational event stream · auto-updates every 3s
+    {% elif logs_tab == 'audit' %}Append-only compliance trail · filterable
+    {% else %}Intraday entry-check snapshots · auto-refreshes every 30s{% endif %}
+  </span>
+</div>

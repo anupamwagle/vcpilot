@@ -1,308 +1,223 @@
 {% extends "base.html" %}
-{% block title %}Data Log{% endblock %}
+{% block title %}Logs · Entry Checks{% endblock %}
+{% block page_title %}Logs{% endblock %}
 
 {% block content %}
-<div class="page-header">
-  <div>
-    <h1 class="page-title">📡 Data Log</h1>
-    <p class="page-subtitle">Live intraday metric snapshots — checked every 5–15 min against AstraTrade entry rules</p>
-  </div>
-  <div class="flex items-center gap-2">
-    <!-- Auto-refresh indicator -->
-    <span id="refresh-indicator" class="badge text-xs" style="background:var(--t-accent-bg);color:var(--t-accent)">
-      ⟳ Auto-refresh
-    </span>
-    <span id="last-refresh" class="text-xs" style="color:var(--text-subtle)"></span>
-  </div>
-</div>
 
-<!-- Data delay banner — only shown when delayed data is present -->
+{% set logs_tab = 'data' %}
+{% include "admin/_logs_tabs.html" %}
+
+{# ── Data quality banner (one line, only when relevant) ────────────── #}
 {% if has_delayed_data %}
-<div id="delay-banner" class="card mb-4 p-3 flex flex-col gap-1" style="border-left:3px solid var(--warn);background:var(--warn-bg)">
-  <div class="flex items-center gap-2">
-    <svg class="w-4 h-4 flex-shrink-0" style="color:var(--warn)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-    </svg>
-    <p class="text-sm font-semibold" style="color:var(--warn)">Data Delay Notice</p>
-  </div>
-  <p class="text-xs" style="color:var(--text-muted)">
-    Some prices below are sourced from <strong>yfinance (free tier)</strong> with a <strong>~15–20 minute delay</strong>.
-    Connect IBKR Gateway (equities) or set your Crypto API credentials in <a href="/admin/config" style="color:var(--t-accent)">Admin → Config</a>
-    to unlock real-time data.
-  </p>
+<div class="alert-warn mb-4">
+  <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+  <div>Some prices are from <strong>yfinance</strong> (~15–20 min delay). Connect IBKR Gateway or set crypto API credentials in
+    <a href="/admin/config" style="text-decoration:underline">Config</a> for real-time data.</div>
 </div>
 {% elif has_realtime_data %}
-<div class="card mb-4 p-3 flex items-center gap-2" style="border-left:3px solid var(--pos);background:var(--pos-bg)">
-  <svg class="w-4 h-4 flex-shrink-0" style="color:var(--pos)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-  </svg>
-  <p class="text-xs font-semibold" style="color:var(--pos)">Real-time data active — prices sourced directly from IBKR or Independent Reserve with 0-minute delay.</p>
-</div>
-{% elif total == 0 %}
-<div class="card mb-4 p-3 flex flex-col gap-1" style="border-left:3px solid var(--border)">
-  <p class="text-xs font-semibold" style="color:var(--text-muted)">No entry check logs yet</p>
-  <p class="text-xs" style="color:var(--text-subtle)">
-    Logs appear here once the entry check task runs. ASX equities: every 5 min during market hours (10:00–16:12 AEST Mon–Fri).
-    US equities (NYSE/NASDAQ): every 5 min during NYSE hours (23:30–06:05 AEST Tue–Sat).
-    Crypto: every 5 min 24/7. Trigger one manually from <a href="/admin/tasks" style="color:var(--t-accent)">Task Log</a> → <strong>Run Entry Check</strong>.
-  </p>
-</div>
+<div class="alert-success mb-4">Real-time data active — prices sourced directly from IBKR / Independent Reserve with 0-minute delay.</div>
 {% endif %}
 
-<!-- Exchange Filter -->
-{% include "components/exchange_filter.html" %}
+<div class="card overflow-hidden">
 
-<!-- Filters -->
-<div class="card mb-4 p-3">
-  <form method="get" action="/admin/data-log" class="flex flex-wrap items-end gap-3">
-    <!-- Time window -->
-    <div class="flex flex-col gap-1">
-      <label class="text-xs font-semibold" style="color:var(--text-muted)">Time Window</label>
-      <div class="flex gap-1 flex-wrap">
-        {% for w, lbl in [('latest','Latest'), ('15','− 15 min'), ('30','− 30 min'), ('60','− 60 min'), ('today','Today')] %}
+  {# ── Header ─────────────────────────────────────────────────────── #}
+  <div class="section-head-r">
+    <div style="display:flex;align-items:center;gap:.625rem;flex-wrap:wrap">
+      <p class="section-title">Entry Check Snapshots</p>
+      <span class="tag" style="font-size:.68rem">{{ total }} snapshot{% if total != 1 %}s{% endif %}
+        {% if window == 'latest' %}· latest per signal{% elif window == 'today' %}· today{% else %}· last {{ window }} min{% endif %}</span>
+      <span id="refresh-indicator" class="tag tag-blue" style="font-size:.68rem">⟳ Auto-refresh</span>
+      <span id="last-refresh" class="text-xs" style="color:var(--text-subtle)"></span>
+    </div>
+    {% if exchange_filters is defined and exchange_filters|length > 1 %}
+    <div style="display:flex;align-items:center;gap:.375rem;flex-wrap:wrap">
+      {% for ef in exchange_filters %}
+      <a href="/admin/data-log?exchange={{ ef.key }}&window={{ window }}{% if ticker %}&ticker={{ ticker }}{% endif %}{% if only_confirmed %}&only_confirmed=true{% endif %}"
+         style="font-size:.7rem;padding:.15rem .6rem;border-radius:9999px;text-decoration:none;border:1px solid
+                {% if active_exchange_filter == ef.key or (ef.key == 'ALL' and active_exchange_filter in ('', 'ALL')) %}var(--t-accent);background:var(--t-accent);color:#fff
+                {% else %}var(--border);background:transparent;color:var(--text-muted){% endif %}">
+        {{ ef.flag }} {{ ef.label }}
+      </a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
+  {# ── Filter toolbar ─────────────────────────────────────────────── #}
+  <form method="get" action="/admin/data-log"
+        style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:.75rem;padding:.75rem 1rem;background:var(--surface-alt);border-bottom:1px solid var(--border)">
+    <input type="hidden" name="exchange" value="{{ active_exchange_filter }}">
+    <div>
+      <label class="field-label">Time window</label>
+      <div style="display:flex;gap:.25rem;flex-wrap:wrap">
+        {% for w, lbl in [('latest','Latest'), ('15','15 min'), ('30','30 min'), ('60','60 min'), ('today','Today')] %}
         <button type="submit" name="window" value="{{ w }}"
-          class="px-3 py-1 text-xs rounded-full border transition-all"
-          style="{% if window == w %}background:var(--t-accent);color:#fff;border-color:var(--t-accent){% else %}background:var(--surface);color:var(--text-muted);border-color:var(--border){% endif %}"
-          {% if ticker %}{% endif %}>
+          style="font-size:.72rem;padding:.3rem .7rem;border-radius:9999px;cursor:pointer;border:1px solid
+                 {% if window == w %}var(--t-accent);background:var(--t-accent);color:#fff
+                 {% else %}var(--border);background:var(--surface);color:var(--text-muted){% endif %}">
           {{ lbl }}
         </button>
         {% endfor %}
-        <!-- preserve other filters when switching window -->
-        {% if ticker %}<input type="hidden" name="ticker" value="{{ ticker }}">{% endif %}
-        {% if only_confirmed %}<input type="hidden" name="only_confirmed" value="true">{% endif %}
-        {% if active_exchange_filter and active_exchange_filter != 'ALL' %}
-        <input type="hidden" name="exchange" value="{{ active_exchange_filter }}">
-        {% endif %}
       </div>
     </div>
-
-    <!-- Ticker filter -->
-    <div class="flex flex-col gap-1">
-      <label class="text-xs font-semibold" style="color:var(--text-muted)">Ticker</label>
-      <select name="ticker" class="input py-1 px-2 text-sm" style="min-width:130px">
+    <div style="flex:0 0 10rem">
+      <label class="field-label">Ticker</label>
+      <select name="ticker" class="input py-1.5">
         <option value="">All tickers</option>
         {% for t in all_tickers %}
         <option value="{{ t }}" {% if ticker == t %}selected{% endif %}>{{ t }}</option>
         {% endfor %}
       </select>
     </div>
-
-    <!-- Confirmed only toggle -->
-    <div class="flex items-center gap-2 mt-4">
-      <input type="checkbox" id="only_confirmed" name="only_confirmed" value="true"
-             {% if only_confirmed %}checked{% endif %}
+    <label style="display:flex;align-items:center;gap:.4rem;padding-bottom:.45rem;cursor:pointer">
+      <input type="checkbox" name="only_confirmed" value="true" {% if only_confirmed %}checked{% endif %}
              class="w-4 h-4 rounded" style="accent-color:var(--pos)">
-      <label for="only_confirmed" class="text-xs font-semibold" style="color:var(--text-muted)">
-        Confirmed breakouts only
-      </label>
+      <span class="text-xs font-semibold" style="color:var(--text-muted)">Confirmed breakouts only</span>
+    </label>
+    <div style="display:flex;gap:.5rem;align-items:flex-end">
+      <button type="submit" class="btn-admin text-xs" style="padding:.45rem 1.1rem">Apply</button>
+      <a href="/admin/data-log" class="btn-ghost text-xs" style="padding:.45rem .9rem">Reset</a>
     </div>
-
-    <button type="submit" class="btn-primary py-1 px-3 text-xs mt-4">Apply</button>
-    <a href="/admin/data-log" class="btn-ghost py-1 px-3 text-xs mt-4">Reset</a>
-
-    <!-- preserve window and exchange when changing other filters -->
     <input type="hidden" name="window" value="{{ window }}">
-    <input type="hidden" name="exchange" value="{{ active_exchange_filter }}">
   </form>
-</div>
 
-<!-- Results summary -->
-<div class="flex items-center gap-3 mb-3">
-  <p class="text-sm" style="color:var(--text-muted)">
-    Showing <strong style="color:var(--text)">{{ total }}</strong>
-    snapshot{% if total != 1 %}s{% endif %}
-    {% if window == 'latest' %}· most recent per signal{% elif window == 'today' %}· today{% else %}· last {{ window }} min{% endif %}
-  </p>
-  {% if total == 0 %}
-  <span class="badge text-xs" style="background:var(--warn-bg);color:var(--warn)">No data yet — runs during market hours (ASX: 10:00–16:12 AEST · US: 23:30–06:05 AEST · Crypto: 24/7)</span>
+  {# ── Data table ─────────────────────────────────────────────────── #}
+  {% if rows %}
+  <div class="table-responsive" id="log-table-wrap">
+    <table class="tbl tbl-dense" style="border-collapse:separate;border-spacing:0">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Ticker</th>
+          <th class="tr">Current</th>
+          <th class="tr">Pivot</th>
+          <th class="tr">vs Pivot</th>
+          <th class="tr">Vol Ratio</th>
+          <th class="tr">MA50</th>
+          <th class="tr">MA200</th>
+          <th class="tr">RS</th>
+          <th>Rules</th>
+          <th>Source</th>
+          <th>Verdict</th>
+        </tr>
+      </thead>
+      <tbody id="log-tbody">
+        {% for row in rows %}
+        <tr class="log-row" data-id="{{ row.id }}"
+            style="{% if row.breakout_confirmed %}background:rgba(5,150,105,.05){% endif %}">
+          <td class="mono" style="font-size:.7rem;color:var(--text-muted);white-space:nowrap">{{ row.checked_at }}</td>
+          <td><span class="mono font-bold" style="color:var(--t-accent)">{{ row.ticker }}</span></td>
+          <td class="mono tr font-semibold" style="color:var(--text)">
+            {% if row.price_current %}${{ "%.3f"|format(row.price_current) }}{% else %}—{% endif %}
+          </td>
+          <td class="mono tr" style="color:var(--text-muted)">
+            {% if row.price_pivot %}${{ "%.3f"|format(row.price_pivot) }}{% else %}—{% endif %}
+          </td>
+          <td class="tr">
+            {% if row.price_vs_pivot is not none %}
+              <span class="mono-{{ 'pos' if row.price_vs_pivot >= 0 else 'neg' }}" style="font-size:.72rem">{{ "%+.2f"|format(row.price_vs_pivot) }}%</span>
+            {% else %}—{% endif %}
+          </td>
+          <td class="tr">
+            {% if row.vol_ratio is not none %}
+              <span class="mono-{{ 'pos' if row.vol_ratio >= 1.5 else ('warn' if row.vol_ratio >= 1.0 else 'neg') }}" style="font-size:.72rem">{{ "%.2f"|format(row.vol_ratio) }}×</span>
+            {% else %}—{% endif %}
+          </td>
+          <td class="mono tr" style="font-size:.72rem;color:var(--text-muted)">
+            {% if row.ma_50 %}${{ "%.3f"|format(row.ma_50) }}{% else %}—{% endif %}
+          </td>
+          <td class="mono tr" style="font-size:.72rem;color:var(--text-muted)">
+            {% if row.ma_200 %}${{ "%.3f"|format(row.ma_200) }}{% else %}—{% endif %}
+          </td>
+          <td class="tr">
+            {% if row.rs_rating is not none %}
+              <span class="rs-pill {{ 'rs-hi' if row.rs_rating >= 80 else ('rs-mid' if row.rs_rating >= 60 else 'rs-low') }}">{{ row.rs_rating|int }}</span>
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            <div style="display:flex;flex-wrap:wrap;gap:.25rem">
+              {% for rule in row.rules %}
+              <span class="rule-badge mono" title="{{ rule.label }}: {{ rule.message }}"
+                    style="font-size:.65rem;padding:.1rem .45rem;border-radius:.25rem;
+                           background:{% if rule.passed %}var(--pos-bg){% else %}var(--neg-bg){% endif %};
+                           color:{% if rule.passed %}var(--pos){% else %}var(--neg){% endif %};
+                           border:1px solid {% if rule.passed %}var(--bull-border){% else %}var(--bear-border){% endif %}">
+                {% if rule.passed %}✓{% else %}✗{% endif %} {{ rule.label }}
+              </span>
+              {% else %}
+              <span class="text-xs" style="color:var(--text-subtle)">No rules logged</span>
+              {% endfor %}
+            </div>
+          </td>
+          <td style="white-space:nowrap">
+            <span class="chip chip-sm {% if row.data_source in ('ibkr','independentreserve') %}chip-pos{% elif row.data_source == 'eod_fallback' %}chip-dim{% else %}chip-warn{% endif %}">
+              {% if row.data_source == 'ibkr' %}⚡ IBKR Live
+              {% elif row.data_source == 'independentreserve' %}⚡ IR Live
+              {% elif row.data_source == 'eod_fallback' %}📉 EOD Close
+              {% else %}🕐 ~{{ row.delay_mins or 20 }}min{% endif %}
+            </span>
+          </td>
+          <td style="white-space:nowrap">
+            {% if row.breakout_confirmed %}
+            <span class="chip chip-sm chip-pos">✅ CONFIRMED</span>
+            {% else %}
+            <span class="chip chip-sm chip-dim">Watching</span>
+            {% endif %}
+          </td>
+        </tr>
+
+        {# Expandable rule detail row #}
+        <tr id="detail-{{ row.id }}" style="display:none;background:var(--surface-alt)">
+          <td colspan="12" class="px-4 py-3">
+            <div style="display:flex;flex-wrap:wrap;gap:.75rem">
+              {% for rule in row.rules %}
+              <div class="rounded-lg p-3 text-xs" style="min-width:180px;background:var(--surface);border:1px solid {% if rule.passed %}var(--bull-border){% else %}var(--bear-border){% endif %}">
+                <p class="font-semibold mb-1" style="color:{% if rule.passed %}var(--pos){% else %}var(--neg){% endif %}">
+                  {% if rule.passed %}✓{% else %}✗{% endif %} {{ rule.label }}
+                </p>
+                <p style="color:var(--text-muted)">{{ rule.message or '—' }}</p>
+                {% if rule.value is not none %}
+                <p class="mt-1" style="color:var(--text-subtle)">
+                  Value: <span class="mono" style="color:var(--text)">{{ rule.value }}</span>
+                  {% if rule.threshold is not none %}
+                    / Threshold: <span class="mono" style="color:var(--text)">{{ rule.threshold }}</span>
+                  {% endif %}
+                </p>
+                {% endif %}
+              </div>
+              {% endfor %}
+              <div class="rounded-lg p-3 text-xs" style="min-width:160px;background:var(--surface);border:1px solid var(--border)">
+                <p class="font-semibold mb-1" style="color:var(--text-muted)">Price Context</p>
+                {% if row.ma_50 %}<p style="color:var(--text-muted)">MA50: <span class="mono" style="color:var(--text)">${{ "%.3f"|format(row.ma_50) }}</span></p>{% endif %}
+                {% if row.ma_150 %}<p style="color:var(--text-muted)">MA150: <span class="mono" style="color:var(--text)">${{ "%.3f"|format(row.ma_150) }}</span></p>{% endif %}
+                {% if row.ma_200 %}<p style="color:var(--text-muted)">MA200: <span class="mono" style="color:var(--text)">${{ "%.3f"|format(row.ma_200) }}</span></p>{% endif %}
+                {% if row.pct_from_52w_high is not none %}<p style="color:var(--text-muted)">From 52w High: <span class="mono" style="color:var(--text)">{{ "%+.1f"|format(row.pct_from_52w_high) }}%</span></p>{% endif %}
+              </div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty">
+    <p style="font-size:2rem;margin-bottom:.5rem">📭</p>
+    <p class="empty-title">No entry check data yet</p>
+    <p class="empty-sub" style="max-width:34rem;margin-left:auto;margin-right:auto">
+      Snapshots populate during active market hours (ASX 10:00–16:12 · US 23:30–06:05 AEST · Crypto 24/7)
+      when there are pending signals. Make sure the worker is running and signals exist on the
+      <a href="/signals" style="color:var(--t-accent)">Signals</a> page, or trigger a
+      <a href="/admin/tasks" style="color:var(--t-accent)">Breakout Check</a> manually.
+    </p>
+  </div>
   {% endif %}
 </div>
 
-<!-- Data table -->
-{% if rows %}
-<div class="card overflow-x-auto" id="log-table-wrap">
-  <table class="w-full text-sm" style="border-collapse:separate;border-spacing:0">
-    <thead>
-      <tr style="border-bottom:1px solid var(--border)">
-        <th class="text-left p-3 text-xs font-semibold" style="color:var(--text-muted)">Time</th>
-        <th class="text-left p-3 text-xs font-semibold" style="color:var(--text-muted)">Ticker</th>
-        <th class="text-right p-3 text-xs font-semibold" style="color:var(--text-muted)">Current</th>
-        <th class="text-right p-3 text-xs font-semibold" style="color:var(--text-muted)">Pivot</th>
-        <th class="text-right p-3 text-xs font-semibold" style="color:var(--text-muted)">vs Pivot</th>
-        <th class="text-right p-3 text-xs font-semibold" style="color:var(--text-muted)">Vol Ratio</th>
-        <th class="text-right p-3 text-xs font-semibold" style="color:var(--text-muted)">MA50</th>
-        <th class="text-right p-3 text-xs font-semibold" style="color:var(--text-muted)">MA200</th>
-        <th class="text-right p-3 text-xs font-semibold" style="color:var(--text-muted)">RS</th>
-        <th class="text-left p-3 text-xs font-semibold" style="color:var(--text-muted)">Rules</th>
-        <th class="text-left p-3 text-xs font-semibold" style="color:var(--text-muted)">Source</th>
-        <th class="text-left p-3 text-xs font-semibold" style="color:var(--text-muted)">Verdict</th>
-      </tr>
-    </thead>
-    <tbody id="log-tbody">
-      {% for row in rows %}
-      <tr class="log-row" data-id="{{ row.id }}"
-          style="border-bottom:1px solid var(--border);
-                 {% if row.breakout_confirmed %}background:rgba(5,150,105,.05){% endif %}">
-        <!-- Time -->
-        <td class="p-3 whitespace-nowrap text-xs" style="color:var(--text-muted)">{{ row.checked_at }}</td>
-
-        <!-- Ticker -->
-        <td class="p-3">
-          <span class="font-mono font-bold text-sm" style="color:var(--t-accent)">{{ row.ticker }}</span>
-        </td>
-
-        <!-- Current price -->
-        <td class="p-3 text-right font-mono text-sm font-semibold" style="color:var(--text)">
-          {% if row.price_current %}${{ "%.3f"|format(row.price_current) }}{% else %}—{% endif %}
-        </td>
-
-        <!-- Pivot price -->
-        <td class="p-3 text-right font-mono text-sm" style="color:var(--text-muted)">
-          {% if row.price_pivot %}${{ "%.3f"|format(row.price_pivot) }}{% else %}—{% endif %}
-        </td>
-
-        <!-- % vs pivot — green if above, red if below -->
-        <td class="p-3 text-right font-mono text-xs font-semibold">
-          {% if row.price_vs_pivot is not none %}
-            <span style="color:{% if row.price_vs_pivot >= 0 %}var(--pos){% else %}var(--neg){% endif %}">
-              {{ "%+.2f"|format(row.price_vs_pivot) }}%
-            </span>
-          {% else %}—{% endif %}
-        </td>
-
-        <!-- Volume ratio — green ≥1.5, warn 1.0-1.5, red <1.0 -->
-        <td class="p-3 text-right font-mono text-xs font-semibold">
-          {% if row.vol_ratio is not none %}
-            <span style="color:{% if row.vol_ratio >= 1.5 %}var(--pos){% elif row.vol_ratio >= 1.0 %}var(--warn){% else %}var(--neg){% endif %}">
-              {{ "%.2f"|format(row.vol_ratio) }}×
-            </span>
-          {% else %}—{% endif %}
-        </td>
-
-        <!-- MA50 -->
-        <td class="p-3 text-right font-mono text-xs" style="color:var(--text-muted)">
-          {% if row.ma_50 %}${{ "%.3f"|format(row.ma_50) }}{% else %}—{% endif %}
-        </td>
-
-        <!-- MA200 -->
-        <td class="p-3 text-right font-mono text-xs" style="color:var(--text-muted)">
-          {% if row.ma_200 %}${{ "%.3f"|format(row.ma_200) }}{% else %}—{% endif %}
-        </td>
-
-        <!-- RS Rating -->
-        <td class="p-3 text-right font-mono text-xs font-semibold">
-          {% if row.rs_rating is not none %}
-            <span style="color:{% if row.rs_rating >= 80 %}var(--pos){% elif row.rs_rating >= 60 %}var(--warn){% else %}var(--neg){% endif %}">
-              {{ row.rs_rating|int }}
-            </span>
-          {% else %}—{% endif %}
-        </td>
-
-        <!-- Rule badges -->
-        <td class="p-3">
-          <div class="flex flex-wrap gap-1">
-            {% for rule in row.rules %}
-            <span class="rule-badge text-xs px-2 py-0.5 rounded font-mono"
-                  title="{{ rule.label }}: {{ rule.message }}"
-                  style="background:{% if rule.passed %}var(--pos-bg){% else %}var(--neg-bg){% endif %};
-                         color:{% if rule.passed %}var(--pos){% else %}var(--neg){% endif %};
-                         border:1px solid {% if rule.passed %}var(--pos){% else %}var(--neg){% endif %};
-                         opacity:0.9">
-              {% if rule.passed %}✓{% else %}✗{% endif %} {{ rule.label }}
-            </span>
-            {% else %}
-            <span class="text-xs" style="color:var(--text-subtle)">No rules logged</span>
-            {% endfor %}
-          </div>
-        </td>
-
-        <!-- Data source badge -->
-        <td class="p-3 whitespace-nowrap">
-          <span class="text-xs px-2 py-0.5 rounded"
-                style="background:{% if row.data_source == 'ibkr' %}var(--pos-bg){% else %}var(--warn-bg){% endif %};
-                       color:{% if row.data_source == 'ibkr' %}var(--pos){% else %}var(--warn){% endif %}">
-            {% if row.data_source == 'ibkr' %}⚡ IBKR Live
-            {% elif row.data_source == 'eod_fallback' %}📉 EOD Close
-            {% else %}🕐 ~{{ row.delay_mins or 20 }}min delay{% endif %}
-          </span>
-        </td>
-
-        <!-- Breakout verdict -->
-        <td class="p-3 whitespace-nowrap">
-          {% if row.breakout_confirmed %}
-          <span class="badge text-xs font-bold" style="background:var(--pos-bg);color:var(--pos);border:1px solid var(--pos)">
-            ✅ CONFIRMED
-          </span>
-          {% else %}
-          <span class="badge text-xs" style="background:var(--surface-alt);color:var(--text-subtle)">
-            Watching
-          </span>
-          {% endif %}
-        </td>
-      </tr>
-
-      <!-- Expandable rule detail row -->
-      <tr id="detail-{{ row.id }}" style="display:none;background:var(--surface-alt)">
-        <td colspan="12" class="px-4 py-3">
-          <div class="flex flex-wrap gap-3">
-            {% for rule in row.rules %}
-            <div class="rounded-lg p-3 text-xs" style="min-width:180px;background:var(--surface);border:1px solid {% if rule.passed %}var(--pos){% else %}var(--neg){% endif %}">
-              <p class="font-semibold mb-1" style="color:{% if rule.passed %}var(--pos){% else %}var(--neg){% endif %}">
-                {% if rule.passed %}✓{% else %}✗{% endif %} {{ rule.label }}
-              </p>
-              <p style="color:var(--text-muted)">{{ rule.message or '—' }}</p>
-              {% if rule.value is not none %}
-              <p class="mt-1" style="color:var(--text-subtle)">
-                Value: <span class="font-mono" style="color:var(--text)">{{ rule.value }}</span>
-                {% if rule.threshold is not none %}
-                  / Threshold: <span class="font-mono" style="color:var(--text)">{{ rule.threshold }}</span>
-                {% endif %}
-              </p>
-              {% endif %}
-            </div>
-            {% endfor %}
-
-            <!-- Price context -->
-            <div class="rounded-lg p-3 text-xs" style="min-width:160px;background:var(--surface);border:1px solid var(--border)">
-              <p class="font-semibold mb-1" style="color:var(--text-muted)">Price Context</p>
-              {% if row.ma_50 %}<p style="color:var(--text-muted)">MA50: <span class="font-mono" style="color:var(--text)">${{ "%.3f"|format(row.ma_50) }}</span></p>{% endif %}
-              {% if row.ma_150 %}<p style="color:var(--text-muted)">MA150: <span class="font-mono" style="color:var(--text)">${{ "%.3f"|format(row.ma_150) }}</span></p>{% endif %}
-              {% if row.ma_200 %}<p style="color:var(--text-muted)">MA200: <span class="font-mono" style="color:var(--text)">${{ "%.3f"|format(row.ma_200) }}</span></p>{% endif %}
-              {% if row.pct_from_52w_high is not none %}<p style="color:var(--text-muted)">From 52w High: <span class="font-mono" style="color:var(--text)">{{ "%+.1f"|format(row.pct_from_52w_high) }}%</span></p>{% endif %}
-            </div>
-          </div>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% else %}
-<div class="card p-8 text-center">
-  <p class="text-4xl mb-3">📭</p>
-  <p class="font-semibold mb-1" style="color:var(--text)">No entry check data yet</p>
-  <p class="text-sm" style="color:var(--text-muted)">
-    Data populates during active market hours (ASX: 10:00–16:12 AEST · US: 23:30–06:05 AEST · Crypto: 24/7) when there are pending signals.
-    Make sure the Celery worker is running and signals exist on the
-    <a href="/signals" style="color:var(--t-accent)">Signals</a> page.
-  </p>
-</div>
-{% endif %}
-
 <style>
-  .page-header { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:1.25rem; gap:1rem; flex-wrap:wrap; }
-  .page-title  { font-size:1.25rem; font-weight:700; color:var(--text); }
-  .page-subtitle { font-size:.8rem; color:var(--text-muted); margin-top:.15rem; }
-  .badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:9999px; font-size:.7rem; font-weight:600; }
-  .rule-badge { cursor:default; }
   .log-row { cursor:pointer; transition:background .15s; }
-  .log-row:hover { background:var(--surface-alt) !important; }
-  .btn-primary { display:inline-flex; align-items:center; background:var(--t-accent); color:#fff; border-radius:.375rem; font-weight:600; border:none; cursor:pointer; transition:opacity .15s; }
-  .btn-primary:hover { opacity:.88; }
-  .btn-ghost { display:inline-flex; align-items:center; background:transparent; color:var(--text-muted); border-radius:.375rem; border:1px solid var(--border); font-weight:600; cursor:pointer; text-decoration:none; transition:background .15s; }
-  .btn-ghost:hover { background:var(--surface-alt); }
-  .input { background:var(--surface); border:1px solid var(--border); border-radius:.375rem; color:var(--text); }
-  .input:focus { outline:2px solid var(--t-accent); }
+  .log-row:hover td { background:var(--surface-alt) !important; }
+  .rule-badge { cursor:default; }
 </style>
 
 <script>
@@ -331,34 +246,36 @@ document.querySelectorAll('.log-row').forEach(tr => {
     const pctColor = r.price_vs_pivot >= 0 ? 'var(--pos)' : 'var(--neg)';
     const volColor = r.vol_ratio >= 1.5 ? 'var(--pos)' : r.vol_ratio >= 1.0 ? 'var(--warn)' : 'var(--neg)';
     const srcLabel = r.data_source === 'ibkr' ? '⚡ IBKR Live' :
+                     r.data_source === 'independentreserve' ? '⚡ IR Live' :
                      r.data_source === 'eod_fallback' ? '📉 EOD Close' :
-                     `🕐 ~${r.delay_mins||20}min delay`;
-    const srcColor = r.data_source === 'ibkr' ? 'var(--pos-bg)' : 'var(--warn-bg)';
-    const srcText  = r.data_source === 'ibkr' ? 'var(--pos)' : 'var(--warn)';
+                     `🕐 ~${r.delay_mins||20}min`;
+    const srcCls   = (r.data_source === 'ibkr' || r.data_source === 'independentreserve') ? 'chip-pos'
+                   : (r.data_source === 'eod_fallback' ? 'chip-dim' : 'chip-warn');
     const verdictHtml = r.breakout_confirmed
-      ? `<span class="badge text-xs font-bold" style="background:var(--pos-bg);color:var(--pos);border:1px solid var(--pos)">✅ CONFIRMED</span>`
-      : `<span class="badge text-xs" style="background:var(--surface-alt);color:var(--text-subtle)">Watching</span>`;
+      ? `<span class="chip chip-sm chip-pos">✅ CONFIRMED</span>`
+      : `<span class="chip chip-sm chip-dim">Watching</span>`;
     const ruleBadges = Object.entries(r.rule_results||{}).map(([rid, rd]) =>
-      `<span class="rule-badge text-xs px-2 py-0.5 rounded font-mono"
-         style="background:${rd.passed?'var(--pos-bg)':'var(--neg-bg)'};color:${rd.passed?'var(--pos)':'var(--neg)'};border:1px solid ${rd.passed?'var(--pos)':'var(--neg)'}">
+      `<span class="rule-badge mono" style="font-size:.65rem;padding:.1rem .45rem;border-radius:.25rem;
+         background:${rd.passed?'var(--pos-bg)':'var(--neg-bg)'};color:${rd.passed?'var(--pos)':'var(--neg)'};
+         border:1px solid ${rd.passed?'var(--bull-border)':'var(--bear-border)'}">
          ${rd.passed?'✓':'✗'} ${rid.replace(/_/g,' ')}
        </span>`
     ).join('');
 
     return `<tr class="log-row" data-id="${r.id}"
-               style="border-bottom:1px solid var(--border);${r.breakout_confirmed?'background:rgba(5,150,105,.05)':''}">
-      <td class="p-3 whitespace-nowrap text-xs" style="color:var(--text-muted)">${formatTime(r.checked_at)}</td>
-      <td class="p-3"><span class="font-mono font-bold text-sm" style="color:var(--t-accent)">${r.ticker}</span></td>
-      <td class="p-3 text-right font-mono text-sm font-semibold" style="color:var(--text)">${r.price_current ? '$'+r.price_current.toFixed(3) : '—'}</td>
-      <td class="p-3 text-right font-mono text-sm" style="color:var(--text-muted)">${r.price_pivot ? '$'+r.price_pivot.toFixed(3) : '—'}</td>
-      <td class="p-3 text-right font-mono text-xs font-semibold"><span style="color:${pctColor}">${r.price_vs_pivot != null ? (r.price_vs_pivot>0?'+':'')+r.price_vs_pivot.toFixed(2)+'%' : '—'}</span></td>
-      <td class="p-3 text-right font-mono text-xs font-semibold"><span style="color:${volColor}">${r.vol_ratio != null ? r.vol_ratio.toFixed(2)+'×' : '—'}</span></td>
-      <td class="p-3 text-right font-mono text-xs" style="color:var(--text-muted)">—</td>
-      <td class="p-3 text-right font-mono text-xs" style="color:var(--text-muted)">—</td>
-      <td class="p-3 text-right font-mono text-xs">—</td>
-      <td class="p-3"><div class="flex flex-wrap gap-1">${ruleBadges || '<span style="color:var(--text-subtle)" class="text-xs">—</span>'}</div></td>
-      <td class="p-3 whitespace-nowrap"><span class="text-xs px-2 py-0.5 rounded" style="background:${srcColor};color:${srcText}">${srcLabel}</span></td>
-      <td class="p-3">${verdictHtml}</td>
+               style="${r.breakout_confirmed?'background:rgba(5,150,105,.05)':''}">
+      <td class="mono" style="font-size:.7rem;color:var(--text-muted);white-space:nowrap">${formatTime(r.checked_at)}</td>
+      <td><span class="mono font-bold" style="color:var(--t-accent)">${r.ticker}</span></td>
+      <td class="mono tr font-semibold" style="color:var(--text)">${r.price_current ? '$'+r.price_current.toFixed(3) : '—'}</td>
+      <td class="mono tr" style="color:var(--text-muted)">${r.price_pivot ? '$'+r.price_pivot.toFixed(3) : '—'}</td>
+      <td class="mono tr" style="font-size:.72rem;font-weight:700;color:${pctColor}">${r.price_vs_pivot != null ? (r.price_vs_pivot>0?'+':'')+r.price_vs_pivot.toFixed(2)+'%' : '—'}</td>
+      <td class="mono tr" style="font-size:.72rem;font-weight:700;color:${volColor}">${r.vol_ratio != null ? r.vol_ratio.toFixed(2)+'×' : '—'}</td>
+      <td class="mono tr" style="font-size:.72rem;color:var(--text-muted)">—</td>
+      <td class="mono tr" style="font-size:.72rem;color:var(--text-muted)">—</td>
+      <td class="tr">—</td>
+      <td><div style="display:flex;flex-wrap:wrap;gap:.25rem">${ruleBadges || '<span style="color:var(--text-subtle)" class="text-xs">—</span>'}</div></td>
+      <td style="white-space:nowrap"><span class="chip chip-sm ${srcCls}">${srcLabel}</span></td>
+      <td style="white-space:nowrap">${verdictHtml}</td>
     </tr>`;
   }
 
@@ -370,19 +287,21 @@ document.querySelectorAll('.log-row').forEach(tr => {
       const data = await res.json();
       if (data.rows && data.rows.length > 0) {
         const tbody = document.getElementById('log-tbody');
-        const html = data.rows.map(buildRow).join('');
-        tbody.insertAdjacentHTML('afterbegin', html);
-        maxId = Math.max(maxId, ...data.rows.map(r => r.id));
-        // Re-bind click listeners for new rows
-        document.querySelectorAll('.log-row').forEach(tr => {
-          if (!tr.dataset.bound) {
-            tr.dataset.bound = '1';
-            tr.addEventListener('click', () => {
-              const detail = document.getElementById('detail-' + tr.dataset.id);
-              if (detail) detail.style.display = detail.style.display === 'none' ? '' : 'none';
-            });
-          }
-        });
+        if (tbody) {
+          const html = data.rows.map(buildRow).join('');
+          tbody.insertAdjacentHTML('afterbegin', html);
+          maxId = Math.max(maxId, ...data.rows.map(r => r.id));
+          // Re-bind click listeners for new rows
+          document.querySelectorAll('.log-row').forEach(tr => {
+            if (!tr.dataset.bound) {
+              tr.dataset.bound = '1';
+              tr.addEventListener('click', () => {
+                const detail = document.getElementById('detail-' + tr.dataset.id);
+                if (detail) detail.style.display = detail.style.display === 'none' ? '' : 'none';
+              });
+            }
+          });
+        }
       }
       indicator.textContent = '⟳ Auto-refresh';
       lastRefreshEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
