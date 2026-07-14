@@ -2,9 +2,7 @@
 -- Fix: Re-open EDU.AX position incorrectly closed by check_exit_rules_task bug
 -- =============================================================================
 -- Run on the server:
---   docker exec -i <db-container> psql -U vcpilot -d vcpilot < fix_edu_reopen.sql
--- Or via psql directly if the DB port is forwarded:
---   psql -h 127.0.0.1 -p 5439 -U vcpilot -d vcpilot -f fix_edu_reopen.sql
+--   docker exec -i vcpilot-database psql -U vcpilot -d vcpilot < scripts/fix_edu_reopen.sql
 -- =============================================================================
 
 BEGIN;
@@ -12,24 +10,24 @@ BEGIN;
 -- 1. Show current state before touching anything
 SELECT
     id, ticker, status, entry_price, current_stop, qty,
-    updated_at AT TIME ZONE 'Australia/Sydney' AS updated_at_sydney
+    last_updated AT TIME ZONE 'Australia/Sydney' AS last_updated_sydney
 FROM positions
 WHERE ticker = 'EDU.AX'
-ORDER BY updated_at DESC
+ORDER BY last_updated DESC
 LIMIT 5;
 
 -- 2. Re-open the most recently closed EDU.AX position
---    (the one incorrectly closed at ~14:35 AEST today by check_exit_rules_task)
+--    (incorrectly closed at ~14:35 AEST by check_exit_rules_task bug)
 UPDATE positions
 SET
-    status     = 'open',
-    updated_at = NOW()
+    status       = 'OPEN',
+    last_updated = NOW()
 WHERE
-    ticker     = 'EDU.AX'
-    AND status = 'closed'
+    ticker       = 'EDU.AX'
+    AND status   = 'CLOSED'
     -- Safety: only re-open if it was closed within the last 60 minutes
-    AND updated_at >= NOW() - INTERVAL '60 minutes'
-RETURNING id, ticker, status, updated_at;
+    AND last_updated >= NOW() - INTERVAL '60 minutes'
+RETURNING id, ticker, status, last_updated;
 
 -- 3. Audit log entry explaining the correction
 INSERT INTO audit_logs (
@@ -44,9 +42,7 @@ SELECT
     'TASK_RUN',
     organization_id,
     'EDU.AX',
-    E'⚠️ Manual correction: EDU.AX position re-opened — was incorrectly closed at 14:35 '
-    E'by check_exit_rules_task bug (STOP_LOSS signal fired in parallel with a live IBKR '
-    E'bracket stop). Position re-opened; Trade record left for sync_order_status reconciliation.',
+    'Manual correction: EDU.AX position re-opened. Was incorrectly closed at 14:35 by check_exit_rules_task bug (STOP_LOSS signal fired in parallel with live IBKR bracket stop). Trade record left for sync_order_status reconciliation.',
     '{"source": "manual_fix", "bug": "check_exit_rules_stop_loss_equity_race"}'::jsonb,
     NOW()
 FROM positions
