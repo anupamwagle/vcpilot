@@ -265,6 +265,17 @@ services:
       READ_ONLY_API: "no"
       BYPASS_WARNING: "yes"
       VNC_SERVER_PASSWORD: ${VNC_PASSWORD:-changeme}
+      # --- Self-recovery (gnzsnz/ib-gateway IBC settings) ---
+      # Gateway restart times are interpreted in this timezone.
+      TIME_ZONE: ${IBKR_TIME_ZONE:-Australia/Sydney}
+      # Daily restart WITHOUT requiring fresh 2FA — scheduled 8:30am AEST:
+      # after the NYSE session (ends ~6-8am AEST) and before the ASX open (10am),
+      # so the forced daily IB logoff never lands mid-session.
+      AUTO_RESTART_TIME: ${IBKR_AUTO_RESTART_TIME:-08:30 AM}
+      # If a live-account 2FA prompt times out unacknowledged, restart the login
+      # loop and keep retrying instead of exiting and staying down.
+      TWOFA_TIMEOUT_ACTION: restart
+      RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"
     ports:
       - "127.0.0.1:4001:4001"
       - "127.0.0.1:4002:4002"

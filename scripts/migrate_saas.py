@@ -1422,6 +1422,100 @@ def migrate():
             logger.debug(f"Migration 013 enum block skipped: {str(e)[:120]}")
         logger.info("Migration 013 complete.")
 
+    # ── Migration 014 — Duplicate-trade prevention (T-DEDUP-4) ──────────────
+    # Adds `position_id` FK on the trades table so every closed Trade row
+    # links back to the Position that originated it. A UNIQUE constraint on
+    # this column makes it physically impossible for two Trade rows to refer
+    # to the same position_id, providing a DB-level backstop on top of the
+    # application-level guards in tasks/trading.py (T-DEDUP-1/2/3).
+    #
+    # Safe to re-run: all three steps are individually guarded.
+    #   Step 1 — ADD COLUMN IF NOT EXISTS (idempotent by definition).
+    #   Step 2 — CREATE INDEX IF NOT EXISTS (idempotent).
+    #   Step 3 — UNIQUE constraint: guarded by pg_constraint name lookup.
+    #   Step 4 — Best-effort backfill for existing rows (WHERE position_id IS
+    #             NULL, so rows already backfilled are untouched).
+    logger.info("Running migration 014 — duplicate-trade prevention (position_id)...")
+    with engine.connect() as conn:
+        def _col_exists_014(tbl, col):
+            return conn.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name=:t AND column_name=:c"
+            ), {"t": tbl, "c": col}).fetchone() is not None
+
+        # Step 1: add position_id column
+        if not _col_exists_014("trades", "position_id"):
+            logger.info("Migration 014: adding trades.position_id column...")
+            try:
+                conn.execute(text(
+                    "ALTER TABLE trades "
+                    "ADD COLUMN position_id INTEGER REFERENCES positions(id)"
+                ))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                logger.warning(f"Migration 014: could not add position_id column: {e}")
+        else:
+            logger.debug("Migration 014: trades.position_id already exists — skip")
+
+        # Step 2: index
+        try:
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_trades_position_id ON trades (position_id)"
+            ))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logger.debug(f"Migration 014: index skipped: {str(e)[:100]}")
+
+        # Step 3: unique constraint (skip if already present)
+        constraint_exists = conn.execute(text(
+            "SELECT 1 FROM pg_constraint "
+            "WHERE conname = 'uq_trades_position_id' "
+            "AND conrelid = 'trades'::regclass"
+        )).fetchone()
+        if not constraint_exists:
+            try:
+                conn.execute(text(
+                    "ALTER TABLE trades "
+                    "ADD CONSTRAINT uq_trades_position_id UNIQUE (position_id)"
+                ))
+                conn.commit()
+                logger.info("Migration 014: unique constraint uq_trades_position_id added.")
+            except Exception as e:
+                conn.rollback()
+                logger.warning(
+                    f"Migration 014: could not add unique constraint — "
+                    f"likely duplicate position_id values still exist (run "
+                    f"cleanup_duplicate_trades.py first): {e}"
+                )
+        else:
+            logger.debug("Migration 014: uq_trades_position_id already exists — skip")
+
+        # Step 4: best-effort backfill
+        try:
+            result = conn.execute(text("""
+                UPDATE trades t
+                SET    position_id = (
+                    SELECT p.id
+                    FROM   positions p
+                    WHERE  p.ticker          = t.ticker
+                      AND  p.account_id      = t.account_id
+                      AND  p.organization_id = t.organization_id
+                      AND  p.entry_date      = t.entry_date
+                    ORDER  BY p.id
+                    LIMIT  1
+                )
+                WHERE  t.position_id IS NULL
+            """))
+            conn.commit()
+            logger.info(f"Migration 014: backfilled position_id for {result.rowcount} trade row(s).")
+        except Exception as e:
+            conn.rollback()
+            logger.warning(f"Migration 014: backfill skipped: {str(e)[:120]}")
+
+        logger.info("Migration 014 complete.")
+
     logger.info("SaaS/Multi-tenant migration and seeding complete!")
 
 
