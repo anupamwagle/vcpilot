@@ -224,7 +224,20 @@ class TestSyncStopOrdersEquity:
 
         monkeypatch.setattr("app.data.fetcher.get_intraday_price",
                             lambda *a, **kw: {"ok": True, "price": 41.0, "data_source": "test"})
-        monkeypatch.setattr("app.tasks.trading.IBKRBroker", MagicMock())
+        class _SimulatedBroker:
+            def __init__(self, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return None
+
+            def submit_market_sell(self, **kwargs):
+                return {"status": "simulated", "broker": "simulation"}
+
+        monkeypatch.setattr("app.tasks.trading.IBKRBroker", _SimulatedBroker)
         monkeypatch.setattr("app.tasks.trading.get_notifier", lambda *a, **kw: MagicMock())
 
         sync_stop_orders.run()
@@ -300,12 +313,28 @@ class TestExitRulesPnLFX:
                             lambda *a, **kw: {"ok": True, "price": exit_price, "data_source": "test"})
         monkeypatch.setattr("app.data.fetcher.get_fundamentals", lambda *a, **kw: {})
         monkeypatch.setattr("app.data.fetcher.get_fx_rate", lambda *a, **kw: fx_rate)
-        stop_signal = ExitSignal(
-            should_exit=True, exit_type="FULL", reason=ExitReason.STOP_LOSS,
-            message="stop breach", partial_pct=100,
+        exit_signal = ExitSignal(
+            should_exit=True, exit_type="FULL", reason=ExitReason.FAILED_BREAKOUT,
+            message="failed breakout", partial_pct=100,
         )
-        monkeypatch.setattr("app.tasks.trading.evaluate_exit_rules", lambda **kw: [stop_signal])
-        monkeypatch.setattr("app.tasks.trading.IBKRBroker", MagicMock())
+        # Stop-loss execution is intentionally delegated to the broker-bracket
+        # reconciliation path; this fixture isolates the P&L math for a
+        # non-stop full exit.
+        monkeypatch.setattr("app.tasks.trading.evaluate_exit_rules", lambda **kw: [exit_signal])
+        class _SimulatedExitBroker:
+            def __init__(self, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return None
+
+            def submit_market_sell(self, **kwargs):
+                return {"status": "simulated", "broker": "simulation"}
+
+        monkeypatch.setattr("app.tasks.trading.IBKRBroker", _SimulatedExitBroker)
 
         check_exit_rules_task.run(exchange_key=pos.exchange_key or "ASX")
         db_session.expire_all()

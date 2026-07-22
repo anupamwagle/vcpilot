@@ -33,7 +33,7 @@
 
 <!-- ── Exchange tabs ──────────────────────────────────────────────────── -->
 {% set base_url = "/watchlist" %}
-{% set extra_params = ("label=" ~ active_label) if active_label is not none else "" %}
+{% set extra_params = ("label=" ~ active_label ~ "&view=all") if active_label is not none else (("view=all") if active_view == 'all' else "") %}
 {% include "components/exchange_tabs.html" %}
 
 {% if has_crypto and crypto_tickers and _eff_exchange == 'CRYPTO' %}
@@ -194,10 +194,11 @@
 <!-- ── Label + Tier filter chips ──────────────────────────────────────────── -->
 {% set _exc_q = ("&exchange=" ~ _eff_exchange) if _has_tabs else "" %}
 {% set _tier_q = ("&tier=" ~ active_tier) if active_tier else "" %}
+{% set _view_q = "&view=all" if active_view == 'all' else "" %}
 
 <div style="display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin-bottom:.5rem;padding:.125rem 0">
   <!-- All labels -->
-  <a href="/watchlist{{ ('?exchange=' ~ _eff_exchange) if _has_tabs else '' }}{{ _tier_q }}"
+  <a href="/watchlist{{ ('?exchange=' ~ _eff_exchange) if _has_tabs else '' }}{{ _tier_q }}{{ _view_q }}"
      style="display:inline-flex;align-items:center;gap:.35rem;padding:.3rem .85rem;border-radius:999px;font-size:.75rem;font-weight:600;border:2px solid;text-decoration:none;transition:opacity .15s;
      {% if active_label is none %}background:var(--t-accent);color:white;border-color:var(--t-accent)
      {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
@@ -207,7 +208,7 @@
 
   {% for lbl in labels %}
   {% set cnt = label_counts.get(lbl.id, 0) %}
-  <a href="/watchlist?label={{ lbl.id }}{{ _exc_q }}{{ _tier_q }}"
+  <a href="/watchlist?label={{ lbl.id }}{{ _exc_q }}{{ _tier_q }}&view=all"
      style="display:inline-flex;align-items:center;gap:.35rem;padding:.3rem .85rem;border-radius:999px;font-size:.75rem;font-weight:600;border:2px solid;text-decoration:none;transition:opacity .15s;
      {% if active_label == lbl.id %}background:{{ lbl.color }};color:white;border-color:{{ lbl.color }}
      {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
@@ -232,30 +233,40 @@
 {% set _tier_base = ("/watchlist?exchange=" ~ _eff_exchange) if _has_tabs else ("/watchlist?label=" ~ active_label if active_label is not none else "/watchlist") %}
 <div style="display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;margin-bottom:1rem">
   <span style="font-size:.65rem;font-weight:600;color:var(--text-subtle);text-transform:uppercase;letter-spacing:.05em;min-width:2.5rem">Tier</span>
-  <a href="{{ _tier_base }}"
+  <a href="/watchlist?view=focus{{ _exc_q }}"
+     style="padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:700;border:1px solid;text-decoration:none;
+     {% if focus_active %}background:rgba(16,185,129,.15);color:#10b981;border-color:rgba(16,185,129,.5)
+     {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
+    Focus
+  </a>
+  <a href="{{ _tier_base }}{{ '&' if '?' in _tier_base else '?' }}view=all"
      style="padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
-     {% if not active_tier %}background:var(--surface-alt);color:var(--text-muted);border-color:var(--border){% else %}background:transparent;color:var(--text-subtle);border-color:var(--border){% endif %}">
+     {% if active_view == 'all' and not active_tier %}background:var(--surface-alt);color:var(--text-muted);border-color:var(--border){% else %}background:transparent;color:var(--text-subtle);border-color:var(--border){% endif %}">
     All
   </a>
-  <a href="/watchlist?tier=A{{ _exc_q }}{{ _lbl_q }}"
+  <a href="/watchlist?tier=A{{ _exc_q }}{{ _lbl_q }}&view=all"
      style="padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:700;border:1px solid;text-decoration:none;
      {% if active_tier == 'A' %}background:rgba(16,185,129,.15);color:#10b981;border-color:rgba(16,185,129,.5)
      {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
     ★ A — Best
   </a>
-  <a href="/watchlist?tier=B{{ _exc_q }}{{ _lbl_q }}"
+  <a href="/watchlist?tier=B{{ _exc_q }}{{ _lbl_q }}&view=all"
      style="padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:700;border:1px solid;text-decoration:none;
      {% if active_tier == 'B' %}background:rgba(59,130,246,.12);color:#3b82f6;border-color:rgba(59,130,246,.4)
      {% else %}background:transparent;color:var(--text-muted);border-color:var(--border){% endif %}">
     B — Forming
   </a>
-  <a href="/watchlist?tier=C{{ _exc_q }}{{ _lbl_q }}"
+  <a href="/watchlist?tier=C{{ _exc_q }}{{ _lbl_q }}&view=all"
      style="padding:.2rem .65rem;border-radius:999px;font-size:.7rem;font-weight:600;border:1px solid;text-decoration:none;
      {% if active_tier == 'C' %}background:var(--surface-alt);color:var(--text-muted);border-color:var(--border);opacity:1
      {% else %}background:transparent;color:var(--text-subtle);border-color:var(--border){% endif %}">
     C — Early
   </a>
-  {% if active_tier %}
+  {% if focus_active %}
+  <span style="font-size:.65rem;color:var(--text-subtle);margin-left:.25rem">
+    Focus: Tier A first, then favourite exceptions.
+  </span>
+  {% elif active_tier %}
   <span style="font-size:.65rem;color:var(--text-subtle);margin-left:.25rem">
     Minervini quality filter active — <a href="{{ _tier_base }}" style="color:var(--t-accent);text-decoration:none">clear ×</a>
   </span>

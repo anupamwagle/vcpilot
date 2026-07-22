@@ -150,7 +150,7 @@ def test_execute_signal_order_happy_path_crypto(db_session, org_and_account, mon
     }
     monkeypatch.setattr(
         "app.broker.crypto.get_crypto_broker_for_org",
-        lambda org_id: mock_broker,
+        lambda org_id, exchange_key=None: mock_broker,
     )
     mock_notifier = MagicMock()
     monkeypatch.setattr("app.notifications.get_notifier", lambda organization_id=None: mock_notifier)

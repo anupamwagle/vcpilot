@@ -859,7 +859,9 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                     }
                 elif is_crypto:
                     from app.broker.crypto import get_crypto_broker_for_org
-                    with get_crypto_broker_for_org(org.id) as broker:
+                    with get_crypto_broker_for_org(
+                        org.id, exchange_key=signal.exchange_key
+                    ) as broker:
                         result = broker.submit_bracket_order(
                             ticker=signal.ticker,
                             action="BUY",
@@ -887,6 +889,9 @@ def check_entry_triggers(self, exchange_key: str = "ASX"):
                             order_ref=f"astratrade-{signal.id}",
                             pivot_price=float(signal.pivot_price) if signal.pivot_price else None,
                             limit_buffer_pct=entry_limit_buffer_pct,
+                            # A live gateway outage must never become an internal
+                            # simulated fill / phantom live Position.
+                            simulate_on_disconnect=signal_is_paper,
                         )
                         detected_paper_mode = broker.detected_paper_mode
 
@@ -1208,28 +1213,76 @@ def check_exit_rules_task(self, exchange_key: str = "ASX"):
 
                     if is_crypto:
                         from app.broker.crypto import get_crypto_broker_for_org
-                        with get_crypto_broker_for_org(org.id) as broker:
-                            result = broker.submit_bracket_order(
-                                ticker=pos.ticker,
-                                action="SELL",
-                                qty=qty_to_sell,
-                                entry_price=current,
-                                stop_price=0,
-                                target_price=0,
-                                order_ref=f"exit-{pos.id}-{exit_sig.reason}",
+                        with get_crypto_broker_for_org(
+                            org.id, exchange_key=pos.exchange_key
+                        ) as broker:
+                            result = broker.submit_market_sell(
+                                ticker=pos.ticker, qty=qty_to_sell,
+                                order_ref=f"exit-{pos.id}-{exit_sig.reason.value}",
                             )
                     else:
                         with IBKRBroker(organization_id=org.id) as broker:
-                            result = broker.submit_bracket_order(
+                            result = broker.submit_market_sell(
                                 ticker=pos.ticker.replace(".AX", ""),
-                                action="SELL",
                                 qty=qty_to_sell,
-                                entry_price=current,
-                                stop_price=0,
-                                target_price=0,
                                 exchange_key=pos.exchange_key or "ASX",
-                                order_ref=f"exit-{pos.id}-{exit_sig.reason}",
+                                order_ref=f"exit-{pos.id}-{exit_sig.reason.value}",
+                                simulate_on_disconnect=pos.is_paper,
                             )
+
+                    # A rejected broker order must never close the local
+                    # position. This was especially dangerous for crypto,
+                    # where an exchange rejection previously still produced a
+                    # closed Position and a fictitious realised P&L.
+                    if result.get("status") == "error":
+                        with get_db() as _error_db:
+                            _error_db.add(AuditLog(
+                                action=AuditAction.TASK_ERROR, organization_id=org.id, ticker=pos.ticker,
+                                message=f"Exit order rejected for {pos.ticker}: {result.get('error', 'unknown error')}",
+                                detail={"source": "check_exit_rules_task", "result": result},
+                            ))
+                        try:
+                            notifier.send_health_alert(pos.ticker, f"Exit order failed: {result.get('error', 'unknown error')}")
+                        except Exception as notify_error:
+                            logger.warning(f"Exit failure notification failed for {pos.ticker}: {notify_error}")
+                        break
+
+                    is_simulated_exit = (
+                        result.get("status") == "simulated" or result.get("simulated") is True
+                    )
+                    if not is_simulated_exit:
+                        # A broker acknowledgement is not a fill. Track the
+                        # actual exit and let the relevant reconciliation task
+                        # adjust or close the Position from execution truth.
+                        _exit_raw = dict(result)
+                        _exit_raw.update({"position_id": pos.id, "exit_reason": exit_sig.reason.value})
+                        with get_db() as _exit_db:
+                            _already_submitted = _exit_db.query(Order).filter(
+                                Order.organization_id == org.id, Order.ticker == pos.ticker,
+                                Order.action == OrderAction.SELL,
+                                Order.status.in_([OrderStatus.SUBMITTED, OrderStatus.PARTIAL]),
+                            ).first()
+                            if not _already_submitted:
+                                _exit_db.add(Order(
+                                    ticker=pos.ticker, exchange_key=pos.exchange_key,
+                                    asset_type="CRYPTO" if is_crypto else "EQUITY", currency=pos.currency,
+                                    account_id=pos.account_id, organization_id=org.id,
+                                    signal_id=pos.signal_id, action=OrderAction.SELL,
+                                    order_type=OrderType.MARKET, status=OrderStatus.SUBMITTED,
+                                    qty_ordered=qty_to_sell, qty_filled=0,
+                                    external_order_id=result.get("entry_order_id") if is_crypto else None,
+                                    ibkr_order_id=result.get("ibkr_order_id") if not is_crypto else None,
+                                    perm_id=result.get("ibkr_perm_id") if not is_crypto else None,
+                                    raw_ibkr_response=_exit_raw, is_paper=pos.is_paper,
+                                    submitted_at=_dt.utcnow(),
+                                ))
+                                _exit_db.add(AuditLog(
+                                    action=AuditAction.ORDER_SUBMITTED, organization_id=org.id, ticker=pos.ticker,
+                                    message=(f"{'Crypto' if is_crypto else 'IBKR'} exit submitted; awaiting broker fill: "
+                                             f"{qty_to_sell:g}x {pos.ticker}"),
+                                    detail={"source": "check_exit_rules_task", "result": result},
+                                ))
+                        break
 
                     # Bug #4 fix: apply FX conversion for USD positions
                     _pos_currency = getattr(pos, "currency", None) or "AUD"
@@ -1378,6 +1431,54 @@ def sync_stop_orders(self):
                     _eq_entry = float(pos.entry_price) if pos.entry_price else None
                     if not _eq_stop or not _eq_entry:
                         continue
+                    if _eq_price > _eq_stop:
+                        # Advance, never loosen, the broker-side stop using the
+                        # same Minervini ATR progression as crypto: breakeven
+                        # after +1 ATR and entry + 0.5 ATR after +2 ATR.
+                        try:
+                            _eq_df = get_price_history(pos.ticker, period="1mo")
+                            _atr = float(_eq_df["atr_14"].iloc[-1] or 0) if _eq_df is not None and not _eq_df.empty else 0
+                            _candidate_stop = _eq_stop
+                            if _atr > 0:
+                                _gain_atrs = (_eq_price - _eq_entry) / _atr
+                                if _gain_atrs >= 2.0:
+                                    _candidate_stop = max(_eq_stop, _eq_entry + 0.5 * _atr)
+                                elif _gain_atrs >= 1.0:
+                                    _candidate_stop = max(_eq_stop, _eq_entry)
+                            if _candidate_stop > _eq_stop:
+                                with IBKRBroker(organization_id=org.id) as _trail_broker:
+                                    if not _trail_broker.is_connected:
+                                        raise RuntimeError("IBKR gateway is not connected")
+                                    _stops = [o for o in _trail_broker.get_open_orders()
+                                              if (o.get("ticker") or "").upper() == pos.ticker.replace(".AX", "").upper()
+                                              and o.get("action") == "SELL"
+                                              and o.get("order_type") in ("STP", "STP LMT")]
+                                    if not _stops:
+                                        raise RuntimeError("no working broker stop found")
+                                    _ok, _reason = _trail_broker.modify_stop_order(
+                                        _stops[0]["ibkr_order_id"], _candidate_stop, pos.exchange_key or "ASX"
+                                    )
+                                if not _ok:
+                                    raise RuntimeError(_reason)
+                                with get_db() as _trail_db:
+                                    _live_pos = _trail_db.query(Position).get(pos.id)
+                                    if _live_pos and _live_pos.status == TradeStatus.OPEN:
+                                        _live_pos.current_stop = _candidate_stop
+                                        _trail_db.add(AuditLog(
+                                            action=AuditAction.POSITION_UPDATED, organization_id=org.id, ticker=pos.ticker,
+                                            message=(f"Equity trailing stop raised at broker: ${_eq_stop:.4f} -> "
+                                                     f"${_candidate_stop:.4f} ({_gain_atrs:.1f} ATRs)"),
+                                            detail={"source": "sync_stop_orders", "old_stop": _eq_stop,
+                                                    "new_stop": _candidate_stop},
+                                        ))
+                        except Exception as _trail_error:
+                            logger.warning(f"Equity trailing stop update failed for {pos.ticker}: {_trail_error}")
+                            with get_db() as _trail_error_db:
+                                _trail_error_db.add(AuditLog(
+                                    action=AuditAction.TASK_ERROR, organization_id=org.id, ticker=pos.ticker,
+                                    message=f"Equity trailing-stop update failed: {_trail_error}",
+                                    detail={"source": "sync_stop_orders"},
+                                ))
                     if _eq_price <= _eq_stop:
                         logger.warning(f"sync_stop_orders: equity {pos.ticker} price through stop — price {_eq_price:.3f} ≤ stop {_eq_stop:.3f}")
                         _sym = "US$" if pos_currency == "USD" else "A$"
@@ -1505,6 +1606,57 @@ def sync_stop_orders(self):
 
                 # ── Stopped out? ──────────────────────────────────────────
                 if current_price <= stop_price:
+                    # A price breach is not an exchange fill. Submit the
+                    # protective market exit and leave the Position OPEN until
+                    # sync_crypto_order_status confirms the actual fill.
+                    with get_db() as _existing_sell_db:
+                        existing_sell = _existing_sell_db.query(Order).filter(
+                            Order.organization_id == org.id, Order.ticker == pos.ticker,
+                            Order.action == OrderAction.SELL,
+                            Order.status.in_([OrderStatus.SUBMITTED, OrderStatus.PARTIAL]),
+                        ).first()
+                    if existing_sell:
+                        continue
+                    from app.broker.crypto import get_crypto_broker_for_org
+                    with get_crypto_broker_for_org(org.id, exchange_key=pos.exchange_key) as broker:
+                        stop_result = broker.submit_market_sell(
+                            pos.ticker, float(pos.qty), order_ref=f"stopsell-{pos.id}"
+                        )
+                    if stop_result.get("status") == "error":
+                        with get_db() as _stop_error_db:
+                            _stop_error_db.add(AuditLog(
+                                action=AuditAction.TASK_ERROR, organization_id=org.id, ticker=pos.ticker,
+                                message=(f"Crypto stop breached but market sell failed: "
+                                         f"{stop_result.get('error', 'unknown error')}. Position remains OPEN."),
+                                detail={"source": "sync_stop_orders", "result": stop_result},
+                            ))
+                        try:
+                            get_notifier(organization_id=org.id).send_health_alert(
+                                pos.ticker, "Crypto stop breached but exchange sell failed; position remains open."
+                            )
+                        except Exception as notify_error:
+                            logger.warning(f"Crypto stop failure notification failed for {pos.ticker}: {notify_error}")
+                        continue
+                    with get_db() as _stop_submit_db:
+                        raw_stop = dict(stop_result)
+                        raw_stop.update({"position_id": pos.id, "exit_reason": ExitReason.STOP_LOSS.value})
+                        _stop_submit_db.add(Order(
+                            ticker=pos.ticker, exchange_key=pos.exchange_key,
+                            asset_type="CRYPTO", currency=pos_currency,
+                            account_id=pos.account_id, organization_id=org.id,
+                            signal_id=pos.signal_id, action=OrderAction.SELL,
+                            order_type=OrderType.MARKET, status=OrderStatus.SUBMITTED,
+                            qty_ordered=pos.qty, qty_filled=0,
+                            external_order_id=stop_result.get("entry_order_id"),
+                            raw_ibkr_response=raw_stop, is_paper=pos.is_paper,
+                            submitted_at=_dt.utcnow(),
+                        ))
+                        _stop_submit_db.add(AuditLog(
+                            action=AuditAction.ORDER_SUBMITTED, organization_id=org.id, ticker=pos.ticker,
+                            message=f"Crypto stop breached; market sell submitted, awaiting exchange fill: {pos.ticker}",
+                            detail={"source": "sync_stop_orders", "result": stop_result},
+                        ))
+                    continue
                     logger.warning(f"sync_stop_orders: {pos.ticker} stopped out — price {current_price:.4f} ≤ stop {stop_price:.4f}")
                     realised_pnl = (current_price - entry_price) * float(pos.qty)
                     today_d = get_current_date()
@@ -2511,6 +2663,7 @@ def sync_order_status(self, organization_id: int | None = None):
                             total_commission = sum(f["commission"] for f in fills)
                             is_full = total_qty >= float(order.qty_ordered) - 1e-6
 
+                            previous_filled = float(order.qty_filled or 0)
                             order.status = OrderStatus.FILLED if is_full else OrderStatus.PARTIAL
                             order.qty_filled = total_qty
                             order.avg_fill_price = round(weighted_price, 4)
@@ -2522,7 +2675,13 @@ def sync_order_status(self, organization_id: int | None = None):
 
                             signal = db.query(Signal).filter(Signal.id == order.signal_id).first() \
                                 if order.signal_id else None
+                            raw_order = order.raw_ibkr_response or {}
+                            pyramid_position_id = raw_order.get("pyramid_position_id")
                             existing_pos = db.query(Position).filter(
+                                Position.id == pyramid_position_id,
+                                Position.organization_id == org.id,
+                                Position.status == TradeStatus.OPEN,
+                            ).first() if pyramid_position_id else db.query(Position).filter(
                                 Position.organization_id == org.id,
                                 Position.ticker == order.ticker,
                                 Position.status == TradeStatus.OPEN,
@@ -2557,7 +2716,26 @@ def sync_order_status(self, organization_id: int | None = None):
                                 # fills arrive (weighted_price/total_qty are always recomputed
                                 # from the FULL set of matching executions, not incrementally,
                                 # so this is idempotent across repeated runs).
-                                if abs(float(existing_pos.qty or 0) - total_qty) > 1e-6:
+                                if pyramid_position_id:
+                                    added = max(0.0, total_qty - previous_filled)
+                                    if added > 1e-6:
+                                        old_qty = float(existing_pos.qty)
+                                        existing_pos.qty = old_qty + added
+                                        existing_pos.avg_cost = round(
+                                            (old_qty * float(existing_pos.entry_price) + added * weighted_price)
+                                            / float(existing_pos.qty), 4,
+                                        )
+                                        existing_pos.pyramid_count = max(
+                                            int(existing_pos.pyramid_count or 0),
+                                            int(raw_order.get("pyramid_number") or 0),
+                                        )
+                                        db.add(AuditLog(
+                                            action=AuditAction.POSITION_UPDATED, organization_id=org.id,
+                                            ticker=order.ticker,
+                                            message=f"IBKR pyramid fill confirmed: +{added:g}x {order.ticker}",
+                                            detail={"source": "sync_order_status", "order_id": order.id},
+                                        ))
+                                elif abs(float(existing_pos.qty or 0) - total_qty) > 1e-6:
                                     existing_pos.qty = total_qty
                                     existing_pos.entry_price = round(weighted_price, 4)
                                     db.add(AuditLog(
@@ -2684,13 +2862,17 @@ def sync_order_status(self, organization_id: int | None = None):
                 sell_execs_by_ref: dict[str, list[dict]] = {}
                 for e in executions:
                     ref = e.get("order_ref") or ""
-                    if e["side"] == "SLD" and (ref.startswith("astratrade-") or ref.startswith("stopsell-")):
+                    if e["side"] == "SLD" and (
+                        ref.startswith("astratrade-") or ref.startswith("stopsell-") or ref.startswith("exit-")
+                    ):
                         sell_execs_by_ref.setdefault(ref, []).append(e)
 
                 for pos in open_positions:
                     try:
                         fills = (sell_execs_by_ref.get(f"astratrade-{pos.signal_id}")
-                                 or sell_execs_by_ref.get(f"stopsell-{pos.id}"))
+                                 or sell_execs_by_ref.get(f"stopsell-{pos.id}")
+                                 or next((v for ref, v in sell_execs_by_ref.items()
+                                          if ref.startswith(f"exit-{pos.id}-")), None))
                         if not fills:
                             continue
                         total_qty = sum(f["qty"] for f in fills)
@@ -2698,6 +2880,18 @@ def sync_order_status(self, organization_id: int | None = None):
                             continue
                         weighted_price = sum(f["qty"] * f["avg_price"] for f in fills) / total_qty
                         total_commission = sum(f["commission"] for f in fills)
+
+                        tracked_sell = db.query(Order).filter(
+                            Order.organization_id == org.id,
+                            Order.action == OrderAction.SELL,
+                            Order.ibkr_order_id.in_([f["order_id"] for f in fills]),
+                        ).first()
+                        if tracked_sell:
+                            tracked_sell.status = OrderStatus.FILLED
+                            tracked_sell.qty_filled = total_qty
+                            tracked_sell.avg_fill_price = round(weighted_price, 4)
+                            tracked_sell.commission_local = round(total_commission, 4)
+                            tracked_sell.filled_at = _dt.utcnow()
 
                         entry_price = float(pos.entry_price or 0)
                         fx = float(pos.entry_fx_rate or pos.current_fx_rate or 1.0) or 1.0
@@ -2777,3 +2971,289 @@ def sync_order_status(self, organization_id: int | None = None):
                 except Exception:
                     db.rollback()
 # end sync_order_status
+
+
+@app.task(name="app.tasks.trading.sync_crypto_order_status", bind=True)
+def sync_crypto_order_status(self, organization_id: int | None = None):
+    """Reconcile live CCXT orders before mutating crypto positions.
+
+    A crypto order acknowledgement is not a fill.  This task is the crypto
+    counterpart to ``sync_order_status`` for IBKR: it creates/reduces/closes a
+    Position only from the exchange's reported filled quantity and price.  It
+    intentionally leaves a position open when a sell is unconfirmed.
+    """
+    from app.models.account import Organization
+    from app.utils.time_helper import get_current_date
+
+    with get_db() as db:
+        org_query = db.query(Organization)
+        orgs = org_query.filter(Organization.id == organization_id).all() if organization_id else \
+            org_query.filter(Organization.is_active == True).all()
+
+    for org in orgs:
+        if not _acquire_org_lock(f"sync_crypto_order_status_lock:{org.id}", ttl=55):
+            continue
+        with get_db() as db:
+            orders = db.query(Order).filter(
+                Order.organization_id == org.id,
+                Order.asset_type == "CRYPTO",
+                Order.external_order_id.isnot(None),
+                Order.status.in_([OrderStatus.SUBMITTED, OrderStatus.PARTIAL]),
+            ).all()
+            if not orders:
+                continue
+
+            notifier = get_notifier(organization_id=org.id)
+            today = get_current_date()
+            for order in orders:
+                try:
+                    from app.broker.crypto import get_crypto_broker_for_org
+                    with get_crypto_broker_for_org(org.id, exchange_key=order.exchange_key) as broker:
+                        snap = broker.get_order(order.external_order_id, order.ticker)
+                    if not snap:
+                        continue
+
+                    filled = float(snap.get("filled") or 0)
+                    average = float(snap.get("average") or 0)
+                    if snap["status"] == "cancelled":
+                        order.status = OrderStatus.CANCELLED
+                        order.cancelled_at = _dt.utcnow()
+                        if order.action == OrderAction.BUY and order.signal_id:
+                            signal = db.query(Signal).filter(Signal.id == order.signal_id).first()
+                            if signal and signal.status == SignalStatus.TRIGGERED:
+                                signal.status = SignalStatus.PENDING
+                        db.add(AuditLog(
+                            action=AuditAction.ORDER_CANCELLED, organization_id=org.id,
+                            ticker=order.ticker,
+                            message=f"Crypto order cancelled at exchange: {order.ticker} ({order.action.value})",
+                            detail={"source": "sync_crypto_order_status", "order_id": order.id, "exchange": order.exchange_key},
+                        ))
+                        continue
+                    if snap["status"] == "open" or filled <= 0:
+                        continue
+
+                    is_full = snap["status"] == "filled" or filled >= float(order.qty_ordered) - 1e-8
+                    previous_filled = float(order.qty_filled or 0)
+                    order.status = OrderStatus.FILLED if is_full else OrderStatus.PARTIAL
+                    order.qty_filled = filled
+                    order.avg_fill_price = average or order.avg_fill_price
+                    order.commission_local = float(snap.get("fee") or 0)
+                    order.filled_at = _dt.utcnow()
+
+                    if order.action == OrderAction.BUY:
+                        signal = db.query(Signal).filter(Signal.id == order.signal_id).first() if order.signal_id else None
+                        raw_order = order.raw_ibkr_response or {}
+                        pyramid_position_id = raw_order.get("pyramid_position_id")
+                        pos = db.query(Position).filter(
+                            Position.id == pyramid_position_id,
+                            Position.organization_id == org.id,
+                            Position.status == TradeStatus.OPEN,
+                        ).first() if pyramid_position_id else db.query(Position).filter(
+                            Position.organization_id == org.id,
+                            Position.ticker == order.ticker,
+                            Position.status == TradeStatus.OPEN,
+                        ).first()
+                        if pos:
+                            if pyramid_position_id:
+                                added = max(0.0, filled - previous_filled)
+                                if added > 1e-8:
+                                    old_qty = float(pos.qty)
+                                    fill_price = average or float(pos.current_price or pos.entry_price)
+                                    pos.qty = old_qty + added
+                                    pos.avg_cost = round((old_qty * float(pos.entry_price) + added * fill_price) / float(pos.qty), 4)
+                                    pos.pyramid_count = max(int(pos.pyramid_count or 0), int(raw_order.get("pyramid_number") or 0))
+                                    db.add(AuditLog(
+                                        action=AuditAction.POSITION_UPDATED, organization_id=org.id, ticker=pos.ticker,
+                                        message=f"Crypto pyramid fill confirmed: +{added:g}x {pos.ticker}",
+                                        detail={"source": "sync_crypto_order_status", "order_id": order.id},
+                                    ))
+                            else:
+                                pos.qty = filled
+                                if average:
+                                    pos.entry_price = average
+                                    pos.current_price = average
+                        elif signal:
+                            pos = Position(
+                                ticker=order.ticker, exchange_key=order.exchange_key,
+                                asset_type="CRYPTO", currency=order.currency,
+                                account_id=order.account_id, organization_id=org.id,
+                                signal_id=signal.id, entry_date=today,
+                                entry_price=average or float(signal.pivot_price), qty=filled,
+                                current_price=average or float(signal.pivot_price),
+                                initial_stop=float(signal.stop_price), current_stop=float(signal.stop_price),
+                                target_1=float(signal.target_price_1) if signal.target_price_1 else None,
+                                target_2=float(signal.target_price_2) if signal.target_price_2 else None,
+                                pivot_price=float(signal.pivot_price) if signal.pivot_price else None,
+                                is_paper=order.is_paper, status=TradeStatus.OPEN,
+                            )
+                            db.add(pos)
+                            db.flush()  # native stop order needs the position identity
+                            db.add(AuditLog(
+                                action=AuditAction.POSITION_OPENED, organization_id=org.id, ticker=order.ticker,
+                                message=f"Crypto fill confirmed: {filled:g}x {order.ticker} @ ${average:.4f}",
+                                detail={"source": "sync_crypto_order_status", "order_id": order.id},
+                            ))
+                            try:
+                                notifier.send_order_fill(order.ticker, "BUY", filled, average, order.is_paper)
+                            except Exception as notify_error:
+                                logger.warning(f"Crypto fill notification failed for {order.ticker}: {notify_error}")
+
+                        # A live crypto position must receive exchange-native
+                        # protection only *after* the entry is confirmed.  This
+                        # avoids the pre-fill bracket-leg hazard (a SELL stop
+                        # against pre-existing inventory) while retaining a
+                        # broker-side stop for every confirmed fill.  Multiple
+                        # partial fills receive incremental stops so protected
+                        # quantity always matches the reconciled position.
+                        if pos and not order.is_paper:
+                            active_stops = db.query(Order).filter(
+                                Order.organization_id == org.id,
+                                Order.ticker == order.ticker,
+                                Order.action == OrderAction.SELL,
+                                Order.order_type == OrderType.STOP,
+                                Order.status.in_([OrderStatus.SUBMITTED, OrderStatus.PARTIAL]),
+                            ).all()
+                            protected_qty = sum(
+                                float(existing.qty_ordered or 0)
+                                for existing in active_stops
+                                if (existing.raw_ibkr_response or {}).get("protective_stop")
+                                and (existing.raw_ibkr_response or {}).get("position_id") == pos.id
+                            )
+                            protection_delta = max(0.0, float(pos.qty) - protected_qty)
+                            if protection_delta > 1e-8:
+                                from app.broker.crypto import get_crypto_broker_for_org
+                                with get_crypto_broker_for_org(org.id, exchange_key=order.exchange_key) as broker:
+                                    stop_result = broker.submit_protective_stop(
+                                        order.ticker, protection_delta, float(pos.current_stop),
+                                        order_ref=f"protect-{pos.id}-{order.id}",
+                                    )
+                                    if stop_result.get("status") == "error":
+                                        # Do not knowingly leave live capital
+                                        # exposed.  Cancel any remaining entry
+                                        # quantity then submit an emergency flat
+                                        # order; reconciliation still owns the
+                                        # actual DB close.
+                                        broker.cancel_order(order.external_order_id, order.ticker)
+                                        emergency = broker.submit_market_sell(
+                                            order.ticker, float(pos.qty), order_ref=f"exit-{pos.id}-STOP_LOSS",
+                                        )
+                                    else:
+                                        emergency = None
+                                if stop_result.get("status") != "error":
+                                    raw_stop = dict(stop_result)
+                                    raw_stop.update({"position_id": pos.id, "exit_reason": ExitReason.STOP_LOSS.value,
+                                                     "protective_stop": True})
+                                    db.add(Order(
+                                        ticker=pos.ticker, exchange_key=pos.exchange_key, asset_type="CRYPTO",
+                                        currency=pos.currency, account_id=pos.account_id, organization_id=org.id,
+                                        signal_id=pos.signal_id, action=OrderAction.SELL, order_type=OrderType.STOP,
+                                        status=OrderStatus.SUBMITTED, qty_ordered=protection_delta, qty_filled=0,
+                                        stop_price=pos.current_stop, external_order_id=stop_result.get("entry_order_id"),
+                                        raw_ibkr_response=raw_stop, is_paper=False, submitted_at=_dt.utcnow(),
+                                    ))
+                                    db.add(AuditLog(
+                                        action=AuditAction.ORDER_SUBMITTED, organization_id=org.id, ticker=pos.ticker,
+                                        message=f"Crypto native protective stop accepted: {protection_delta:g}x {pos.ticker}",
+                                        detail={"source": "sync_crypto_order_status", "position_id": pos.id, "result": stop_result},
+                                    ))
+                                else:
+                                    db.add(AuditLog(
+                                        action=AuditAction.TASK_ERROR, organization_id=org.id, ticker=pos.ticker,
+                                        message=("Crypto protective stop rejected; entry cancellation and emergency exit "
+                                                 "submitted. Position remains OPEN until exchange fill confirms it."),
+                                        detail={"source": "sync_crypto_order_status", "stop_result": stop_result,
+                                                "emergency_result": emergency},
+                                    ))
+                                    if emergency and emergency.get("status") != "error":
+                                        raw_exit = dict(emergency)
+                                        raw_exit.update({"position_id": pos.id, "exit_reason": ExitReason.STOP_LOSS.value})
+                                        db.add(Order(
+                                            ticker=pos.ticker, exchange_key=pos.exchange_key, asset_type="CRYPTO",
+                                            currency=pos.currency, account_id=pos.account_id, organization_id=org.id,
+                                            signal_id=pos.signal_id, action=OrderAction.SELL, order_type=OrderType.MARKET,
+                                            status=OrderStatus.SUBMITTED, qty_ordered=pos.qty, qty_filled=0,
+                                            external_order_id=emergency.get("entry_order_id"), raw_ibkr_response=raw_exit,
+                                            is_paper=False, submitted_at=_dt.utcnow(),
+                                        ))
+                                    try:
+                                        notifier.send_health_alert(pos.ticker, "Native crypto stop rejected; emergency exit workflow started.")
+                                    except Exception as notify_error:
+                                        logger.warning(f"Crypto protection failure notification failed for {pos.ticker}: {notify_error}")
+                    else:
+                        raw = order.raw_ibkr_response or {}
+                        position_id = raw.get("position_id")
+                        pos = db.query(Position).filter(
+                            Position.id == position_id,
+                            Position.organization_id == org.id,
+                            Position.status == TradeStatus.OPEN,
+                        ).first() if position_id else None
+                        if not pos:
+                            pos = db.query(Position).filter(
+                                Position.organization_id == org.id,
+                                Position.ticker == order.ticker,
+                                Position.status == TradeStatus.OPEN,
+                            ).first()
+                        if not pos:
+                            continue
+                        qty_closed = min(filled, float(pos.qty))
+                        reason_raw = raw.get("exit_reason", ExitReason.MANUAL.value)
+                        try:
+                            exit_reason = ExitReason(str(reason_raw).replace("ExitReason.", ""))
+                        except ValueError:
+                            exit_reason = ExitReason.MANUAL
+                        entry = float(pos.entry_price)
+                        pnl_local = (average - entry) * qty_closed
+                        closes_position = qty_closed >= float(pos.qty) - 1e-8
+                        # Trade totals are consistently AUD across the portfolio.
+                        # Crypto pairs may settle in USD/USDT, so persisting the
+                        # raw quote-currency P&L as AUD materially understates or
+                        # overstates portfolio heat and daily-loss controls.
+                        if (pos.currency or "AUD").upper() != "AUD":
+                            try:
+                                from app.data.fetcher import get_fx_rate
+                                pnl_fx = float(get_fx_rate(pos.currency, "AUD") or 1.0)
+                            except Exception as fx_error:
+                                logger.warning(f"Crypto exit FX lookup failed for {pos.ticker}: {fx_error}")
+                                pnl_fx = 1.0
+                        else:
+                            pnl_fx = 1.0
+                        pnl_aud = pnl_local * pnl_fx
+                        fee_aud = float(snap.get("fee") or 0) * pnl_fx
+                        db.add(Trade(
+                            ticker=pos.ticker, exchange_key=pos.exchange_key, asset_type=pos.asset_type,
+                            currency=pos.currency, account_id=pos.account_id, organization_id=org.id,
+                            # A Position can have several partial sales.  The
+                            # final close retains the one-to-one position link;
+                            # earlier realised tranches remain separately
+                            # auditable by their Order ID instead of violating
+                            # the database's final-trade uniqueness guard.
+                            signal_id=pos.signal_id, position_id=pos.id if closes_position else None,
+                            entry_date=pos.entry_date, exit_date=today,
+                            hold_days=(today - pos.entry_date).days if pos.entry_date else 0,
+                            entry_price=pos.entry_price, exit_price=average, qty=qty_closed,
+                            gross_pnl_aud=round(pnl_aud, 2),
+                            commission_aud=round(fee_aud, 2),
+                            net_pnl_aud=round(pnl_aud - fee_aud, 2),
+                            pnl_pct=round((average - entry) / entry, 6) if entry else 0,
+                            initial_stop=pos.initial_stop, exit_reason=exit_reason,
+                            is_paper=pos.is_paper,
+                            cgt_eligible_discount=(today - pos.entry_date).days > 365 if pos.entry_date else False,
+                        ))
+                        if closes_position:
+                            pos.status = TradeStatus.CLOSED
+                        else:
+                            pos.qty = float(pos.qty) - qty_closed
+                        db.add(AuditLog(
+                            action=AuditAction.POSITION_CLOSED if pos.status == TradeStatus.CLOSED else AuditAction.POSITION_UPDATED,
+                            organization_id=org.id, ticker=pos.ticker,
+                            message=f"Crypto sell fill confirmed: {qty_closed:g}x {pos.ticker} @ ${average:.4f} ({exit_reason.value})",
+                            detail={"source": "sync_crypto_order_status", "order_id": order.id},
+                        ))
+                except Exception as error:
+                    logger.error(f"Crypto order reconciliation failed for order {order.id}: {error}")
+                    db.add(AuditLog(
+                        action=AuditAction.TASK_ERROR, organization_id=org.id, ticker=order.ticker,
+                        message=f"Crypto order reconciliation error: {error}",
+                        detail={"source": "sync_crypto_order_status", "order_id": order.id},
+                    ))
+            db.commit()

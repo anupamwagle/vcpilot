@@ -267,8 +267,11 @@ def check_breakout(
     # -------------------------------------------------------------------------
     # Price at/above pivot
     # -------------------------------------------------------------------------
+    # vcp_max_extension is the persisted/configurable rule. Keep the result
+    # key as vcp_breakout_price because it describes the evaluated condition
+    # shown to the trader, but never gate it on that unseeded display key.
     rule_id = "vcp_breakout_price"
-    if engine.is_enabled(rule_id):
+    if engine.is_enabled("vcp_max_extension"):
         max_extension = float(engine.threshold("vcp_max_extension") or 5.0)
         pct_above_pivot = ((close - pivot_price) / pivot_price * 100) if pivot_price > 0 else -100
         passed = 0 <= pct_above_pivot <= max_extension

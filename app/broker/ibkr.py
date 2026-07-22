@@ -374,6 +374,7 @@ class IBKRBroker:
                                              # STOP-LIMIT (see docstring below).
         limit_buffer_pct: float = 1.0,      # % above the stop trigger for the limit,
                                              # only used when pivot_price is set.
+        simulate_on_disconnect: bool = True,
     ) -> dict:
         """
         Submit a bracket order: entry + stop loss + profit target.
@@ -394,6 +395,19 @@ class IBKRBroker:
             e.g. a manual/agent-placed entry) → unchanged plain LIMIT entry leg.
         """
         if not self.is_connected:
+            # A locally simulated fill is useful for explicitly paper/simulation
+            # workflows, but it is never an acceptable substitute for a live
+            # broker acknowledgement.  A live caller can opt out so a gateway
+            # outage leaves its signal PENDING rather than creating a phantom
+            # Position in the application's database.
+            if not simulate_on_disconnect:
+                reason = self.last_error or "IBKR gateway is not connected"
+                logger.error(f"Bracket order blocked for {ticker}: {reason}")
+                return {
+                    "status": "error",
+                    "error": f"Live order not submitted: {reason}",
+                    "ticker": ticker,
+                }
             return _simulate_order(ticker, action, qty, entry_price, stop_price, order_ref)
 
         try:
@@ -442,14 +456,15 @@ class IBKRBroker:
             # legs submits the parent naked first and can leave the bracket in a
             # broken/rejected state.
             #
-            # TIF: ib_insync's bracket children default to GTC, but many IBKR
-            # accounts have an order preset that forces DAY — that TIF conflict
-            # makes the gateway CANCEL the legs (Error 10349). Set every leg to
-            # DAY explicitly so it matches the preset and isn't cancelled. (For
-            # GTC you must change the gateway's order preset, then set it here.)
-            for order in bracket:
+            # The entry is valid only for the session that produced this VCP
+            # breakout, so it remains DAY. Protective exits must remain working
+            # after a fill: DAY children would leave an overnight position
+            # unprotected at the close. IBKR supports a DAY parent with GTC
+            # children; any account preset that rejects GTC protection must be
+            # corrected at the gateway instead of silently weakening the stop.
+            for index, order in enumerate(bracket):
                 order.orderRef = order_ref
-                order.tif = "DAY"
+                order.tif = "DAY" if index == 0 else "GTC"
                 if self.account:
                     order.account = self.account  # Routes to correct sub-account under FA
 
@@ -526,12 +541,54 @@ class IBKRBroker:
             logger.error(f"Bracket order failed for {ticker}: {e}")
             return {"status": "error", "error": str(e), "ticker": ticker}
 
+    def submit_market_buy(
+        self,
+        ticker: str,
+        qty: float,
+        exchange_key: str = "ASX",
+        order_ref: str = "",
+        simulate_on_disconnect: bool = True,
+    ) -> dict:
+        """Plain market BUY for a confirmed Minervini pyramid add-on."""
+        if not self.is_connected:
+            if not simulate_on_disconnect:
+                return {"status": "error", "ticker": ticker,
+                        "error": self.last_error or "IBKR gateway is not connected"}
+            return _simulate_order(ticker, "BUY", qty, 0, 0, order_ref)
+        try:
+            contract = self._build_contract(ticker, exchange_key)
+            qualified = self._ib.qualifyContracts(contract)
+            if not qualified or not getattr(contract, "conId", 0):
+                return {"status": "error", "ticker": ticker,
+                        "error": f"contract not qualified for {ticker} on {exchange_key}"}
+            order = MarketOrder("BUY", qty)
+            order.orderRef = order_ref
+            order.tif = "DAY"
+            if self.account:
+                order.account = self.account
+            trade = self._ib.placeOrder(contract, order)
+            stable = {"Submitted", "PreSubmitted", "Filled", "Cancelled", "ApiCancelled", "Inactive", "Rejected", "PendingCancel"}
+            waited = 0.0
+            while trade.orderStatus.status not in stable and waited < 12.0:
+                self._ib.sleep(0.5)
+                waited += 0.5
+            status = trade.orderStatus.status
+            if status in {"Cancelled", "ApiCancelled", "Inactive", "Rejected", "PendingCancel"}:
+                return {"status": "error", "ticker": ticker, "error": f"IBKR {status}", "order_status": status}
+            return {"status": "submitted", "broker": "ibkr", "ticker": ticker, "qty": qty,
+                    "order_status": status, "ibkr_order_id": order.orderId,
+                    "ibkr_perm_id": getattr(order, "permId", None)}
+        except Exception as e:
+            logger.error(f"Market buy failed for {ticker}: {e}")
+            return {"status": "error", "error": str(e), "ticker": ticker}
+
     def submit_market_sell(
         self,
         ticker: str,             # yfinance format: "BHP.AX", "AAPL" — or bare symbol, either works
         qty: float,
         exchange_key: str = "ASX",
         order_ref: str = "",
+        simulate_on_disconnect: bool = True,
     ) -> dict:
         """
         Plain market SELL — used ONLY when a position has no working stop order
@@ -547,6 +604,11 @@ class IBKRBroker:
         Returns a dict in the same shape as submit_bracket_order's result.
         """
         if not self.is_connected:
+            if not simulate_on_disconnect:
+                return {
+                    "status": "error", "ticker": ticker,
+                    "error": self.last_error or "IBKR gateway is not connected",
+                }
             return _simulate_order(ticker, "SELL", qty, 0, 0, order_ref)
 
         try:
@@ -683,6 +745,43 @@ class IBKRBroker:
             return True, f"Sent global cancel — {cancelled} order(s) cancelled ({after} remaining)"
         except Exception as e:
             logger.error(f"cancel_all_orders failed: {e}")
+            return False, str(e)
+
+    def modify_stop_order(self, ibkr_order_id: int, new_stop_price: float, exchange_key: str) -> tuple[bool, str]:
+        """Raise an existing IBKR SELL stop without replacing its bracket.
+
+        The order is modified in place so its parent/OCA relationship survives.
+        We never lower a stop here; callers supply only a calculated higher
+        price after their Minervini/ATR trailing rule has advanced.
+        """
+        if not self.is_connected:
+            return False, "IBKR gateway is not connected"
+        try:
+            self._ib.reqAllOpenOrders()
+            self._ib.sleep(0.5)
+            for trade in self._ib.openTrades():
+                order = trade.order
+                if order.orderId != ibkr_order_id:
+                    continue
+                if order.action != "SELL" or order.orderType not in {"STP", "STP LMT"}:
+                    return False, f"Order {ibkr_order_id} is not a working SELL stop"
+                current = float(getattr(order, "auxPrice", 0) or 0)
+                rounded = self._round_to_tick(float(new_stop_price), exchange_key)
+                if rounded <= current:
+                    return True, f"Stop already at ${current:.4f} or tighter"
+                order.auxPrice = rounded
+                if order.orderType == "STP LMT" and getattr(order, "lmtPrice", 0):
+                    # Keep the stop-limit protection marketable by preserving
+                    # its existing stop-to-limit spread.
+                    spread = float(order.lmtPrice) - current
+                    order.lmtPrice = self._round_to_tick(rounded + spread, exchange_key)
+                self._ib.placeOrder(trade.contract, order)
+                self._ib.sleep(0.5)
+                logger.info(f"Modified IBKR stop {ibkr_order_id}: ${current:.4f} -> ${rounded:.4f}")
+                return True, ""
+            return False, f"Working stop order {ibkr_order_id} not found"
+        except Exception as e:
+            logger.error(f"Modify stop order failed: {e}")
             return False, str(e)
 
     def get_open_positions(self, exchange_key: str = None) -> list[dict]:

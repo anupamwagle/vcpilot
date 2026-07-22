@@ -135,6 +135,7 @@ def execute_signal_order(
                 Account.organization_id == organization_id, Account.is_active == True
             ).first()
             acct_id = acct.id if acct else None
+            account_is_paper = acct.is_paper if acct else True
             capital = float(acct.capital_aud) if acct and acct.capital_aud else 5000.0
             base_currency_cfg = db3.query(_SC).filter(
                 _SC.key == "working_capital_currency", _SC.organization_id == organization_id
@@ -188,7 +189,10 @@ def execute_signal_order(
     try:
         if is_crypto:
             from app.broker.crypto import get_crypto_broker_for_org
-            with get_crypto_broker_for_org(organization_id) as broker:
+            # A signal can belong to any enabled crypto venue.  Passing only
+            # the org would silently route it through the legacy default venue
+            # instead of the venue selected when the signal was screened.
+            with get_crypto_broker_for_org(organization_id, exchange_key=exchange_key) as broker:
                 result = broker.submit_bracket_order(
                     ticker=ticker,
                     action="BUY",
@@ -219,6 +223,7 @@ def execute_signal_order(
                     target_price=target_1 or entry_price * 1.20,
                     exchange_key=exchange_key,
                     order_ref=order_ref,
+                    simulate_on_disconnect=account_is_paper,
                 )
                 broker_name = result.get("broker", "ibkr")
     except Exception as oe:
@@ -244,7 +249,9 @@ def execute_signal_order(
     try:
         with get_db() as db4:
             from app.models.signal import Signal as _S2, SignalStatus as _SS
-            from app.models.trade import Position, TradeStatus
+            from app.models.trade import (
+                Position, Order, TradeStatus, OrderAction, OrderType, OrderStatus,
+            )
 
             sig = db4.query(_S2).filter(
                 _S2.id == signal_id, _S2.organization_id == organization_id
@@ -252,29 +259,40 @@ def execute_signal_order(
             if sig:
                 sig.status = _SS.TRIGGERED
 
-            pos = Position(
-                organization_id  = organization_id,
-                account_id       = acct_id,
-                ticker           = ticker,
-                exchange_key     = exchange_key,
-                asset_type       = asset_type,
-                currency         = currency,
-                entry_date       = datetime.utcnow().date(),
-                qty              = qty,
-                entry_price      = entry_price,
-                initial_stop     = stop_price,
-                current_stop     = stop_price,
-                target_1         = target_1 or entry_price * 1.20,
-                target_2         = (target_1 or entry_price * 1.20) * 1.167,
-                current_price    = entry_price,
-                status           = TradeStatus.OPEN,
-                signal_id        = signal_id,
-            )
-            db4.add(pos)
+            is_simulated = result.get("status") == "simulated" or result.get("simulated") is True
+            db4.add(Order(
+                ticker=ticker, exchange_key=exchange_key, asset_type=asset_type,
+                currency=currency, account_id=acct_id, organization_id=organization_id,
+                signal_id=signal_id, action=OrderAction.BUY, order_type=OrderType.BRACKET,
+                status=OrderStatus.FILLED if is_simulated else OrderStatus.SUBMITTED,
+                qty_ordered=qty, qty_filled=qty if is_simulated else 0,
+                limit_price=result.get("limit_price", entry_price), stop_price=stop_price,
+                avg_fill_price=entry_price if is_simulated else None,
+                is_paper=account_is_paper,
+                ibkr_order_id=None if is_crypto else result.get("ibkr_parent_id"),
+                perm_id=None if is_crypto else result.get("ibkr_parent_perm_id"),
+                external_order_id=result.get("entry_order_id") if is_crypto else None,
+                raw_ibkr_response=result, submitted_at=datetime.utcnow(),
+                filled_at=datetime.utcnow() if is_simulated else None,
+            ))
+
+            # IBKR's acknowledgement is not a fill. Leave the signal in its
+            # triggered state and let sync_order_status create the position from
+            # the execution report. Only explicit simulation has a local fill.
+            if is_simulated:
+                db4.add(Position(
+                    organization_id=organization_id, account_id=acct_id,
+                    ticker=ticker, exchange_key=exchange_key, asset_type=asset_type,
+                    currency=currency, entry_date=datetime.utcnow().date(), qty=qty,
+                    entry_price=entry_price, initial_stop=stop_price, current_stop=stop_price,
+                    target_1=target_1 or entry_price * 1.20,
+                    target_2=(target_1 or entry_price * 1.20) * 1.167,
+                    current_price=entry_price, status=TradeStatus.OPEN, signal_id=signal_id,
+                ))
 
             _audit(
-                db4, AuditAction.ORDER_FILLED,
-                f"{ticker} BUY {qty:.6g} @ A${entry_price:.4f} "
+                db4, AuditAction.ORDER_FILLED if is_simulated else AuditAction.ORDER_SUBMITTED,
+                f"{ticker} BUY {'filled (simulated)' if is_simulated else 'submitted'} {qty:.6g} @ A${entry_price:.4f} "
                 f"stop A${stop_price:.4f} target A${(target_1 or entry_price*1.20):.4f} "
                 f"broker={broker_name} ref={order_ref} — {notes}",
                 ticker=ticker,

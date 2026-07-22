@@ -148,6 +148,40 @@ def test_buy_fill_creates_position_with_signal_stop_and_targets(db_session, org_
     ).first() is not None
 
 
+def test_pyramid_buy_fill_adds_to_existing_position_once(db_session, org_and_account, fake_broker):
+    org, account = org_and_account
+    _set_ibkr_account(db_session, org)
+    pos = Position(
+        ticker="WOW.AX", exchange_key="ASX", asset_type="EQUITY", currency="AUD",
+        account_id=account.id, organization_id=org.id, entry_date=date(2026, 7, 1),
+        entry_price=37.0, qty=100, current_price=38.0, initial_stop=34.0, current_stop=34.0,
+        status=TradeStatus.OPEN, is_paper=False, pyramid_count=0,
+    )
+    db_session.add(pos)
+    db_session.flush()
+    order = Order(
+        ticker="WOW.AX", exchange_key="ASX", asset_type="EQUITY", currency="AUD",
+        account_id=account.id, organization_id=org.id, action=OrderAction.BUY,
+        order_type=OrderType.MARKET, status=OrderStatus.SUBMITTED,
+        qty_ordered=50, qty_filled=0, ibkr_order_id=9010, is_paper=False,
+        raw_ibkr_response={"pyramid_position_id": pos.id, "pyramid_number": 1},
+    )
+    db_session.add(order)
+    db_session.commit()
+    fake_broker.EXECUTIONS = [_exec(9010, 0, "BOT", 50, 39.0, ticker="WOW")]
+
+    trading.sync_order_status.run(organization_id=org.id)
+    db_session.expire_all()
+
+    updated = db_session.query(Position).filter_by(id=pos.id).one()
+    assert float(updated.qty) == 150.0
+    assert updated.pyramid_count == 1
+    # Repeat reconciliation must be idempotent, not add the same fill again.
+    trading.sync_order_status.run(organization_id=org.id)
+    db_session.expire_all()
+    assert float(db_session.query(Position).filter_by(id=pos.id).one().qty) == 150.0
+
+
 def test_day_order_expiry_reverts_signal_to_pending(db_session, org_and_account, fake_broker):
     org, account = org_and_account
     _set_ibkr_account(db_session, org)
@@ -212,6 +246,41 @@ def test_stop_child_fill_closes_position_with_real_price(db_session, org_and_acc
     assert db_session.query(AuditLog).filter(
         AuditLog.action == AuditAction.POSITION_CLOSED, AuditLog.ticker == "CBA.AX",
     ).first() is not None
+
+
+def test_manual_exit_sell_is_closed_only_by_reconciled_fill(db_session, org_and_account, fake_broker):
+    """A non-stop exit submission must not close the Position before IBKR fills."""
+    org, account = org_and_account
+    _set_ibkr_account(db_session, org)
+    pos = Position(
+        ticker="RIO.AX", exchange_key="ASX", asset_type="EQUITY", currency="AUD",
+        account_id=account.id, organization_id=org.id, entry_date=date(2026, 6, 15),
+        entry_price=100.0, qty=10, current_price=110.0, initial_stop=92.0,
+        current_stop=92.0, status=TradeStatus.OPEN, is_paper=True,
+    )
+    db_session.add(pos)
+    db_session.flush()
+    sell = Order(
+        ticker="RIO.AX", exchange_key="ASX", asset_type="EQUITY", currency="AUD",
+        account_id=account.id, organization_id=org.id, action=OrderAction.SELL,
+        order_type=OrderType.MARKET, status=OrderStatus.SUBMITTED, qty_ordered=10,
+        ibkr_order_id=4004, is_paper=True,
+        raw_ibkr_response={"position_id": pos.id, "exit_reason": "FAILED_BREAKOUT"},
+    )
+    db_session.add(sell)
+    db_session.commit()
+
+    fake_broker.EXECUTIONS = [{
+        "perm_id": 1, "order_id": 4004, "order_ref": f"exit-{pos.id}-FAILED_BREAKOUT",
+        "ticker": "RIO", "side": "SLD", "qty": 10, "avg_price": 109.5,
+        "commission": 6.0, "time": None, "account": "DU123",
+    }]
+    trading.sync_order_status.run(organization_id=org.id)
+
+    db_session.expire_all()
+    assert db_session.query(Position).filter_by(id=pos.id).one().status == TradeStatus.CLOSED
+    assert db_session.query(Order).filter_by(id=sell.id).one().status == OrderStatus.FILLED
+    assert db_session.query(Trade).filter_by(position_id=pos.id).count() == 1
 
 
 def test_target_child_fill_closes_position_as_profit_target(db_session, org_and_account, fake_broker):

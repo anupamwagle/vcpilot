@@ -80,6 +80,7 @@ class AgentCommandHandler:
             "BUY":       self.cmd_buy,
             "TRADE":     self.cmd_buy,
             "CONFIRM":   self.cmd_confirm,
+            "PYRAMID":   self.cmd_pyramid,
             "SKIP":      self.cmd_skip,
             "UNSKIP":    self.cmd_unskip,
             "EXIT":      self.cmd_exit,
@@ -493,11 +494,16 @@ class AgentCommandHandler:
             ).first()
             if not pos:
                 return f"No open position for {ticker}."
-            old_stop = float(pos.current_stop)
-            pos.current_stop = new_stop
-            db.add(pos)
-        self._audit(AuditAction.STOP_UPDATED, ticker=ticker,
-                    before_value=str(old_stop), after_value=str(new_stop))
+            position_id = pos.id
+        from app.trading.stop_executor import request_stop_update
+        result = request_stop_update(
+            position_id, self.organization_id, new_stop,
+            actor=self.sender or f"agent:{self.organization_id}",
+        )
+        if not result.get("ok"):
+            return f"Stop was not updated: {result.get('error', 'unknown error')}"
+        return f"Stop updated: ${result['old_stop']:.4f} -> ${result['new_stop']:.4f}"
+
         return f"✅ Stop for *{ticker}* updated: ${old_stop:.4f} → ${new_stop:.4f}"
 
     def cmd_buy(self, args) -> str:
@@ -542,6 +548,28 @@ class AgentCommandHandler:
                 f"⚠️ Live price & size are recalculated at execution — this may differ slightly.\n"
                 f"Reply *CONFIRM {raw}* to submit the order, or *SKIP {raw}* to cancel."
             )
+
+    def cmd_pyramid(self, args) -> str:
+        """Submit one explicitly enabled add-on to a confirmed winner."""
+        if not args:
+            return "Usage: PYRAMID <TICKER>"
+        with get_db() as db:
+            ticker = self._resolve_ticker(db, args[0])
+            pos = db.query(Position).filter(
+                Position.organization_id == self.organization_id,
+                Position.status == TradeStatus.OPEN,
+                Position.ticker == ticker,
+            ).first()
+        if not pos:
+            return f"No open position for {args[0]}."
+        from app.trading.pyramid_executor import request_pyramid_add_on
+        result = request_pyramid_add_on(
+            pos.id, self.organization_id, actor=self.sender or f"agent:{self.organization_id}",
+        )
+        if not result.get("ok"):
+            return f"Pyramid not submitted: {result.get('error', 'unknown error')}"
+        return (f"Pyramid add-on {result['status']}: {result['qty']:g}x {result['ticker']}. "
+                "Live quantity updates only after broker-fill reconciliation.")
 
     def cmd_confirm(self, args) -> str:
         """
@@ -666,6 +694,7 @@ class AgentCommandHandler:
             "REPORT — Daily P&L report\n"
             "BUY <TICKER> — Stage a live trade for review (then CONFIRM)\n"
             "CONFIRM <TICKER> — Execute a staged BUY as a bracket order\n"
+            "PYRAMID <TICKER> — Submit an enabled add-on to a winning position\n"
             "SKIP <TICKER> — Cancel today's signal\n"
             "UNSKIP <TICKER> — Restore skipped signal\n"
             "EXIT <TICKER> — Emergency exit position\n"

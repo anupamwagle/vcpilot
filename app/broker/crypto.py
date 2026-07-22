@@ -43,12 +43,18 @@ class CryptoBroker:
         api_secret: str = "",
         testnet: bool = True,     # Always default to testnet for safety
         organization_id: int = None,
+        provider_override: bool = False,
     ):
         self.ccxt_provider   = ccxt_provider.lower()
         self.api_key         = api_key
         self.api_secret      = api_secret
         self.testnet         = testnet
         self.organization_id = organization_id
+        # An explicit venue from a trading signal must win over the legacy
+        # single-select configuration. Otherwise a signal for one active venue
+        # can silently be sent to whichever provider happens to be configured
+        # as the organisation default.
+        self._provider_override = provider_override
         self._exchange       = None
         self._connected      = False
 
@@ -76,7 +82,7 @@ class CryptoBroker:
                 self.testnet    = testnet_val.lower() in ("true", "1", "yes")
 
                 provider = cfg("crypto_exchange_key") or ""
-                if provider and provider.startswith("CRYPTO_"):
+                if (not self._provider_override) and provider and provider.startswith("CRYPTO_"):
                     self.ccxt_provider = provider.replace("CRYPTO_", "").lower()
             finally:
                 db.close()
@@ -172,7 +178,12 @@ class CryptoBroker:
 
     @property
     def is_connected(self) -> bool:
-        return self._connected and CCXT_AVAILABLE and self._exchange is not None
+        # In production ``connect()`` cannot set _connected without ccxt and an
+        # exchange instance, so checking the instance is sufficient. Omitting
+        # the module-global availability flag also lets an injected exchange
+        # adapter be exercised in isolated tests without pretending the real
+        # dependency is installed.
+        return self._connected and self._exchange is not None
 
     # -------------------------------------------------------------------------
     # Account data
@@ -246,45 +257,48 @@ class CryptoBroker:
                 "entry_order_id": entry_order.get("id"),
                 "stop_order_id": None,
                 "target_order_id": None,
+                "protection_pending": True,
                 "broker": "ccxt",
                 "exchange": self.ccxt_provider,
                 "raw": str(entry_order),
             }
 
-            # 2. Attempt stop-loss order (if exchange supports it)
-            try:
-                stop_order = self._exchange.create_order(
-                    symbol=ccxt_symbol,
-                    type="stop_market",
-                    side="sell",
-                    amount=qty,
-                    price=stop_price,
-                    params={"stopPrice": stop_price},
-                )
-                result["stop_order_id"] = stop_order.get("id")
-            except Exception as e:
-                logger.warning(f"CryptoBroker: stop-loss order failed for {ticker}: {e}")
-
-            # 3. Attempt take-profit limit order
-            try:
-                tp_order = self._exchange.create_limit_order(
-                    symbol=ccxt_symbol,
-                    side="sell",
-                    amount=qty,
-                    price=target_price,
-                )
-                result["target_order_id"] = tp_order.get("id")
-            except Exception as e:
-                logger.warning(f"CryptoBroker: take-profit order failed for {ticker}: {e}")
-
             logger.info(
-                f"CryptoBroker bracket submitted: {ticker} {action} {qty} "
-                f"@ {entry_price} stop={stop_price} target={target_price}"
+                f"Crypto entry submitted: {ticker} {action} {qty} @ {entry_price}; "
+                "native stop will be placed after fill confirmation"
             )
             return result
 
         except Exception as e:
             logger.error(f"CryptoBroker: order failed for {ticker}: {e}")
+            return {"status": "error", "error": str(e), "ticker": ticker}
+
+    def submit_protective_stop(
+        self, ticker: str, qty: float, stop_price: float, order_ref: str = "",
+    ) -> dict:
+        """Place a native stop-market SELL after a confirmed BUY fill.
+
+        Entry and stop are separate deliberately: a pre-fill SELL condition can
+        sell unrelated inventory if the entry never fills.  Reconciliation owns
+        the resulting position state; this only acknowledges the protective
+        order was accepted by the venue.
+        """
+        if not self.is_connected:
+            return {"status": "error", "error": "Exchange is not connected; cannot protect filled position", "ticker": ticker}
+        try:
+            symbol = _yfinance_to_ccxt(ticker, self.ccxt_provider)
+            order = self._exchange.create_order(
+                symbol=symbol, type="stop_market", side="sell", amount=qty,
+                price=stop_price,
+                params={"stopPrice": stop_price, "clientOrderId": order_ref[:36] if order_ref else ""},
+            )
+            return {
+                "status": "submitted", "ticker": ticker, "qty": qty,
+                "stop_price": stop_price, "entry_order_id": order.get("id"),
+                "broker": "ccxt", "exchange": self.ccxt_provider, "raw": str(order),
+            }
+        except Exception as e:
+            logger.error(f"CryptoBroker: protective stop failed for {ticker}: {e}")
             return {"status": "error", "error": str(e), "ticker": ticker}
 
     def get_open_orders(self, ticker: str = None) -> list[dict]:
@@ -311,6 +325,84 @@ class CryptoBroker:
         except Exception as e:
             logger.error(f"CryptoBroker: cancel order failed for {order_id}: {e}")
             return False
+
+    def get_order(self, order_id: str, ticker: str) -> Optional[dict]:
+        """Fetch one order and normalize its broker-truth fill state.
+
+        ccxt uses venue-specific status strings.  The trading worker needs a
+        small, stable contract instead of guessing that a successful submit is
+        a fill: ``open`` remains working, ``closed``/a full filled quantity is
+        filled, and cancelled/rejected states are terminal failures.
+        """
+        if not self.is_connected or not order_id:
+            return None
+        try:
+            symbol = _yfinance_to_ccxt(ticker, self.ccxt_provider)
+            raw = self._exchange.fetch_order(order_id, symbol=symbol)
+            raw_status = str(raw.get("status") or "").lower()
+            filled = float(raw.get("filled") or 0)
+            amount = float(raw.get("amount") or 0)
+            if raw_status in {"closed", "filled"} or (amount > 0 and filled >= amount):
+                status = "filled"
+            elif raw_status in {"canceled", "cancelled", "rejected", "expired"}:
+                status = "cancelled"
+            elif filled > 0:
+                status = "partial"
+            else:
+                status = "open"
+            return {
+                "status": status,
+                "id": raw.get("id") or order_id,
+                "filled": filled,
+                "amount": amount,
+                "average": float(raw.get("average") or raw.get("price") or 0),
+                "fee": float((raw.get("fee") or {}).get("cost") or 0),
+                "raw": raw,
+            }
+        except Exception as e:
+            logger.error(f"CryptoBroker: order lookup failed for {order_id}: {e}")
+            return None
+
+    def submit_market_sell(self, ticker: str, qty: float, order_ref: str = "") -> dict:
+        """Submit a direct exit order; reconciliation owns the DB close."""
+        if not self.is_connected:
+            return _simulate_crypto_order(ticker, "SELL", qty, 0, 0, order_ref)
+        try:
+            symbol = _yfinance_to_ccxt(ticker, self.ccxt_provider)
+            raw = self._exchange.create_market_sell_order(
+                symbol=symbol, amount=qty,
+                params={"clientOrderId": order_ref[:36]} if order_ref else {},
+            )
+            return {
+                "status": "submitted",
+                "broker": "ccxt",
+                "exchange": self.ccxt_provider,
+                "ticker": ticker,
+                "qty": qty,
+                "entry_order_id": raw.get("id"),
+                "raw": raw,
+            }
+        except Exception as e:
+            logger.error(f"CryptoBroker: market sell failed for {ticker}: {e}")
+            return {"status": "error", "error": str(e), "ticker": ticker}
+
+    def submit_market_buy(self, ticker: str, qty: float, order_ref: str = "") -> dict:
+        """Submit an add-on BUY; reconciliation owns the position quantity."""
+        if not self.is_connected:
+            return _simulate_crypto_order(ticker, "BUY", qty, 0, 0, order_ref)
+        try:
+            symbol = _yfinance_to_ccxt(ticker, self.ccxt_provider)
+            raw = self._exchange.create_market_buy_order(
+                symbol=symbol, amount=qty,
+                params={"clientOrderId": order_ref[:36]} if order_ref else {},
+            )
+            return {
+                "status": "submitted", "broker": "ccxt", "exchange": self.ccxt_provider,
+                "ticker": ticker, "qty": qty, "entry_order_id": raw.get("id"), "raw": raw,
+            }
+        except Exception as e:
+            logger.error(f"CryptoBroker: market buy failed for {ticker}: {e}")
+            return {"status": "error", "error": str(e), "ticker": ticker}
 
     def get_positions(self) -> list[dict]:
         """
@@ -453,4 +545,5 @@ def get_crypto_broker_for_org(organization_id: int, exchange_key: str = None) ->
     return CryptoBroker(
         ccxt_provider=initial_provider,
         organization_id=organization_id,
+        provider_override=bool(exchange_key),
     )

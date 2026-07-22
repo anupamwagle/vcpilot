@@ -3425,6 +3425,7 @@ async def watchlist(
     label: int = Query(None),
     exchange: str = Query("ALL"),
     tier: str = Query(None),
+    view: str = Query("focus"),
     db: Session = Depends(get_db)
 ):
     """
@@ -3530,6 +3531,10 @@ async def watchlist(
         db.rollback(); ee = [{"key": "ASX", "name": "ASX", "flag": "", "asset_type": "EQUITY"}]
 
     _active_tier = (tier or "").upper() if tier in ("A", "B", "C") else None
+    # The trader-facing default is selective: Tier A candidates first,
+    # followed by explicitly marked favourites. Research views can opt into
+    # `view=all`, while label/tier/search requests retain their stated scope.
+    _active_view = "all" if str(view or "").lower() == "all" else "focus"
     ctx.update({
         "enabled_exchanges": ee,
         "exchange_filters": ef,
@@ -3544,6 +3549,8 @@ async def watchlist(
         "page": 1,
         "has_more": total > 0,
         "active_tier": _active_tier,
+        "active_view": _active_view,
+        "focus_active": _active_view == "focus" and _active_tier is None and label is None,
     })
     return templates.TemplateResponse("trading/watchlist.html", ctx)
 
@@ -3554,6 +3561,7 @@ async def watchlist_rows(
     label: int = Query(None),
     exchange: str = Query("ALL"),
     tier: str = Query(None),
+    view: str = Query("focus"),
     page: int = Query(1),
     q: str = Query(None),
     db: Session = Depends(get_db)
@@ -3581,12 +3589,15 @@ async def watchlist_rows(
 
     _tier_filter = (tier or "").upper() if tier in ("A", "B", "C") else None
     _search_term = (q or "").strip().lower()
+    _active_view = "all" if str(view or "").lower() == "all" else "focus"
+    _focus_mode = _active_view == "focus" and _tier_filter is None and label is None and not _search_term
 
     # ── Redis HTML cache (raw string, not JSON) — skipped entirely for searches ──
     _af = (exchange or "ALL").upper()
     _lbl_key = str(label) if label is not None else "all"
     _tier_key = _tier_filter or "all"
-    _html_ck = f"wl_rows:{org_id}:{_af}:{_lbl_key}:{_tier_key}:{page}"
+    _view_key = "focus" if _focus_mode else "all"
+    _html_ck = f"wl_rows:{org_id}:{_af}:{_lbl_key}:{_tier_key}:{_view_key}:{page}"
     if not _search_term:
         _cached_html = cache.get_raw(_html_ck)
         if _cached_html:
@@ -3599,6 +3610,20 @@ async def watchlist_rows(
 
     # Labels from Redis cache (card template needs them for label picker)
     labels = get_cached_wl_labels(org_id, db)
+    # `is_default` is the established Favourites-label semantic throughout the
+    # app (see _global and toggle_favourite). Resolve it once so Focus can
+    # include deliberate trader exceptions alongside objective Tier A setups.
+    try:
+        _fav_res = db.query(Watchlist.ticker).join(
+            WatchlistLabel, Watchlist.label_id == WatchlistLabel.id
+        ).filter(
+            Watchlist.organization_id == org_id,
+            Watchlist.status == WatchlistStatus.WATCHING,
+            WatchlistLabel.is_default == True,
+        ).all()
+        favourited_tickers = {row[0] for row in _fav_res}
+    except Exception:
+        favourited_tickers = set()
 
     # Same paginated query as the main route
     _WL_PER_PAGE = 20
@@ -3652,7 +3677,7 @@ async def watchlist_rows(
         total = min(total, _SEARCH_CAP)
         items = _ranked_matches[(page - 1) * _WL_PER_PAGE: page * _WL_PER_PAGE]
         has_more = (page * _WL_PER_PAGE) < total
-    elif _tier_filter:
+    elif _tier_filter or _focus_mode:
         # setup_tier (A/B/C) is derived from rule_results JSON + RS rating,
         # not a stored column, so it can't be filtered in SQL. Pulling only
         # one DB-side page (20 most-recently-added rows) and THEN filtering
@@ -3662,8 +3687,8 @@ async def watchlist_rows(
         # Instead pull the whole exchange/label-filtered set (capped),
         # compute tier for all of it below, then filter + paginate in
         # Python — same approach as the search branch above.
-        _TIER_CAP = 1000
-        items = wl_q.order_by(desc(Watchlist.created_at)).limit(_TIER_CAP).all()
+        _DERIVED_FILTER_CAP = 1000
+        items = wl_q.order_by(desc(Watchlist.created_at)).limit(_DERIVED_FILTER_CAP).all()
         total = None    # finalised after tier filter is applied, below
         has_more = None
     else:
@@ -3773,6 +3798,7 @@ async def watchlist_rows(
             "rule_results": _enrich_rule_results(w.ticker, rr, db, _bar_data=_bar_lookup_dict.get(w.ticker)),
             "label": lbl,
             "setup_tier": _wl_tier,
+            "is_favourite": w.ticker in favourited_tickers,
             "currency": getattr(w, "currency", None),
             # Internal keys consumed (and stripped) by _enrich_watchlist_vcp_and_sizing.
             "_wl_id": w.id,
@@ -3812,6 +3838,18 @@ async def watchlist_rows(
         favourited_tickers = {r[0] for r in _fav_res}
     except Exception:
         favourited_tickers = set()
+
+    if _focus_mode:
+        # Stable sorting retains recency within each group while guaranteeing
+        # Tier A appears before favourite exceptions that are still forming.
+        watchlist_data = [
+            w for w in watchlist_data
+            if w.get("setup_tier") == "A" or w.get("is_favourite")
+        ]
+        watchlist_data.sort(key=lambda w: 0 if w.get("setup_tier") == "A" else 1)
+        total = len(watchlist_data)
+        has_more = (page * _WL_PER_PAGE) < total
+        watchlist_data = watchlist_data[(page - 1) * _WL_PER_PAGE: page * _WL_PER_PAGE]
 
     # Render to string, cache it, return
     _html_out = templates.get_template("components/watchlist_cards.html").render({
@@ -3998,13 +4036,27 @@ async def close_position(
     db: Session = Depends(get_db),
 ):
     """
-    Manually close an open position using AstraTrade exit rules.
-    Records a Trade, marks Position CLOSED, writes audit, sends Telegram alert.
-    If exit_price is not provided, the last known current_price is used.
+    Submit a manual exit using AstraTrade exit rules.  A live position remains
+    OPEN until broker reconciliation confirms the execution; paper fills are
+    recorded immediately.
     """
     if not _auth(request):
         return RedirectResponse("/login", 302)
     org_id = request.session.get("organization_id")
+
+    # Never locally close a live position from an HTTP form.  The shared
+    # executor records a broker submission; reconciliation creates the final
+    # Trade only when the broker/exchange reports a fill.
+    from app.trading.exit_executor import request_position_exit
+    result = request_position_exit(
+        position_id=pos_id,
+        organization_id=org_id,
+        exit_reason=exit_reason,
+        actor=request.session.get("email", "dashboard"),
+        requested_price=exit_price,
+    )
+    message = "exit_submitted" if result.get("ok") else "exit_failed"
+    return RedirectResponse(f"/positions?msg={message}", 302)
 
     from app.models.trade import Position, Trade, TradeStatus, ExitReason, OrderAction, OrderType, OrderStatus, Order
     from app.models.audit import AuditLog, AuditAction

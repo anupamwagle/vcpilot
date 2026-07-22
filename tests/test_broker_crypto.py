@@ -191,10 +191,23 @@ def test_get_market_snapshot_exception_returns_none():
 def test_submit_bracket_order_connected():
     b, mock_ex = _make_connected_broker()
     mock_ex.create_limit_order.return_value = {"id": "ORD123"}
-    mock_ex.create_order.return_value = {"id": "SL456"}
     result = b.submit_bracket_order("BTC-USD", "BUY", 0.1, 90000, 85000, 95000)
     assert result["status"] == "submitted"
     assert result["entry_order_id"] == "ORD123"
+    assert result["protection_pending"] is True
+    # No SELL leg may exist before the entry has actually filled.
+    mock_ex.create_order.assert_not_called()
+
+
+def test_submit_protective_stop_connected():
+    b, mock_ex = _make_connected_broker()
+    mock_ex.create_order.return_value = {"id": "SL456"}
+
+    result = b.submit_protective_stop("BTC-USD", 0.1, 85000, "protect-1")
+
+    assert result["status"] == "submitted"
+    assert result["entry_order_id"] == "SL456"
+    assert mock_ex.create_order.call_args.kwargs["side"] == "sell"
 
 
 def test_submit_bracket_order_entry_fails_returns_error():
@@ -203,6 +216,22 @@ def test_submit_bracket_order_entry_fails_returns_error():
     result = b.submit_bracket_order("BTC-USD", "BUY", 0.1, 90000, 85000, 95000)
     assert result["status"] == "error"
     assert "Insufficient funds" in result["error"]
+
+
+def test_factory_explicit_exchange_key_wins_over_org_default(db_session, org_and_account):
+    """Each signal must route to its own active crypto venue, not the org default."""
+    from app.broker.crypto import get_crypto_broker_for_org
+    from app.models.config import SystemConfig
+
+    org, _ = org_and_account
+    db_session.add(SystemConfig(
+        key="crypto_exchange_key", organization_id=org.id,
+        value="CRYPTO_INDEPENDENTRESERVE",
+    ))
+    db_session.commit()
+
+    broker = get_crypto_broker_for_org(org.id, exchange_key="CRYPTO_MEXC")
+    assert broker.ccxt_provider == "mexc"
 
 
 def test_get_open_orders_connected():

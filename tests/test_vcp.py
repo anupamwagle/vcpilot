@@ -205,9 +205,23 @@ def test_check_breakout_fails_low_volume(monkeypatch):
     assert not results["vcp_breakout_volume"].passed
 
 
-def test_check_breakout_disabled_price_rule():
+def test_check_breakout_disabled_extension_rule():
     df = _flat_df(close=52.0, volume=900_000)
-    eng = Eng(disabled={"vcp_breakout_price"})
+    eng = Eng(disabled={"vcp_max_extension"})
     results = check_breakout("BHP.AX", df, pivot_price=51.0, avg_vol_50=500_000, engine=eng)
     assert "vcp_breakout_price" not in results
     assert "vcp_breakout_volume" in results
+
+
+def test_check_breakout_extension_gate_uses_seeded_rule_id():
+    """A production RuleEngine disables unknown rules, unlike the old test fake."""
+    class ProductionLikeEngine(Eng):
+        def is_enabled(self, rule_id):
+            return rule_id in self._t and rule_id not in self._d
+
+    df = _flat_df(close=52.0, volume=900_000)
+    results = check_breakout(
+        "BHP.AX", df, pivot_price=51.0, avg_vol_50=500_000,
+        engine=ProductionLikeEngine(),
+    )
+    assert results["vcp_breakout_price"].passed

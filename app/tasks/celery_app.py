@@ -10,6 +10,7 @@ Beat command: celery -A app.tasks.celery_app beat --loglevel=info
 from celery import Celery
 from celery.schedules import crontab, timedelta
 from celery.signals import worker_ready
+from loguru import logger
 from app.config import settings
 
 app = Celery(
@@ -340,6 +341,13 @@ app.conf.update(
             "kwargs": {"exchange_key": "CRYPTO"},
             "options": {"queue": "trading_crypto"},
         },
+        # Exchange-truth reconciliation for CCXT entries and exits. A submit
+        # acknowledgement never creates or closes a Position by itself.
+        "sync-crypto-order-status": {
+            "task": "app.tasks.trading.sync_crypto_order_status",
+            "schedule": crontab(minute="*/1"),
+            "options": {"queue": "trading_crypto"},
+        },
         # Stop sync + ATR trailing stop — every 5 min, 24/7
         "sync-stop-orders-crypto": {
             "task": "app.tasks.trading.sync_stop_orders",
@@ -386,6 +394,27 @@ app.conf.update(
         },
     },
 )
+
+
+@worker_ready.connect
+def enqueue_startup_broker_reconciliation(**_kwargs):
+    """Reconcile broker truth as soon as a worker becomes available.
+
+    Gateway/exchange fills can occur while a worker is restarting.  The normal
+    periodic schedules are a safety net, but waiting for the next market-hour
+    tick is not acceptable for a live position.  The tasks are idempotent and
+    carry their own organisation locks, so multiple worker processes starting
+    together are safe.
+    """
+    try:
+        app.send_task("app.tasks.trading.sync_ibkr_positions_task", queue="trading_equities")
+        app.send_task("app.tasks.trading.sync_order_status", queue="trading_equities")
+        app.send_task("app.tasks.trading.sync_crypto_order_status", queue="trading_crypto")
+        logger.info("Queued startup broker reconciliation tasks")
+    except Exception as error:
+        # A broker/Redis outage must not prevent the worker itself from coming
+        # online; the periodic schedule will retry and health checks surface it.
+        logger.warning(f"Could not queue startup broker reconciliation: {error}")
 
 
 @worker_ready.connect

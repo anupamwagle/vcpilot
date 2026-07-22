@@ -109,8 +109,9 @@ def test_submit_bracket_order_simulation():
 def test_cancel_order_simulation_returns_true():
     from app.broker.ibkr import IBKRBroker
     b = IBKRBroker()
-    result = b.cancel_order(12345)
-    assert result is True
+    ok, reason = b.cancel_order(12345)
+    assert ok is True
+    assert reason == ""
 
 
 def test_get_open_positions_not_connected():

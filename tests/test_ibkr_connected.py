@@ -100,6 +100,13 @@ def test_submit_bracket_order_stop_limit_entry_for_buy_with_pivot(monkeypatch):
     assert float(stop_loss.auxPrice) == pytest.approx(37.00)
     assert stop_loss.transmit is True
 
+    # The breakout entry expires with the session, but its protective legs
+    # must survive after a fill. A DAY stop would leave an overnight position
+    # without broker-side protection.
+    assert parent.tif == "DAY"
+    assert take_profit.tif == "GTC"
+    assert stop_loss.tif == "GTC"
+
 
 def test_submit_bracket_order_trigger_uses_pivot_when_higher_than_confirm_price(monkeypatch):
     """Stop trigger = max(pivot, confirm price) — a confirm price that reads
@@ -163,6 +170,22 @@ def test_submit_bracket_order_connected_exception(monkeypatch):
 
     assert result["status"] == "error"
     assert "Connection reset" in result["error"]
+
+
+def test_submit_bracket_order_can_refuse_simulation_when_disconnected():
+    """Live callers must never receive a simulated fill after a gateway outage."""
+    from app.broker.ibkr import IBKRBroker
+
+    b = IBKRBroker()
+    b.last_error = "gateway unavailable"
+    result = b.submit_bracket_order(
+        ticker="BHP", action="BUY", qty=100,
+        entry_price=40.0, stop_price=37.0, target_price=48.0,
+        simulate_on_disconnect=False,
+    )
+
+    assert result["status"] == "error"
+    assert "Live order not submitted" in result["error"]
 
 
 # ────────────────────────────────────────────────────────────
@@ -320,16 +343,37 @@ def test_cancel_order_connected_found():
     mock_ib.openTrades.return_value = [mock_trade]
     mock_ib.cancelOrder = MagicMock()
 
-    result = b.cancel_order(99)
-    assert result is True
+    ok, reason = b.cancel_order(99)
+    assert ok is True
+    assert reason == ""
 
 
 def test_cancel_order_connected_not_found():
     b, mock_ib = _make_connected_ibkr()
     mock_ib.openTrades.return_value = []
 
-    result = b.cancel_order(99)
-    assert result is False
+    ok, reason = b.cancel_order(99)
+    assert ok is False
+    assert "different IBKR client session" in reason
+
+
+def test_modify_stop_order_raises_existing_broker_stop():
+    b, mock_ib = _make_connected_ibkr()
+    trade = MagicMock()
+    trade.contract = MagicMock()
+    trade.order.orderId = 77
+    trade.order.action = "SELL"
+    trade.order.orderType = "STP"
+    trade.order.auxPrice = 37.0
+    mock_ib.openTrades.return_value = [trade]
+    mock_ib.sleep = MagicMock()
+
+    ok, reason = b.modify_stop_order(77, 38.0, "ASX")
+
+    assert ok is True
+    assert reason == ""
+    assert float(trade.order.auxPrice) == pytest.approx(38.0)
+    mock_ib.placeOrder.assert_called_once_with(trade.contract, trade.order)
 
 
 # ────────────────────────────────────────────────────────────

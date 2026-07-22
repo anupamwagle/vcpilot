@@ -32,6 +32,7 @@ from app.screener.price_filter import price_in_range
 from app.screener.liquidity_filter import liquidity_ok
 from app.screener.market_regime import evaluate_market_regime, MarketRegime
 from app.screener.crypto_rules import evaluate_crypto_rules, get_crypto_fundamental_data
+from app.screener.sector_leadership import load_sector_returns, evaluate_sector_leadership
 from app.risk.manager import calculate_position_size
 from app.notifications import get_notifier
 
@@ -980,6 +981,10 @@ def run_daily_screen(self, exchange_key: str = "ASX"):
 
             # Pre-load stocks map
             stocks_map = {s.ticker: s for s in db.query(Stock).filter(Stock.is_active == True).all()}
+            equity_markets = {s.exchange_key for s in stocks_map.values() if s.asset_type == "EQUITY"}
+            sector_returns_by_exchange = {
+                market: load_sector_returns(db, market) for market in equity_markets
+            }
 
         # ── Auto-bootstrap: if universe is empty, fetch it now ────────────
         if not tickers and exchange_key == "ASX":
@@ -1114,9 +1119,21 @@ def run_daily_screen(self, exchange_key: str = "ASX"):
                     # --- VCP Detection ---
                     avg_vol = float(df["avg_vol_50"].iloc[-1] or 0)
                     vcp_result, vcp_rules = detect_vcp(ticker, df, ticker_engine, avg_vol)
+                    sector_result = None
+                    if asset_type != "CRYPTO":
+                        sector_result = evaluate_sector_leadership(
+                            fundamentals.get("sector") or (stock_obj.sector if stock_obj else None),
+                            sector_returns_by_exchange.get(stock_obj.exchange_key if stock_obj else exchange_key, {}),
+                            ticker_engine,
+                        )
                     if not vcp_result.detected:
                         with get_db() as db:
-                            _upsert_watchlist(ticker, {**trend_results, **fund_results, **vcp_rules}, db, organization_id=org.id, vcp_result=vcp_result)
+                            _upsert_watchlist(ticker, {**trend_results, **fund_results, **vcp_rules, **({sector_result.rule_id: sector_result} if sector_result else {})}, db, organization_id=org.id, vcp_result=vcp_result)
+                        watchlist_added += 1
+                        continue
+                    if sector_result and not sector_result.passed:
+                        with get_db() as db:
+                            _upsert_watchlist(ticker, {**trend_results, **fund_results, **vcp_rules, sector_result.rule_id: sector_result}, db, organization_id=org.id, vcp_result=vcp_result)
                         watchlist_added += 1
                         continue
 
@@ -1153,7 +1170,7 @@ def run_daily_screen(self, exchange_key: str = "ASX"):
                         is_crypto=(asset_type == "CRYPTO"),
                     )
 
-                    all_rule_results = {**trend_results, **fund_results, **vcp_rules}
+                    all_rule_results = {**trend_results, **fund_results, **vcp_rules, **({sector_result.rule_id: sector_result} if sector_result else {})}
 
                     # Use stock's actual exchange_key so NASDAQ stocks don't get tagged NYSE
                     signal_exchange_key = (stock_obj.exchange_key if stock_obj and stock_obj.exchange_key else exchange_key) or exchange_key
@@ -1351,6 +1368,10 @@ def _run_screen_force(self, organization_id: int = None, exchange_key: str = "AS
 
             # Pre-load stocks map
             stocks_map = {s.ticker: s for s in db.query(Stock).filter(Stock.is_active == True).all()}
+            equity_markets = {s.exchange_key for s in stocks_map.values() if s.asset_type == "EQUITY"}
+            sector_returns_by_exchange = {
+                market: load_sector_returns(db, market) for market in equity_markets
+            }
 
         # Auto-bootstrap ASX universe only — never bootstrap on crypto/US keys
         if not tickers and exchange_key in (None, "ASX"):
@@ -1506,6 +1527,18 @@ def _run_screen_force(self, organization_id: int = None, exchange_key: str = "AS
                             avg_vol = float(df["avg_vol_50"].iloc[-1] or 0)
                             vcp_result, vcp_rules = detect_vcp(ticker, df, ticker_engine, avg_vol)
 
+                            sector_result = None
+                            if asset_type != "CRYPTO":
+                                sector_result = evaluate_sector_leadership(
+                                    fundamentals.get("sector") or (stock_obj.sector if stock_obj else None),
+                                    sector_returns_by_exchange.get(stock_obj.exchange_key if stock_obj else exchange_key, {}),
+                                    ticker_engine,
+                                )
+                                if sector_result:
+                                    icon = "✓" if sector_result.passed else "✗"
+                                    rule_summary.append(f"{icon} sector_leadership: {sector_result.message}")
+                            sector_ok = sector_result is None or sector_result.passed
+
                             for rid, r in vcp_rules.items():
                                 icon = "✓" if r.passed else "✗"
                                 rule_summary.append(f"{icon} {rid.replace('vcp_','')}: {r.message or ''}")
@@ -1528,7 +1561,7 @@ def _run_screen_force(self, organization_id: int = None, exchange_key: str = "AS
                             crypto_total  = len(crypto_rule_results)
                             crypto_ok = (crypto_total == 0) or (crypto_passed == crypto_total)
 
-                            if vcp_result.detected and crypto_ok:
+                            if vcp_result.detected and crypto_ok and sector_ok:
                                 # ── FULL SIGNAL ──────────────────────────────────
                                 latest    = df.iloc[-1]
                                 rs_rating = float(rs_ratings.get(ticker, 0))
@@ -1564,7 +1597,7 @@ def _run_screen_force(self, organization_id: int = None, exchange_key: str = "AS
                                 # Use stock's actual exchange_key for the signal (not the generic "CRYPTO" sweep key)
                                 signal_exchange_key = (stock_obj.exchange_key if stock_obj and stock_obj.exchange_key else exchange_key) or exchange_key
 
-                                all_rule_results = {**trend_results, **fund_results, **vcp_rules, **crypto_rule_results}
+                                all_rule_results = {**trend_results, **fund_results, **vcp_rules, **crypto_rule_results, **({sector_result.rule_id: sector_result} if sector_result else {})}
                                 signal = Signal(
                                     ticker=ticker,
                                     exchange_key=signal_exchange_key,
@@ -1625,9 +1658,11 @@ def _run_screen_force(self, organization_id: int = None, exchange_key: str = "AS
                                         logger.info(f"SIGNAL: {ticker} pivot=${vcp_result.pivot_price:.3f}")
                             else:
                                 # Trend + fundamentals pass but no VCP / crypto gate → watchlist
-                                reason = f"VCP not detected ({vcp_result.contraction_count or 0} contractions)" if not vcp_result.detected else f"Crypto rules failed ({crypto_passed}/{crypto_total})"
+                                reason = (f"VCP not detected ({vcp_result.contraction_count or 0} contractions)" if not vcp_result.detected
+                                          else f"Crypto rules failed ({crypto_passed}/{crypto_total})" if not crypto_ok
+                                          else sector_result.message if sector_result else "Entry gate failed")
                                 with get_db() as db:
-                                    _upsert_watchlist(ticker, {**trend_results, **fund_results, **vcp_rules, **crypto_rule_results}, db, organization_id=org.id, vcp_result=vcp_result)
+                                    _upsert_watchlist(ticker, {**trend_results, **fund_results, **vcp_rules, **crypto_rule_results, **({sector_result.rule_id: sector_result} if sector_result else {})}, db, organization_id=org.id, vcp_result=vcp_result)
                                     db.add(AuditLog(
                                         action=AuditAction.SCREENER_TICKER,
                                         organization_id=org.id,
@@ -2214,6 +2249,16 @@ def screen_single_ticker(
         avg_vol = float(df["avg_vol_50"].iloc[-1] or 0)
         vcp_result, vcp_rules = detect_vcp(ticker, df, engine, avg_vol)
 
+        sector_result = None
+        if asset_type != "CRYPTO":
+            with get_db() as db:
+                stock_sector = fundamentals.get("sector")
+                if not stock_sector:
+                    stock_row = db.query(Stock).filter(Stock.ticker == ticker).first()
+                    stock_sector = stock_row.sector if stock_row else None
+                sector_returns = load_sector_returns(db, exchange_key)
+            sector_result = evaluate_sector_leadership(stock_sector, sector_returns, engine)
+
         # --- Crypto-specific rules (CRYPTO only) ---
         crypto_rule_results: dict = {}
         if asset_type == "CRYPTO":
@@ -2227,7 +2272,7 @@ def screen_single_ticker(
                 btc_df=None,  # BTC regime self-checks; non-BTC assets skip if no BTC data
             )
 
-        all_rule_results = {**trend_results, **fund_results, **vcp_rules, **crypto_rule_results}
+        all_rule_results = {**trend_results, **fund_results, **vcp_rules, **crypto_rule_results, **({sector_result.rule_id: sector_result} if sector_result else {})}
 
         # Crypto rule gate: all enabled crypto rules must pass (or no crypto rules evaluated)
         crypto_passed = sum(1 for r in crypto_rule_results.values() if r.passed)
@@ -2235,7 +2280,7 @@ def screen_single_ticker(
         crypto_ok = (crypto_total == 0) or (crypto_passed == crypto_total)
 
         # If all rules pass + VCP detected, create a Signal!
-        if trend_passed == trend_total and (fund_total == 0 or (fund_passed / fund_total) >= 0.75) and vcp_result.detected and crypto_ok:
+        if trend_passed == trend_total and (fund_total == 0 or (fund_passed / fund_total) >= 0.75) and vcp_result.detected and crypto_ok and (sector_result is None or sector_result.passed):
             # Full Signal!
             with get_db() as db:
                 from app.models.account import Account

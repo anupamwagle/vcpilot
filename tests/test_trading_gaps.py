@@ -132,7 +132,7 @@ def test_check_entry_triggers_market_closed_returns_early(db_session, org_and_ac
 # check_exit_rules_task — exit triggered writes Trade
 # ────────────────────────────────────────────────────────────
 
-def test_check_exit_rules_task_stop_loss_creates_trade(db_session, org_and_account, monkeypatch):
+def test_check_exit_rules_task_defers_equity_stop_to_broker_sync(db_session, org_and_account, monkeypatch):
     from app.tasks.trading import check_exit_rules_task
     from app.models.trade import Trade, Position, TradeStatus
     from app.screener.exit_rules import ExitSignal
@@ -172,13 +172,12 @@ def test_check_exit_rules_task_stop_loss_creates_trade(db_session, org_and_accou
 
     db_session.expire_all()
     pos_refreshed = db_session.query(Position).filter(Position.id == pos.id).first()
-    assert pos_refreshed.status == TradeStatus.CLOSED
+    assert pos_refreshed.status == TradeStatus.OPEN
 
     trade = db_session.query(Trade).filter(
         Trade.organization_id == org.id, Trade.ticker == "BHP.AX"
     ).first()
-    assert trade is not None
-    assert "STOP" in str(trade.exit_reason)
+    assert trade is None
 
 
 def test_check_exit_rules_task_failed_breakout_creates_trade(db_session, org_and_account, monkeypatch):

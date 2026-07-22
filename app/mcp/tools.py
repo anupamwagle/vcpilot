@@ -25,6 +25,7 @@ Positions & Trading
   get_positions          → list open positions with live P&L
   get_portfolio_stats    → summary: capital, heat, P&L
   place_order            → submit a AstraTrade bracket order for a signal
+  pyramid_position       → submit a controlled add-on to a winning position
   close_position         → close an open position with an exit reason
   pause_trading          → halt automated trading for the org
   resume_trading         → re-enable automated trading for the org
@@ -700,6 +701,19 @@ def place_order(
     )
 
 
+def pyramid_position(position_id: int) -> dict:
+    """Submit one controlled add-on to an explicitly enabled winning position.
+
+    The broker fill, not this request, updates the position quantity and
+    ``pyramid_count``.  The configured Minervini profit and maximum-add rules
+    are enforced before submission.
+    """
+    assert_scope("trading:write")
+    ctx = _ctx()
+    from app.trading.pyramid_executor import request_pyramid_add_on
+    return request_pyramid_add_on(position_id, ctx.org_id, actor=f"mcp:{ctx.client_id}")
+
+
 def close_position(
     position_id: int,
     exit_reason: str,
@@ -716,10 +730,21 @@ def close_position(
         exit_price:  Optional override price. Uses last close if omitted.
 
     Returns:
-        {"ok": true, "position_id": N, "ticker": "...", "realised_pnl": N}
+        {"ok": true, "status": "submitted|filled", "ticker": "..."}
     """
     assert_scope("trading:write")
     ctx = _ctx()
+
+    # A live close must be submitted to the broker and reconciled from its
+    # fill.  Do not let an MCP caller create a fictitious closed Trade locally.
+    from app.trading.exit_executor import request_position_exit
+    return request_position_exit(
+        position_id=position_id,
+        organization_id=ctx.org_id,
+        exit_reason=exit_reason.upper(),
+        actor=f"mcp:{ctx.client_id}",
+        requested_price=exit_price,
+    )
 
     with get_db() as db:
         from app.models.trade import Position, Trade, TradeStatus, ExitReason
