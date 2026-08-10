@@ -64,15 +64,115 @@ def _get_pending_signals_for_exchange(db, org_id: int, exchange_key: str):
         ).all()
 
 
+def _breakout_status_for_signal(org_id: int, signal, engine: "RuleEngine") -> dict | None:
+    """Read-only breakout status for one PENDING signal — live price vs pivot,
+    volume, and the full VCP breakout rule breakdown — without submitting any
+    order. This is the same computation the live entry-check loop below does
+    just before deciding to trigger; factored out so the various
+    automation-not-acting skip paths (paused, kill switch, daily-loss halt,
+    opening-noise guard) can show *which condition* hasn't been met yet
+    instead of just "skipped" with no detail. Returns None if no price data
+    is available or the check itself fails — callers fall back to the plain
+    skip message in that case."""
+    try:
+        df = get_price_history(signal.ticker, period="3mo")
+        if df is None or df.empty:
+            return None
+
+        eod_latest = df.iloc[-1]
+        avg_vol = float(eod_latest["avg_vol_50"] or 0)
+
+        intraday = get_intraday_price(signal.ticker, organization_id=org_id, asset_type=signal.asset_type)
+        if intraday["ok"] and intraday["price"]:
+            close_price = intraday["price"]
+            vol_current = intraday["volume"] or int(eod_latest.get("volume", 0))
+            data_source = intraday["data_source"]
+            delay_mins  = intraday["delay_mins"] if intraday["delay_mins"] is not None else 20
+        else:
+            close_price = float(eod_latest["close"])
+            vol_current = int(eod_latest.get("volume", 0))
+            data_source = "eod_fallback"
+            delay_mins  = None
+
+        df_check = df.copy()
+        df_check.loc[df_check.index[-1], "close"] = close_price
+
+        overrides = signal.rule_overrides or {}
+        if overrides:
+            engine.apply_signal_overrides(overrides)
+        try:
+            breakout_rules = check_breakout(signal.ticker, df_check, float(signal.pivot_price), avg_vol, engine)
+        finally:
+            engine.clear_signal_overrides()
+
+        all_passed = all(r.passed for r in breakout_rules.values())
+        rule_detail = {
+            rid: {"passed": r.passed, "value": r.value, "threshold": r.threshold, "message": r.message}
+            for rid, r in breakout_rules.items()
+        }
+        failed = [r.message for r in breakout_rules.values() if not r.passed]
+        pivot_price = float(signal.pivot_price)
+        pct_vs_pivot = round((close_price - pivot_price) / pivot_price * 100, 4) if pivot_price else None
+
+        if all_passed:
+            note = f"@ ${close_price:.3f} [{data_source}] — breakout conditions met, would trigger if automation were active"
+        else:
+            sign = "+" if (pct_vs_pivot or 0) >= 0 else ""
+            note = (f"@ ${close_price:.3f} [{data_source}] | pivot ${pivot_price:.3f} "
+                    f"({sign}{pct_vs_pivot:.1f}%) — " + "; ".join(failed))
+
+        return {
+            "close": close_price, "pivot": pivot_price, "pct_vs_pivot": pct_vs_pivot,
+            "avg_vol": avg_vol, "vol_current": vol_current,
+            "data_source": data_source, "delay_mins": delay_mins,
+            "all_passed": all_passed, "rules": rule_detail, "note": note,
+        }
+    except Exception as e:
+        logger.debug(f"_breakout_status_for_signal: {signal.ticker} status check failed: {e}")
+        return None
+
+
 def _audit_skip_all_pending(org_id: int, exchange_key: str, message: str, result_tag: str):
     """Write a per-signal skip AuditLog for every PENDING signal in scope, so
-    the Signals/Data Log UI shows why nothing happened this run."""
+    the Signals/Data Log UI shows why nothing happened this run.
+
+    Also attaches a read-only breakout status (live price vs pivot, volume,
+    full rule breakdown — see _breakout_status_for_signal) per signal, so an
+    org that's paused/kill-switched/halted still shows *which condition*
+    hasn't been met, not just a bare "skipped" message with no detail
+    (previously the Signals page had no way to tell whether a paused signal
+    was 1% or 20% away from its pivot)."""
     try:
         with get_db() as _db:
-            for sig in _get_pending_signals_for_exchange(_db, org_id, exchange_key):
+            from app.models.account import Organization
+            org = _db.query(Organization).filter(Organization.id == org_id).first()
+            sig_list = list(_get_pending_signals_for_exchange(_db, org_id, exchange_key))
+            tier = org.tier.value if org else None
+
+        # Status computation involves network I/O (live price fetch) — do it
+        # outside any open db session, then write all the audit rows in one
+        # final session, mirroring the pattern used by the live check loop.
+        engine = RuleEngine(organization_id=org_id, tier=tier) if tier else None
+        rows = []
+        for sig in sig_list:
+            status = _breakout_status_for_signal(org_id, sig, engine) if engine else None
+            if status:
+                rows.append((sig, f"{message} | {sig.ticker}: {status['note']}", {
+                    "signal_id": sig.id, "result": result_tag,
+                    "skip_reason": message, "breakout_all_passed": status["all_passed"],
+                    "close": status["close"], "pivot": status["pivot"],
+                    "avg_vol": round(status["avg_vol"]) if status["avg_vol"] else None,
+                    "data_source": status["data_source"], "delay_mins": status["delay_mins"],
+                    "rules": status["rules"],
+                }))
+            else:
+                rows.append((sig, message, {"signal_id": sig.id, "result": result_tag}))
+
+        with get_db() as _db:
+            for sig, msg, detail in rows:
                 _db.add(AuditLog(
                     action=AuditAction.TASK_RUN, organization_id=org_id, ticker=sig.ticker,
-                    message=message, detail={"signal_id": sig.id, "result": result_tag},
+                    message=msg, detail=detail,
                 ))
             _db.commit()
     except Exception as e:

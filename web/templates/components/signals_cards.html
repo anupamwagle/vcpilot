@@ -175,6 +175,7 @@
   {% set chk = s.last_check %}
   {% set triggered = chk.result == 'triggered' %}
   {% set not_triggered = chk.result == 'not_triggered' %}
+  {% set automation_skip = chk.result in ['skipped_paused', 'skipped_kill_switch', 'skipped_daily_loss_halt', 'skipped_opening_noise'] %}
   {# Collect failed rules for the inline summary #}
   {% if chk.rules and not triggered %}
     {% set ns = namespace(failed=[]) %}
@@ -186,10 +187,10 @@
   {% else %}
     {% set ns = namespace(failed=[]) %}
   {% endif %}
-  <div id="chk-row-{{ s.id }}" style="padding:.625rem 1rem;border-bottom:1px solid var(--border);background:{% if triggered %}var(--pos-bg){% elif not_triggered %}rgba(220,38,38,.04){% else %}var(--surface-alt){% endif %}">
+  <div id="chk-row-{{ s.id }}" style="padding:.625rem 1rem;border-bottom:1px solid var(--border);background:{% if triggered %}var(--pos-bg){% elif automation_skip %}var(--warn-bg){% elif not_triggered %}rgba(220,38,38,.04){% else %}var(--surface-alt){% endif %}">
     <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
-      <span id="chk-label-{{ s.id }}" style="font-size:.7rem;font-weight:700;color:{% if triggered %}var(--pos){% elif not_triggered %}var(--neg){% else %}var(--text-muted){% endif %}">
-        {% if triggered %}✅ Entry triggered{% elif not_triggered %}❌ Breakout check{% else %}⏱ Last breakout check{% endif %}
+      <span id="chk-label-{{ s.id }}" style="font-size:.7rem;font-weight:700;color:{% if triggered %}var(--pos){% elif automation_skip %}var(--warn){% elif not_triggered %}var(--neg){% else %}var(--text-muted){% endif %}">
+        {% if triggered %}✅ Entry triggered{% elif automation_skip %}⏸ {% if chk.all_passed %}Would trigger — automation paused{% else %}Breakout check (automation paused){% endif %}{% elif not_triggered %}❌ Breakout check{% else %}⏱ Last breakout check{% endif %}
       </span>
       <span id="chk-time-{{ s.id }}" style="font-size:.7rem;color:var(--text-subtle);font-family:'SF Mono',monospace">{{ chk.time }}</span>
       {% if chk.close %}
@@ -210,10 +211,15 @@
         ✗ {{ r.label }}{% if r.message %} — <span style="font-weight:normal;opacity:.85">{{ r.message }}</span>{% endif %}
       </span>
       {% endfor %}
-      {% elif not triggered and not chk.rules %}
+      {% elif not triggered and not chk.rules and not automation_skip %}
       <span style="font-size:.7rem;color:var(--neg);font-weight:500;margin-left:.25rem">│ {{ chk.message }}</span>
       {% endif %}
     </div>
+    {% if automation_skip %}
+    <div style="margin-top:.35rem">
+      <span style="font-size:.68rem;color:var(--warn);font-weight:600">⚠ {{ chk.skip_reason or chk.message }}</span>
+    </div>
+    {% endif %}
     {% if chk.rules %}
     <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-top:.5rem">
       {% for r in chk.rules %}
