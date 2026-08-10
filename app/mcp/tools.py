@@ -174,15 +174,26 @@ def get_signals(
     status: Optional[str] = None,
     exchange_key: Optional[str] = None,
     limit: int = 50,
+    days_back: Optional[int] = None,
 ) -> dict:
     """
-    Return today's AstraTrade signals for the organisation.
+    Return AstraTrade signals for the organisation.
+
+    PENDING signals stay live (waiting for a breakout above pivot) for as
+    long as they remain PENDING — they are not bound to the day they were
+    generated. Callers that want automated entry-checking (e.g. an external
+    executor polling for PENDING signals) must see signals from any day, not
+    just today, or a signal generated days ago that later breaks out will
+    silently never be picked up.
 
     Args:
         status:       Filter by status: PENDING, TRIGGERED, SKIPPED, EXPIRED, CANCELLED.
                       Omit to return all.
         exchange_key: Filter by exchange (ASX, NYSE, NASDAQ, CRYPTO_INDEPENDENTRESERVE). Omit for all.
         limit:        Maximum rows to return. Default 50.
+        days_back:    Only return signals from the last N days. Omit for no date
+                      restriction (recommended when status="PENDING", since a
+                      still-open signal is actionable regardless of its age).
 
     Returns:
         {"signals": [...], "total": N}
@@ -192,12 +203,14 @@ def get_signals(
 
     with get_db() as db:
         from app.models.signal import Signal, SignalStatus
-        from app.utils.time_helper import get_current_date
 
         q = db.query(Signal).filter(
             Signal.organization_id == ctx.org_id,
-            Signal.signal_date == get_current_date(),
         )
+        if days_back is not None:
+            from datetime import timedelta
+            from app.utils.time_helper import get_current_date
+            q = q.filter(Signal.signal_date >= get_current_date() - timedelta(days=days_back))
         if status:
             try:
                 q = q.filter(Signal.status == SignalStatus[status.upper()])
