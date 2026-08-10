@@ -9560,6 +9560,7 @@ async def superadmin_mcp_generate(
         name                  = name,
         client_id             = client_id,
         client_secret_hash    = hash_secret(plain_secret),
+        client_secret_preview = plain_secret[-8:],
         scopes                = selected_scopes,
         expires_at            = datetime.utcnow() + timedelta(days=MCP_CREDENTIAL_VALIDITY_DAYS),
         is_active             = True,
