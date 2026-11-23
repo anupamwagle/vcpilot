@@ -27,7 +27,15 @@ if os.getenv("APP_ENV", "development") == "production":
         raise RuntimeError("SUPERADMIN_PASSWORD must be set to a non-default value in production")
 
 app = FastAPI(title="AstraTrade", docs_url=None, redoc_url=None, openapi_url=None)
-app.add_middleware(SessionMiddleware, secret_key=_app_secret_key)
+app.add_middleware(
+    SessionMiddleware, secret_key=_app_secret_key,
+    https_only=os.getenv("SESSION_HTTPS_ONLY", "false").lower() == "true",
+)
+if os.getenv("ASTRA_ALLOWED_HOSTS"):
+    from starlette.middleware.trustedhost import TrustedHostMiddleware
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[
+        host.strip() for host in os.environ["ASTRA_ALLOWED_HOSTS"].split(",") if host.strip()
+    ])
 from app.recovery import RecoveryMiddleware, recovery_enabled
 app.add_middleware(RecoveryMiddleware)
 
@@ -445,6 +453,7 @@ def get_cached_wl_labels(org_id: int, db: Session) -> list[dict]:
 templates = Jinja2Templates(directory="/app/web/templates")
 templates.env.globals["recovery_enabled"] = recovery_enabled
 templates.env.globals["synthetic_review"] = os.getenv("ASTRA_SYNTHETIC_DATA") == "true"
+templates.env.globals["fresh_production"] = os.getenv("ASTRA_FRESH_PRODUCTION") == "true"
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "changeme")
 
 # ---------------------------------------------------------------------------

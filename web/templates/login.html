@@ -44,7 +44,7 @@
 
   <div class="login-card">
     {% if recovery_enabled() %}
-    <p role="status" class="mb-4 text-sm" style="color:var(--text-muted)">{% if synthetic_review %}Local test data only. No production holdings or balances.{% else %}Migration review mode. Use your password to view historical records.{% endif %} Trading, changes and email sign-in are paused.</p>
+    <p role="status" class="mb-4 text-sm" style="color:var(--text-muted)">{% if synthetic_review %}Local test data only. No production holdings or balances.{% elif fresh_production %}Fresh production workspace with recovered historical market data. No account funding or holdings configured.{% else %}Migration review mode. Use your password to view historical records.{% endif %} Trading, changes and email sign-in are paused.</p>
     {% endif %}
     {% if current_email %}
     <div class="p-3 mb-4 text-xs rounded-lg border flex items-center justify-between gap-2" style="background:var(--surface-alt);border-color:var(--border);color:var(--text-muted)">

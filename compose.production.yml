@@ -1,0 +1,23 @@
+# Override only for the standalone restricted deployment; not the legacy stack.
+# docker compose --env-file .env.deploy -p astratrade -f compose.recovery.yml -f compose.production.yml ...
+services:
+  database:
+    mem_limit: 256m
+  web:
+    mem_limit: 384m
+    environment:
+      ASTRA_FRESH_PRODUCTION: "true"
+      ASTRA_SYNTHETIC_DATA: "false"
+      SESSION_HTTPS_ONLY: "true"
+      ASTRA_ALLOWED_HOSTS: "trade.astradigital.com.au,localhost,127.0.0.1"
+  gateway:
+    networks:
+      private: {}
+      ingress:
+        aliases: [astratrade-origin]
+    volumes:
+      - ./docker/production-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+networks:
+  ingress:
+    external: true
+    name: proxy_network
