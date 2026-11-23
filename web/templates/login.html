@@ -43,6 +43,9 @@
   </div>
 
   <div class="login-card">
+    {% if recovery_enabled() %}
+    <p role="status" class="mb-4 text-sm" style="color:var(--text-muted)">{% if synthetic_review %}Local test data only. No production holdings or balances.{% else %}Migration review mode. Use your password to view historical records.{% endif %} Trading, changes and email sign-in are paused.</p>
+    {% endif %}
     {% if current_email %}
     <div class="p-3 mb-4 text-xs rounded-lg border flex items-center justify-between gap-2" style="background:var(--surface-alt);border-color:var(--border);color:var(--text-muted)">
       <span>Signed in as <strong style="color:var(--text)">{{ current_email }}</strong></span>
@@ -65,7 +68,7 @@
 
     <!-- Tabs header -->
     <div class="flex border-b border-gray-200 dark:border-gray-700 gap-4 mb-6">
-      <div id="tab-otp" class="tab-btn active" onclick="switchTab('otp')">Email OTP</div>
+      <div id="tab-otp" class="tab-btn active" {% if recovery_enabled() %}style="display:none"{% endif %} onclick="switchTab('otp')">Email OTP</div>
       <div id="tab-pass" class="tab-btn" onclick="switchTab('pass')">Password</div>
     </div>
 
@@ -133,6 +136,7 @@
       emailOtp.removeAttribute('required');
     }
   }
+  {% if recovery_enabled() %}switchTab('pass');{% endif %}
 </script>
 
 </body>

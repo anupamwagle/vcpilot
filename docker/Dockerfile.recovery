@@ -1,0 +1,13 @@
+# Preserve the NAS dependency set, tagged locally from its verified image ID.
+ARG LEGACY_IMAGE=astratrade-nas-base:50155a1a25d5
+FROM ${LEGACY_IMAGE}
+WORKDIR /app
+COPY app/ ./app/
+COPY web/ ./web/
+COPY scripts/ ./scripts/
+COPY migrations/ ./migrations/
+COPY tests/ ./tests/
+COPY pytest.ini requirements.txt ./
+ENV PYTHONPATH=/app PYTHONUNBUFFERED=1
+USER 10001:10001
+CMD ["uvicorn", "web.main:app", "--host", "0.0.0.0", "--port", "8501", "--loop", "asyncio"]

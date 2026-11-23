@@ -864,6 +864,12 @@
 
   <!-- Page content -->
   <main class="flex-1" style="padding:1rem">
+    {% if recovery_enabled() %}
+    <div role="status" style="padding:1rem;margin-bottom:1rem;border:1px solid var(--warn);background:var(--surface);color:var(--text)">
+      {% if synthetic_review %}Local test data only. No production holdings or balances.{% else %}Migration review mode. Prices and balances are historical records.{% endif %}
+      Trading, background jobs and changes are paused.
+    </div>
+    {% endif %}
     {% block content %}{% endblock %}
   </main>
 

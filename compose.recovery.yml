@@ -1,0 +1,64 @@
+# Standalone migration deployment. Never combine with the legacy Compose file.
+services:
+  database:
+    image: timescale/timescaledb@sha256:51ac20ec295699c05573adf896e2449d8b3a026223a951905d5763687409d7d4
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?required}
+      POSTGRES_USER: ${POSTGRES_USER:?required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    networks: [private]
+    mem_limit: 384m
+    cpus: 0.75
+    command: ["postgres", "-c", "shared_buffers=64MB", "-c", "work_mem=2MB", "-c", "maintenance_work_mem=32MB", "-c", "max_connections=40", "-c", "autovacuum_max_workers=2", "-c", "max_parallel_workers=2", "-c", "timescaledb.max_background_workers=2"]
+    healthcheck:
+      test: ["CMD-SHELL", "psql -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\" -Atc 'SELECT 1' >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+  redis:
+    image: redis@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+    restart: unless-stopped
+    networks: [private]
+    mem_limit: 64m
+    cpus: 0.25
+    command: ["redis-server", "--port", "6389", "--maxmemory", "40mb", "--maxmemory-policy", "allkeys-lru", "--save", "", "--appendonly", "no"]
+  web:
+    image: ${ASTRA_IMAGE:?required}
+    restart: unless-stopped
+    env_file: ${ASTRA_RUNTIME_ENV:?required}
+    environment:
+      ASTRA_RECOVERY_MODE: "true"
+      REDIS_URL: redis://redis:6389/0
+    networks: [private]
+    depends_on:
+      database:
+        condition: service_healthy
+    mem_limit: 512m
+    cpus: 1.0
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/healthz', timeout=4)"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+  gateway:
+    image: nginx@sha256:fb4658584bd9a916ffb6f6e365f97c25cfdb2923801f551ea08356e695f14ff7
+    restart: unless-stopped
+    networks: [private, ingress]
+    ports: ["${ASTRA_BIND:-127.0.0.1}:${ASTRA_PORT:-8501}:80"]
+    volumes:
+      - ./docker/recovery-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    mem_limit: 32m
+    cpus: 0.25
+networks:
+  private:
+    internal: true
+  ingress: {}
+volumes:
+  postgres: {}

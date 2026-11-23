@@ -28,6 +28,20 @@ if os.getenv("APP_ENV", "development") == "production":
 
 app = FastAPI(title="AstraTrade", docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(SessionMiddleware, secret_key=_app_secret_key)
+from app.recovery import RecoveryMiddleware, recovery_enabled
+app.add_middleware(RecoveryMiddleware)
+
+
+@app.get("/healthz")
+async def healthz():
+    from app.database import engine
+    from sqlalchemy import text
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception:
+        return JSONResponse({"status": "unavailable"}, status_code=503)
+    return {"status": "ok", "recovery_mode": recovery_enabled()}
 
 
 @app.on_event("startup")
@@ -429,6 +443,8 @@ def get_cached_wl_labels(org_id: int, db: Session) -> list[dict]:
     return result
 
 templates = Jinja2Templates(directory="/app/web/templates")
+templates.env.globals["recovery_enabled"] = recovery_enabled
+templates.env.globals["synthetic_review"] = os.getenv("ASTRA_SYNTHETIC_DATA") == "true"
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "changeme")
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,13 @@
+.git
+.claude
+.env*
+env.txt
+.runtime
+.venv
+__pycache__
+**/__pycache__
+.pytest_cache
+scratch
+*.log
+*.dump
+*.tar*
