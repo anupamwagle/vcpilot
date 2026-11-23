@@ -24,6 +24,10 @@ initial production release; email/OTP, agents and live price refresh are disable
 are restricted. Only nginx joins the existing `proxy_network`; web/database/Redis
 remain internal. Resource ceilings total 736 MiB; no build runs on production.
 Read-only application filesystem, non-root app and dropped capabilities retained.
+The web connection uses `astratrade_review`, a non-superuser with SELECT plus
+audit-log INSERT/sequence privileges only. `scripts/provision_review_role.py`
+creates a separate random credential from the host before web startup. Orders,
+configuration changes and schema writes are denied by PostgreSQL as well.
 
 ## Historical market recovery
 
@@ -84,6 +88,8 @@ Before release: 15 restriction tests pass; seven authenticated page/health check
 Secure/HttpOnly cookies, hostname rejection, disabled mutations and denied network
 egress pass. Database verifies no business history, active legacy users, funding
 or active accounts; accepted data hashes match exports. Re-bootstrap refusal tested.
+All application checks were repeated with the restricted database role. Privilege
+checks confirm order INSERT/config UPDATE denied and audit INSERT allowed.
 Earlier full suite: 1,159 passed, eight inherited failures, three skipped; all eight
 reproduced on original main. No trading acceptance or dependency security audit.
 
