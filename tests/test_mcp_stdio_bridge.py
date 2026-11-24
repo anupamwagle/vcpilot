@@ -31,6 +31,7 @@ def test_bridge_does_not_retry_unknown_order_result(tmp_path, monkeypatch):
     monkeypatch.setattr(bridge, "access_token", lambda: "private-token")
     calls = []
     def fail(*args, **kwargs):
+        assert args[0].get_header("User-agent") == "AstraTrade-MCP/1.0"
         calls.append(1)
         raise TimeoutError()
     monkeypatch.setattr(bridge_module, "urlopen", fail)

@@ -34,7 +34,8 @@ class Bridge:
         body = urlencode({"grant_type": "client_credentials", "client_id": self.config["client_id"],
                           "client_secret": self.config["client_secret"]}).encode()
         req = Request(self.base + "/mcp/oauth/token", data=body,
-                      headers={"Content-Type": "application/x-www-form-urlencoded"})
+                      headers={"Content-Type": "application/x-www-form-urlencoded",
+                               "User-Agent": "AstraTrade-MCP/1.0"})
         with urlopen(req, timeout=30) as response:
             token = json.load(response)
         self.token = token["access_token"]
@@ -45,6 +46,7 @@ class Bridge:
         req = Request(self.base + "/mcp/", data=json.dumps(message).encode(), headers={
             "Authorization": "Bearer " + self.access_token(), "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-03-26",
+            "User-Agent": "AstraTrade-MCP/1.0",
         })
         with urlopen(req, timeout=90) as response:
             data = response.read()
