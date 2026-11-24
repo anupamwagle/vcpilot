@@ -200,8 +200,9 @@ def test_execute_signal_order_price_fetch_fallback(db_session, org_and_account, 
     monkeypatch.setattr("app.notifications.get_notifier", lambda organization_id=None: mock_notifier)
 
     result = execute_signal_order(signal_id=sig.id, organization_id=org.id)
-    # Should succeed using close_price as entry
-    assert result["ok"] is True
+    # Historical close is not an executable current quote.
+    assert result["ok"] is False
+    assert "current quote" in result["error"]
 
 
 # --- Sizing exception path ---

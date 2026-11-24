@@ -1,0 +1,6 @@
+# Optional read-only MCP during recovery; never starts execution workers.
+services:
+  web:
+    environment:
+      ASTRA_RECOVERY_MCP_READ_ONLY: "true"
+      IBKR_PAPER_ONLY: "true"

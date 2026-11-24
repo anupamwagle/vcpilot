@@ -333,7 +333,7 @@ def test_execute_signal_order_crypto_bypasses_filter_entirely(db_session, org_an
     mock_broker.__enter__ = lambda self: mock_broker
     mock_broker.__exit__ = MagicMock(return_value=False)
     mock_broker.submit_bracket_order.return_value = {"simulated": True, "order_id": "CCXT-1", "broker": "ccxt"}
-    monkeypatch.setattr("app.broker.crypto.get_crypto_broker_for_org", lambda org_id: mock_broker)
+    monkeypatch.setattr("app.broker.crypto.get_crypto_broker_for_org", lambda org_id, **kw: mock_broker)
     mock_notifier = MagicMock()
     monkeypatch.setattr("app.notifications.get_notifier", lambda organization_id=None: mock_notifier)
 

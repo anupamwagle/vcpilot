@@ -1,5 +1,10 @@
 # Fresh production deployment — 23 November 2026
 
+24 November update: see [IBKR/MCP acceptance](IBKR-PAPER-ACCEPTANCE.md).
+Read-only authenticated MCP is now permitted in the recovery stack. Trading,
+workers, broker access and configuration writes remain disabled. The earlier
+test-failure count below describes the original recovery release.
+
 User authorised a fresh production database after the legacy NAS corruption was
 confirmed, with best-effort stock-data recovery. This supersedes the requirement
 to restore old accounts/trades before deployment. Originals remain preserved.

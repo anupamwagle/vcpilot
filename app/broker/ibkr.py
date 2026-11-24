@@ -72,7 +72,7 @@ class IBKRBroker:
 
                     paper_val = cfg("ibkr_paper_mode")
                     if paper_val is not None:
-                        self.paper_mode = paper_val.lower() in ("true", "1", "yes")
+                        self.paper_mode = paper_val.lower() in ("true", "1", "yes", "paper")
                 finally:
                     db.close()
             except Exception as e:
@@ -83,8 +83,7 @@ class IBKRBroker:
         # the container and ALWAYS time out from other containers, so normalise
         # those to the socat ports here — regardless of whether the org set
         # ibkr_paper_mode explicitly. An explicitly non-standard port (e.g. a
-        # direct TWS on 7497) is left untouched. connect() still falls back
-        # across the socat ports if the first choice fails.
+        # direct TWS on 7497) is left untouched. Only this configured port is tried; modes are never crossed.
         if self.port in (None, 4001, 4002):
             self.port = 4004 if self.paper_mode else 4003
 
@@ -101,13 +100,20 @@ class IBKRBroker:
         """
         try:
             managed = list(self._ib.managedAccounts() or [])
-            resolve_acct = (self.account or "").strip() or (managed[0] if managed else "")
+            resolve_acct = (self.account or "").strip()
+            if not resolve_acct or resolve_acct not in managed:
+                return None
             return resolve_acct.upper().startswith(("DU", "DF")) if resolve_acct else None
         except Exception as e:
             logger.debug(f"IBKR paper/live detection failed: {e}")
             return None
 
     def connect(self) -> bool:
+        self._connected = False
+        self.detected_paper_mode = None
+        if settings.ibkr_paper_only and not self.paper_mode:
+            self.last_error = "This deployment permits IBKR paper accounts only"
+            return False
         # SAFETY: an org-scoped broker with no explicit ibkr_account of its own
         # must never silently fall back to the shared settings.ibkr_account —
         # the gateway holds ONE real login, so "falling back" means resolving
@@ -169,27 +175,11 @@ class IBKRBroker:
         except Exception as e:
             logger.debug(f"IBKRBroker connect: util.patchAsyncio() failed (usually harmless/already-patched): {e}")
 
-        # Build the list of ports to try. The gnzsnz/ib-gateway image runs the
-        # gateway bound to 127.0.0.1:4001/4002 inside the container and exposes
-        # it via socat on DIFFERENT ports — 4004 for paper, 4003 for live. A TCP
-        # probe to 4002 can succeed (socat/half-open) while the API handshake
-        # never completes, which presents as a TimeoutError with nothing logged
-        # on the gateway. So if the configured port times out, fall back to the
-        # socat ports automatically.
-        import random, os
-        socat_alts = [4004, 4003] if self.paper_mode else [4003, 4004]
-        candidate_ports = [self.port] + [p for p in socat_alts if p != self.port]
-        # Try a PROCESS-UNIQUE clientId first so we don't collide with another
-        # container already holding the configured id (e.g. the api container on
-        # clientId=1) — a collision makes the gateway silently ignore us and the
-        # handshake times out. Derive a stable-per-process id from the PID, then
-        # fall back to the configured id and a random one.
-        uniq_id = 1000 + (os.getpid() % 8000)
-        seen, candidate_ids = set(), []
-        for c in (uniq_id, self.client_id, random.randint(2000, 9999)):
-            if c not in seen:
-                seen.add(c)
-                candidate_ids.append(c)
+        # A stable client ID preserves order ownership across reconnects.
+        # A collision fails closed; never switch clients or paper/live ports.
+        import os
+        candidate_ports = [self.port]
+        candidate_ids = [self.client_id]
 
         last_exc = None
         port_errors: dict = {}   # port -> "ExcName: msg" of the most telling failure
@@ -214,6 +204,9 @@ class IBKRBroker:
                     self.client_id = cid
                     self.last_error = ""
                     self.detected_paper_mode = self._detect_paper_mode()
+                    if self.detected_paper_mode is None or self.detected_paper_mode != self.paper_mode:
+                        self._connected = False
+                        raise RuntimeError("Configured account is not managed by this gateway or paper/live mode mismatches")
 
                     logger.info(
                         f"IBKR connected: host={self.host} port={port} clientId={cid} "
@@ -221,6 +214,7 @@ class IBKRBroker:
                     )
                     return True
                 except Exception as e:
+                    self._connected = False
                     last_exc = e
                     # Prefer a Timeout over a ConnectionRefused as the port's
                     # "telling" error: refused just means nothing listens there
@@ -374,7 +368,7 @@ class IBKRBroker:
                                              # STOP-LIMIT (see docstring below).
         limit_buffer_pct: float = 1.0,      # % above the stop trigger for the limit,
                                              # only used when pivot_price is set.
-        simulate_on_disconnect: bool = True,
+        simulate_on_disconnect: bool = False,
     ) -> dict:
         """
         Submit a bracket order: entry + stop loss + profit target.
@@ -400,12 +394,12 @@ class IBKRBroker:
             # broker acknowledgement.  A live caller can opt out so a gateway
             # outage leaves its signal PENDING rather than creating a phantom
             # Position in the application's database.
-            if not simulate_on_disconnect:
+            if not (simulate_on_disconnect and settings.ibkr_simulate):
                 reason = self.last_error or "IBKR gateway is not connected"
                 logger.error(f"Bracket order blocked for {ticker}: {reason}")
                 return {
                     "status": "error",
-                    "error": f"Live order not submitted: {reason}",
+                    "error": f"Broker order not submitted: {reason}",
                     "ticker": ticker,
                 }
             return _simulate_order(ticker, action, qty, entry_price, stop_price, order_ref)
@@ -547,11 +541,11 @@ class IBKRBroker:
         qty: float,
         exchange_key: str = "ASX",
         order_ref: str = "",
-        simulate_on_disconnect: bool = True,
+        simulate_on_disconnect: bool = False,
     ) -> dict:
         """Plain market BUY for a confirmed Minervini pyramid add-on."""
         if not self.is_connected:
-            if not simulate_on_disconnect:
+            if not (simulate_on_disconnect and settings.ibkr_simulate):
                 return {"status": "error", "ticker": ticker,
                         "error": self.last_error or "IBKR gateway is not connected"}
             return _simulate_order(ticker, "BUY", qty, 0, 0, order_ref)
@@ -588,7 +582,7 @@ class IBKRBroker:
         qty: float,
         exchange_key: str = "ASX",
         order_ref: str = "",
-        simulate_on_disconnect: bool = True,
+        simulate_on_disconnect: bool = False,
     ) -> dict:
         """
         Plain market SELL — used ONLY when a position has no working stop order
@@ -604,7 +598,7 @@ class IBKRBroker:
         Returns a dict in the same shape as submit_bracket_order's result.
         """
         if not self.is_connected:
-            if not simulate_on_disconnect:
+            if not (simulate_on_disconnect and settings.ibkr_simulate):
                 return {
                     "status": "error", "ticker": ticker,
                     "error": self.last_error or "IBKR gateway is not connected",
@@ -621,7 +615,10 @@ class IBKRBroker:
 
             self._ib.reqAllOpenOrders()
             self._ib.sleep(0.5)
-            stray = [t for t in self._ib.openTrades() if t.contract.symbol == contract.symbol]
+            stray = [t for t in self._ib.openTrades()
+                     if t.contract.conId == contract.conId and t.order.account == self.account]
+            if any(t.order.clientId != self.client_id for t in stray):
+                return {"status": "error", "error": "Working orders belong to another client; reconcile before selling", "ticker": ticker}
             for t in stray:
                 try:
                     self._ib.cancelOrder(t.order)
@@ -629,6 +626,8 @@ class IBKRBroker:
                     logger.warning(f"Market sell: failed to cancel stray order for {ticker}: {ce}")
             if stray:
                 self._ib.sleep(1)
+                if any(t.orderStatus.status not in {"Cancelled", "ApiCancelled"} for t in stray):
+                    return {"status": "error", "error": "Cancellation not confirmed; reconcile quantities before selling", "ticker": ticker}
 
             order = MarketOrder("SELL", qty)
             order.orderRef = order_ref
@@ -686,8 +685,7 @@ class IBKRBroker:
         (reqGlobalCancel) to cancel everything across all client IDs at once.
         """
         if not self.is_connected:
-            logger.info(f"Simulation: cancel order {ibkr_order_id}")
-            return True, ""
+            return False, "IBKR gateway is not connected"
         try:
             # Pull ALL open orders into the ib_insync cache (same as get_open_orders)
             self._ib.reqAllOpenOrders()
@@ -695,10 +693,12 @@ class IBKRBroker:
             open_trades = self._ib.openTrades()
             for trade in open_trades:
                 if trade.order.orderId == ibkr_order_id:
+                    if trade.order.account != self.account or trade.order.clientId != self.client_id:
+                        return False, "Order does not belong to this account and client"
                     self._ib.cancelOrder(trade.order)
                     self._ib.sleep(1)   # let gateway process the cancel
-                    logger.info(f"Cancelled IBKR order {ibkr_order_id}")
-                    return True, ""
+                    cancelled = trade.orderStatus.status in {"Cancelled", "ApiCancelled"}
+                    return cancelled, "" if cancelled else "Cancellation not confirmed; reconcile before retrying"
             logger.warning(
                 f"cancel_order: orderId {ibkr_order_id} not found in {len(open_trades)} "
                 f"open trades after reqAllOpenOrders — it may belong to a different client "
@@ -714,38 +714,8 @@ class IBKRBroker:
             return False, str(e)
 
     def cancel_all_orders(self) -> tuple[bool, str]:
-        """Cancel ALL open orders on this account across all client IDs.
-
-        Uses reqGlobalCancel() — the only IBKR call that can cancel orders
-        regardless of which client session or TWS placed them. This is the
-        correct tool when you need to clear bracket children, stale pre-submitted
-        orders, or orders from disconnected sessions.
-
-        Returns (True, cancelled_count_str) on success or (False, error) on failure.
-        """
-        if not self.is_connected:
-            logger.info("Simulation: global cancel all orders")
-            return True, "simulated"
-        try:
-            # Snapshot how many orders exist before cancelling
-            self._ib.reqAllOpenOrders()
-            self._ib.sleep(0.5)
-            before = len(self._ib.openTrades())
-
-            self._ib.reqGlobalCancel()
-            self._ib.sleep(2)   # give gateway time to process all cancellations
-
-            # Re-check how many remain
-            self._ib.reqAllOpenOrders()
-            self._ib.sleep(0.5)
-            after = len(self._ib.openTrades())
-
-            cancelled = before - after
-            logger.info(f"reqGlobalCancel: {before} orders before → {after} after ({cancelled} cancelled)")
-            return True, f"Sent global cancel — {cancelled} order(s) cancelled ({after} remaining)"
-        except Exception as e:
-            logger.error(f"cancel_all_orders failed: {e}")
-            return False, str(e)
+        """Global cancellation is unsafe on a shared multi-account gateway."""
+        return False, "Global cancellation is disabled; cancel identified account/client orders individually"
 
     def modify_stop_order(self, ibkr_order_id: int, new_stop_price: float, exchange_key: str) -> tuple[bool, str]:
         """Raise an existing IBKR SELL stop without replacing its bracket.
@@ -763,6 +733,8 @@ class IBKRBroker:
                 order = trade.order
                 if order.orderId != ibkr_order_id:
                     continue
+                if order.account != self.account or order.clientId != self.client_id:
+                    return False, "Order does not belong to this account and client"
                 if order.action != "SELL" or order.orderType not in {"STP", "STP LMT"}:
                     return False, f"Order {ibkr_order_id} is not a working SELL stop"
                 current = float(getattr(order, "auxPrice", 0) or 0)
@@ -843,14 +815,17 @@ class IBKRBroker:
             out = []
             for f in fills:
                 ex, comm = f.execution, f.commissionReport
+                if self.account and ex.acctNumber != self.account:
+                    continue
                 out.append({
+                    "exec_id":    ex.execId,
                     "perm_id":    ex.permId,
                     "order_id":   ex.orderId,
                     "order_ref":  getattr(ex, "orderRef", "") or "",
                     "ticker":     f.contract.symbol,
                     "side":       ex.side,   # "BOT" (bought) or "SLD" (sold)
                     "qty":        float(ex.shares or 0),
-                    "avg_price":  float(ex.avgPrice or ex.price or 0),
+                    "avg_price":  float(ex.price or 0),
                     "commission": float(comm.commission) if comm and comm.commission else 0.0,
                     "time":       f.time,
                     "account":    getattr(ex, "acctNumber", "") or "",
@@ -879,6 +854,8 @@ class IBKRBroker:
             out = []
             for t in trades:
                 o, st = t.order, t.orderStatus
+                if self.account and o.account != self.account:
+                    continue
                 lmt = getattr(o, "lmtPrice", 0) or 0
                 aux = getattr(o, "auxPrice", 0) or 0
                 out.append({

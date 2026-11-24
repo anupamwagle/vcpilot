@@ -185,7 +185,7 @@ def test_submit_bracket_order_can_refuse_simulation_when_disconnected():
     )
 
     assert result["status"] == "error"
-    assert "Live order not submitted" in result["error"]
+    assert "Broker order not submitted" in result["error"]
 
 
 # ────────────────────────────────────────────────────────────
@@ -340,6 +340,9 @@ def test_cancel_order_connected_found():
 
     mock_trade = MagicMock()
     mock_trade.order.orderId = 99
+    mock_trade.order.account = b.account
+    mock_trade.order.clientId = b.client_id
+    mock_trade.orderStatus.status = "Cancelled"
     mock_ib.openTrades.return_value = [mock_trade]
     mock_ib.cancelOrder = MagicMock()
 
@@ -362,6 +365,8 @@ def test_modify_stop_order_raises_existing_broker_stop():
     trade = MagicMock()
     trade.contract = MagicMock()
     trade.order.orderId = 77
+    trade.order.account = b.account
+    trade.order.clientId = b.client_id
     trade.order.action = "SELL"
     trade.order.orderType = "STP"
     trade.order.auxPrice = 37.0
@@ -401,12 +406,12 @@ def test_detect_paper_mode_df_prefix_is_paper():
     assert b._detect_paper_mode() is True
 
 
-def test_detect_paper_mode_falls_back_to_first_managed_account(monkeypatch):
-    """No org-own account configured — resolve from the gateway's own list."""
+def test_detect_paper_mode_requires_explicit_account(monkeypatch):
+    """An unconfigured account must never adopt another managed account."""
     b, mock_ib = _make_connected_ibkr()
     b.account = ""
     mock_ib.managedAccounts.return_value = ["U222222"]
-    assert b._detect_paper_mode() is False
+    assert b._detect_paper_mode() is None
 
 
 def test_detect_paper_mode_none_when_no_accounts():

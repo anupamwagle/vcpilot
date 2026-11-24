@@ -25,6 +25,11 @@ class RecoveryMiddleware:
             blocked = any(path == p or path.startswith(p + "/") for p in blocked_prefixes)
             if scope["method"] not in {"GET", "HEAD", "OPTIONS"}:
                 blocked = blocked or not (scope["method"] == "POST" and path == "/login")
+            # Read-only MCP remains protected by credential/scope checks in the
+            # MCP middleware. No other recovery mutations are permitted.
+            if (os.environ.get("ASTRA_RECOVERY_MCP_READ_ONLY", "false").lower() == "true"
+                    and path in {"/mcp", "/mcp/oauth/token"}):
+                blocked = False
             if blocked:
                 response = JSONResponse(
                     {"detail": "Migration review mode: trading, changes, email and agent actions are paused."},

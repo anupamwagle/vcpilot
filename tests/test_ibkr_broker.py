@@ -60,11 +60,11 @@ def test_snapshot_valid_last_with_nan_volume(monkeypatch):
     assert snap["bid"] == 10.45
 
 
-def test_submit_simulates_only_when_disconnected():
+def test_submit_does_not_simulate_when_disconnected():
     sim = _broker(False).submit_bracket_order(
         "BHP", "BUY", 10, 40.0, 36.0, 48.0, exchange_key="ASX", order_ref="t"
     )
-    assert sim["status"] == "simulated"   # disconnected → internal simulation
+    assert sim["status"] == "error"
 
 
 def test_is_connected_false_when_not_connected():

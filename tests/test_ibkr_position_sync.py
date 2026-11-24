@@ -114,10 +114,9 @@ def test_sync_imports_closes_updates_and_skips_crypto(
     # (NOT ExitReason.MANUAL — that reads as "closed manually by you" in the UI,
     # which is misleading for an automated reconciliation close)
     db_session.refresh(orphan)
-    assert orphan.status == TradeStatus.CLOSED
+    assert orphan.status == TradeStatus.OPEN
     csl_trade = db_session.query(Trade).filter(Trade.ticker == "CSL.AX").first()
-    assert csl_trade is not None
-    assert csl_trade.exit_reason == ExitReason.BROKER_SYNC
+    assert csl_trade is None
 
     # 3. WBC qty reconciled 100 -> 150, still one OPEN row (no duplicate)
     db_session.refresh(drift)
@@ -194,7 +193,7 @@ def test_sync_skips_org_with_no_ibkr_account_configured(db_session, org_and_acco
 # I1 (CLAUDE.md #41) — paper/live derived from the gateway login itself
 # ─────────────────────────────────────────────────────────────────────────
 
-def test_paper_live_mismatch_auto_corrects_and_alerts(db_session, org_and_account, fake_broker, monkeypatch):
+def test_paper_live_mismatch_preserves_label_and_records_failure(db_session, org_and_account, fake_broker, monkeypatch):
     """Account.is_paper says PAPER (fixture default), but the gateway login is
     actually LIVE (U* account) -> auto-correct the label + alert once."""
     from unittest.mock import MagicMock
@@ -213,14 +212,14 @@ def test_paper_live_mismatch_auto_corrects_and_alerts(db_session, org_and_accoun
     db_session.expire_all()
 
     acct = db_session.query(Account).filter(Account.id == account.id).first()
-    assert acct.is_paper is False, "Must auto-correct the label to match the real gateway login"
+    assert acct.is_paper is True, "A mismatch must never relabel paper holdings as real"
 
     from app.models.audit import AuditLog
     log = db_session.query(AuditLog).filter(
-        AuditLog.organization_id == org.id, AuditLog.message.like("%paper/live MISMATCH%"),
+        AuditLog.organization_id == org.id, AuditLog.message.like("%Paper/live account mismatch%"),
     ).first()
     assert log is not None
-    mock_notifier.send.assert_called_once()
+    mock_notifier.send.assert_not_called()
 
 
 def test_paper_live_no_mismatch_no_op(db_session, org_and_account, fake_broker, monkeypatch):

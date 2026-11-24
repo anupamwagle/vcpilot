@@ -52,3 +52,14 @@ def test_disabled_recovery_preserves_dispatch(monkeypatch):
     calls, messages = invoke(monkeypatch, "POST", "/action/resume", "false")
     assert len(calls) == 1
     assert not messages
+
+
+def test_readonly_mcp_exception_does_not_enable_other_mutations(monkeypatch):
+    monkeypatch.setenv("ASTRA_RECOVERY_MCP_READ_ONLY", "true")
+    for path in ("/mcp/", "/mcp/oauth/token"):
+        calls, _ = invoke(monkeypatch, "POST", path)
+        assert len(calls) == 1
+    for path in ("/action/resume", "/positions/1/close", "/mcp/messages", "/authorize"):
+        calls, messages = invoke(monkeypatch, "POST", path)
+        assert not calls
+        assert messages[0]["status"] == 503

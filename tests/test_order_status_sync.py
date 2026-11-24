@@ -47,7 +47,8 @@ class _FakeBroker:
         return list(_FakeBroker.OPEN_ORDERS)
 
     def get_executions(self, days=2):
-        return list(_FakeBroker.EXECUTIONS)
+        return [{"exec_id": f"test-{e['order_id']}-{i}", "account": self.account, **e}
+                for i, e in enumerate(_FakeBroker.EXECUTIONS)]
 
     def cancel_order(self, ibkr_order_id):
         _FakeBroker.CANCELLED_IDS.append(ibkr_order_id)
@@ -281,6 +282,34 @@ def test_manual_exit_sell_is_closed_only_by_reconciled_fill(db_session, org_and_
     assert db_session.query(Position).filter_by(id=pos.id).one().status == TradeStatus.CLOSED
     assert db_session.query(Order).filter_by(id=sell.id).one().status == OrderStatus.FILLED
     assert db_session.query(Trade).filter_by(position_id=pos.id).count() == 1
+
+
+def test_partial_sell_keeps_remaining_position_and_deduplicates(db_session, org_and_account, fake_broker):
+    org, account = org_and_account
+    _set_ibkr_account(db_session, org)
+    signal = _make_signal(db_session, org.id, ticker="WOW.AX")
+    pos = Position(ticker="WOW.AX", exchange_key="ASX", asset_type="EQUITY", currency="AUD",
+                   account_id=account.id, organization_id=org.id, signal_id=signal.id,
+                   entry_date=date(2026, 7, 1), entry_price=37, qty=10, initial_stop=34,
+                   current_stop=34, target_1=44, status=TradeStatus.OPEN, is_paper=True)
+    db_session.add(pos)
+    db_session.commit()
+    first = {**_exec(3001, signal.id, "SLD", 4, 34), "exec_id": "sell-part-1"}
+    second = {**_exec(3001, signal.id, "SLD", 6, 33.9), "exec_id": "sell-part-2"}
+    fake_broker.EXECUTIONS = [first, first]
+    trading.sync_order_status.run(organization_id=org.id)
+    db_session.expire_all()
+    assert pos.status == TradeStatus.OPEN
+    assert float(pos.qty) == 6
+    trading.sync_order_status.run(organization_id=org.id)
+    db_session.expire_all()
+    assert float(pos.qty) == 6
+    assert db_session.query(Trade).filter_by(position_id=pos.id).count() == 1
+    fake_broker.EXECUTIONS = [first, second]
+    trading.sync_order_status.run(organization_id=org.id)
+    db_session.expire_all()
+    assert pos.status == TradeStatus.CLOSED
+    assert sum(float(t.qty) for t in db_session.query(Trade).filter_by(position_id=pos.id)) == 10
 
 
 def test_target_child_fill_closes_position_as_profit_target(db_session, org_and_account, fake_broker):

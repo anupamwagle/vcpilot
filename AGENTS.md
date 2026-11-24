@@ -1,5 +1,10 @@
 # AstraTrade — Agent Context & Developer Guide
 
+> 24 November 2026: `IBKR-PAPER-ACCEPTANCE.md` supersedes legacy statements below
+> about cross-mode port retries, automatic paper/live relabelling, disconnected
+> synthetic fills, global cancellation, orphan auto-closing and MCP SSE. Current
+> production permits read-only MCP only; broker-connected paper acceptance is pending.
+
 > Read this file first before touching any code. It captures every architectural decision, current state, and pattern used throughout the project.
 
 ---

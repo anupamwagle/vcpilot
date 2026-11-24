@@ -95,22 +95,35 @@ class MCPAuthMiddleware:
                     cred = db.query(MCPCredential).filter(
                         MCPCredential.id == credential_id,
                         MCPCredential.organization_id == org_id,
+                        MCPCredential.client_id == payload.get("sub"),
                     ).first()
-                    if not cred or not cred.is_valid:
+                    if not cred or not cred.is_valid or not cred.organization or not cred.organization.is_active:
                         response = JSONResponse(
                             {"error": "unauthorized", "detail": "Credential has been revoked or expired"},
                             status_code=401,
                         )
                         return await response(scope, receive, send)
+                    # Scope reductions take effect immediately, including for
+                    # access tokens issued before the credential was edited.
+                    payload["scopes"] = [s for s in payload["scopes"] if s in (cred.scopes or [])]
+                    from app.recovery import recovery_enabled
+                    if recovery_enabled():
+                        payload["scopes"] = [s for s in payload["scopes"] if s.endswith(":read")]
                     # Update last_used_at (best-effort)
                     try:
                         from datetime import datetime
-                        cred.last_used_at = datetime.utcnow()
-                        db.commit()
+                        if not recovery_enabled():
+                            cred.last_used_at = datetime.utcnow()
+                            db.commit()
                     except Exception as e:
                         logger.debug(f"MCPAuthMiddleware: last_used_at update failed (non-fatal): {e}")
             except Exception as e:
-                logger.warning(f"MCPAuthMiddleware DB check failed (non-fatal): {e}")
+                logger.error("MCP credential verification unavailable")
+                response = JSONResponse({"error": "temporarily_unavailable"}, status_code=503)
+                return await response(scope, receive, send)
+        else:
+            response = JSONResponse({"error": "unauthorized"}, status_code=401)
+            return await response(scope, receive, send)
 
         ctx = MCPContext(
             org_id=org_id,
@@ -140,8 +153,17 @@ def _build_mcp_server():
             "Add 'mcp[server]>=1.0' to requirements.txt and rebuild the Docker image."
         )
 
+    from mcp.server.transport_security import TransportSecuritySettings
     mcp = FastMCP(
         name="AstraTrade",
+        stateless_http=True,
+        json_response=True,
+        streamable_http_path="/",
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=["localhost", "localhost:*", "127.0.0.1", "127.0.0.1:*", "testserver", "trade.astradigital.com.au"],
+            allowed_origins=["https://trade.astradigital.com.au"],
+        ),
         instructions=(
             "AstraTrade is an automated stock trading system using the VCP / algorithmic trading methodology. Use these tools to read "
             "market signals, manage watchlists, monitor positions, and execute or close "
@@ -213,18 +235,8 @@ def create_mcp_app() -> Starlette:
     """
     mcp_server = _build_mcp_server()
 
-    # sse_app() returns an ASGI app implementing GET /sse + POST /messages
-    sse_asgi = mcp_server.sse_app()
-
-    app = Starlette(
-        middleware=[Middleware(MCPAuthMiddleware)],
-        # Route everything to the FastMCP SSE handler
-        routes=[],
-    )
-    # Wrap: apply middleware then delegate to FastMCP
-    from starlette.routing import Mount
-    app = Starlette(
-        middleware=[Middleware(MCPAuthMiddleware)],
-        routes=[Mount("/", app=sse_asgi)],
-    )
+    # Stateless HTTP binds each tool call to that request's verified identity.
+    # Legacy SSE sessions carried the original GET identity into later POSTs.
+    app = mcp_server.streamable_http_app()
+    app.add_middleware(MCPAuthMiddleware)
     return app

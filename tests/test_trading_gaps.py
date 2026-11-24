@@ -165,7 +165,7 @@ def test_check_exit_rules_task_defers_equity_stop_to_broker_sync(db_session, org
 
     from app.broker.ibkr import IBKRBroker
     monkeypatch.setattr(IBKRBroker, "connect", lambda self: False)
-    monkeypatch.setattr(IBKRBroker, "submit_bracket_order",
+    monkeypatch.setattr(IBKRBroker, "submit_market_sell",
                         lambda self, **kw: {"status": "simulated", "order_id": "SIM-EXIT"})
 
     check_exit_rules_task.run("ASX")
@@ -232,7 +232,7 @@ def test_check_exit_rules_task_failed_breakout_creates_trade(db_session, org_and
 
     from app.broker.ibkr import IBKRBroker
     monkeypatch.setattr(IBKRBroker, "connect", lambda self: False)
-    monkeypatch.setattr(IBKRBroker, "submit_bracket_order",
+    monkeypatch.setattr(IBKRBroker, "submit_market_sell",
                         lambda self, **kw: {"status": "simulated", "order_id": "SIM-EXIT"})
 
     check_exit_rules_task.run("ASX")

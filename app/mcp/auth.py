@@ -45,11 +45,15 @@ def clear_mcp_context():
 _JWT_SECRET    = os.getenv("APP_SECRET_KEY", "changeme-secret")
 _JWT_ALGORITHM = "HS256"
 _TOKEN_TTL_HOURS = 1
+_JWT_ISSUER = "astratrade"
+_JWT_AUDIENCE = "astratrade-mcp"
 
 
 def create_access_token(org_id: int, scopes: List[str], credential_id: int, client_id: str) -> str:
     """Issue a signed JWT carrying org + scope claims."""
     import jwt as _jwt
+    if _JWT_SECRET in {"", "changeme", "changeme-secret"}:
+        raise RuntimeError("Configure a private APP_SECRET_KEY before enabling MCP")
     payload = {
         "sub":           client_id,
         "org_id":        org_id,
@@ -58,6 +62,8 @@ def create_access_token(org_id: int, scopes: List[str], credential_id: int, clie
         "iat":           datetime.utcnow(),
         "exp":           datetime.utcnow() + timedelta(hours=_TOKEN_TTL_HOURS),
         "type":          "mcp_access",
+        "iss":           _JWT_ISSUER,
+        "aud":           _JWT_AUDIENCE,
     }
     return _jwt.encode(payload, _JWT_SECRET, algorithm=_JWT_ALGORITHM)
 
@@ -68,9 +74,21 @@ def decode_access_token(token: str) -> Optional[dict]:
     (expired, tampered, wrong algorithm, etc.).
     """
     import jwt as _jwt
+    if _JWT_SECRET in {"", "changeme", "changeme-secret"}:
+        return None
     try:
-        payload = _jwt.decode(token, _JWT_SECRET, algorithms=[_JWT_ALGORITHM])
+        payload = _jwt.decode(
+            token, _JWT_SECRET, algorithms=[_JWT_ALGORITHM],
+            issuer=_JWT_ISSUER, audience=_JWT_AUDIENCE,
+            options={"require": ["exp", "iat", "sub", "org_id", "credential_id", "scopes", "iss", "aud"]},
+        )
         if payload.get("type") != "mcp_access":
+            return None
+        if (type(payload["org_id"]) is not int or payload["org_id"] <= 0
+                or type(payload["credential_id"]) is not int or payload["credential_id"] <= 0
+                or not isinstance(payload["sub"], str) or not payload["sub"]
+                or not isinstance(payload["scopes"], list)
+                or not all(isinstance(s, str) for s in payload["scopes"])):
             return None
         return payload
     except Exception:

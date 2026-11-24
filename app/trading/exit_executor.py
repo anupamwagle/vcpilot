@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from app.database import get_db
+from app.config import settings
 from app.models.audit import AuditAction, AuditLog
 from app.models.trade import ExitReason, Order, OrderAction, OrderStatus, OrderType, Position, Trade, TradeStatus
 
@@ -21,19 +22,19 @@ def request_position_exit(
     try:
         reason = exit_reason if isinstance(exit_reason, ExitReason) else ExitReason(str(exit_reason).replace("ExitReason.", ""))
     except ValueError:
-        return {"ok": False, "error": f"Unknown exit reason: {exit_reason}"}
+        return {"ok": False, "error": f"Invalid exit_reason: {exit_reason}"}
 
     with get_db() as db:
         pos = db.query(Position).filter(
             Position.id == position_id, Position.organization_id == organization_id,
             Position.status == TradeStatus.OPEN,
-        ).first()
+        ).with_for_update().first()
         if not pos:
             return {"ok": False, "error": "Open position not found"}
         working_sells = db.query(Order).filter(
             Order.organization_id == organization_id, Order.ticker == pos.ticker,
             Order.action == OrderAction.SELL,
-            Order.status.in_([OrderStatus.SUBMITTED, OrderStatus.PARTIAL]),
+            Order.status.in_([OrderStatus.PENDING, OrderStatus.SUBMITTED, OrderStatus.PARTIAL]),
         ).all()
         protective_orders = [o for o in working_sells if (o.raw_ibkr_response or {}).get("protective_stop")]
         already = next((o for o in working_sells if o not in protective_orders), None)
@@ -42,7 +43,8 @@ def request_position_exit(
 
         # Simulated fills are immediately final by definition.  All real fills
         # follow the submit-and-reconcile branch below.
-        if pos.is_paper:
+        if pos.is_paper and (settings.ibkr_simulate or pos.asset_type == "CRYPTO"):
+            from app.utils.time_helper import get_current_date
             fill_price = float(requested_price or pos.current_price or pos.entry_price)
             qty = float(pos.qty)
             entry = float(pos.entry_price)
@@ -52,8 +54,8 @@ def request_position_exit(
                 ticker=pos.ticker, exchange_key=pos.exchange_key, asset_type=pos.asset_type,
                 currency=pos.currency, account_id=pos.account_id, organization_id=organization_id,
                 signal_id=pos.signal_id, position_id=pos.id, entry_date=pos.entry_date,
-                exit_date=datetime.utcnow().date(),
-                hold_days=(datetime.utcnow().date() - pos.entry_date).days if pos.entry_date else 0,
+                exit_date=get_current_date(),
+                hold_days=(get_current_date() - pos.entry_date).days if pos.entry_date else 0,
                 entry_price=pos.entry_price, exit_price=fill_price, qty=qty,
                 gross_pnl_aud=round(pnl_local, 2), commission_aud=0,
                 net_pnl_aud=round(pnl_local, 2), pnl_pct=round((fill_price-entry)/entry, 6) if entry else 0,
@@ -69,7 +71,19 @@ def request_position_exit(
 
         ticker, exchange_key, asset_type, qty = pos.ticker, pos.exchange_key, pos.asset_type, float(pos.qty)
         account_id, signal_id, currency = pos.account_id, pos.signal_id, pos.currency
+        is_paper = pos.is_paper
         protective_ids = [o.id for o in protective_orders]
+        intent = Order(
+            ticker=ticker, exchange_key=exchange_key, asset_type=asset_type, currency=currency,
+            account_id=account_id, organization_id=organization_id, signal_id=signal_id,
+            action=OrderAction.SELL, order_type=OrderType.MARKET, status=OrderStatus.PENDING,
+            qty_ordered=qty, qty_filled=0, is_paper=is_paper,
+            raw_ibkr_response={"position_id": position_id, "exit_reason": reason.value,
+                               "order_ref": f"exit-{position_id}-{reason.value}", "state": "intent_persisted"},
+        )
+        db.add(intent)
+        db.flush()
+        intent_id = intent.id
 
     is_crypto = asset_type == "CRYPTO" or (exchange_key or "").startswith("CRYPTO")
     if is_crypto:
@@ -106,7 +120,8 @@ def request_position_exit(
             if protective and protective.status in (OrderStatus.SUBMITTED, OrderStatus.PARTIAL):
                 protective.status = OrderStatus.CANCELLED
                 protective.cancelled_at = datetime.utcnow()
-        db.add(Order(
+        db.merge(Order(
+            id=intent_id,
             ticker=ticker, exchange_key=exchange_key, asset_type=asset_type, currency=currency,
             account_id=account_id, organization_id=organization_id, signal_id=signal_id,
             action=OrderAction.SELL, order_type=OrderType.MARKET, status=OrderStatus.SUBMITTED,
@@ -114,7 +129,7 @@ def request_position_exit(
             ibkr_order_id=None if is_crypto else result.get("ibkr_order_id"),
             perm_id=None if is_crypto else result.get("ibkr_perm_id"),
             external_order_id=result.get("entry_order_id") if is_crypto else None,
-            raw_ibkr_response=raw, is_paper=False, submitted_at=datetime.utcnow(),
+            raw_ibkr_response=raw, is_paper=is_paper, submitted_at=datetime.utcnow(),
         ))
         db.add(AuditLog(
             action=AuditAction.ORDER_SUBMITTED, actor=actor, organization_id=organization_id, ticker=ticker,

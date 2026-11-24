@@ -404,6 +404,7 @@ def test_ibkr_get_open_orders_connected():
     b, mock_ib = _make_connected_ibkr()
     trade = MagicMock()
     trade.order.orderId = 1
+    trade.order.account = b.account
     trade.contract.symbol = "BHP"
     trade.order.action = "BUY"
     trade.order.totalQuantity = 100
@@ -418,16 +419,19 @@ def test_ibkr_cancel_order_found():
     b, mock_ib = _make_connected_ibkr()
     trade = MagicMock()
     trade.order.orderId = 42
+    trade.order.account = b.account
+    trade.order.clientId = b.client_id
+    trade.orderStatus.status = "Cancelled"
     mock_ib.openTrades.return_value = [trade]
     result = b.cancel_order(42)
-    assert result is True
+    assert result == (True, "")
 
 
 def test_ibkr_cancel_order_not_found():
     b, mock_ib = _make_connected_ibkr()
     mock_ib.openTrades.return_value = []
     result = b.cancel_order(99)
-    assert result is False
+    assert result[0] is False
 
 
 def test_ibkr_disconnect_when_connected():

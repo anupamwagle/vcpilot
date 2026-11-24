@@ -23,6 +23,7 @@ Returns the same {"ok": ..., ...} shape regardless of caller.
 from __future__ import annotations
 
 from datetime import datetime
+import math
 from typing import Optional
 
 from loguru import logger
@@ -59,6 +60,19 @@ def execute_signal_order(
         or {"ok": False, "error": "..."} on any failure.
     """
     from app.models.audit import AuditLog, AuditAction
+    from app.tasks.trading import _is_kill_switch_on, _get_org_config_value, _todays_pnl_aud
+    if _is_kill_switch_on(organization_id):
+        return {"ok": False, "error": "Trading kill switch is enabled"}
+    daily_limit = _get_org_config_value(organization_id, "max_daily_loss_aud")
+    if daily_limit:
+        try:
+            limit = float(daily_limit)
+            if not math.isfinite(limit) or limit < 0:
+                raise ValueError()
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "Daily loss limit is invalid; execution blocked"}
+        if limit > 0 and _todays_pnl_aud(organization_id) <= -limit:
+            return {"ok": False, "error": "Daily loss limit reached"}
 
     def _audit(db, action, message: str, ticker: str = None):
         db.add(AuditLog(
@@ -100,18 +114,20 @@ def execute_signal_order(
             from app.data.fetcher import get_intraday_price
             price_result = get_intraday_price(ticker, organization_id, asset_type=asset_type)
             if price_result.get("ok") and price_result.get("price"):
+                if price_result.get("delayed") or float(price_result.get("delay_mins") or 0) > 0:
+                    return {"ok": False, "error": "Delayed quote cannot be used for automated entry"}
                 entry_price = float(price_result["price"])
                 data_source = price_result.get("data_source", "live")
             else:
-                with get_db() as db2:
-                    from app.models.signal import Signal as _S
-                    _sig = db2.query(_S).get(signal_id)
-                    entry_price = float(_sig.close_price) if _sig and _sig.close_price else pivot_price
-                    data_source = "eod_fallback"
+                return {"ok": False, "error": "No current quote available; order not submitted"}
         except Exception as pe:
-            logger.warning(f"execute_signal_order: price fetch failed — {pe}. Using pivot.")
-            entry_price = pivot_price
-            data_source = "pivot_fallback"
+            logger.warning(f"execute_signal_order: price fetch failed — {pe}")
+            return {"ok": False, "error": "Price retrieval failed; order not submitted"}
+
+    if not all(math.isfinite(p) and p > 0 for p in (entry_price, pivot_price, stop_price)):
+        return {"ok": False, "error": "Entry, pivot and stop must be finite positive prices"}
+    if stop_price >= entry_price or (target_1 is not None and (not math.isfinite(target_1) or target_1 <= entry_price)):
+        return {"ok": False, "error": "BUY bracket requires stop below entry and target above entry"}
 
     # Reject if price is more than 10% above pivot (over-extended)
     extension_pct = (entry_price - pivot_price) / pivot_price * 100
@@ -136,7 +152,14 @@ def execute_signal_order(
             ).first()
             acct_id = acct.id if acct else None
             account_is_paper = acct.is_paper if acct else True
-            capital = float(acct.capital_aud) if acct and acct.capital_aud else 5000.0
+            if not org or not org.is_active or not acct:
+                return {"ok": False, "error": "An active organisation and configured trading account are required"}
+            capital = float(acct.capital_aud or 0)
+            if not math.isfinite(capital) or capital <= 0:
+                return {"ok": False, "error": "Trading capital must be explicitly configured and positive"}
+            paused = db3.query(_SC).filter(_SC.key == "trading_paused", _SC.organization_id == organization_id).first()
+            if paused and str(paused.value).lower() in {"true", "1", "yes"}:
+                return {"ok": False, "error": "Trading is paused"}
             base_currency_cfg = db3.query(_SC).filter(
                 _SC.key == "working_capital_currency", _SC.organization_id == organization_id
             ).first()
@@ -179,7 +202,30 @@ def execute_signal_order(
     if not qty or qty <= 0:
         return {"ok": False, "error": "Position size calculated as zero — check capital and risk settings"}
 
-    order_ref = f"AGENT-{signal_id}-{int(datetime.utcnow().timestamp())}"
+    order_ref = f"astratrade-{signal_id}"
+
+    # Persist the intent BEFORE crossing the broker boundary. A lost reply or
+    # failed result commit must never make a retry submit a second order.
+    from app.models.signal import Signal, SignalStatus
+    from app.models.trade import Order, OrderAction, OrderType, OrderStatus
+    with get_db() as intent_db:
+        claimed = intent_db.query(Signal).filter(
+            Signal.id == signal_id, Signal.organization_id == organization_id,
+            Signal.status == SignalStatus.PENDING,
+        ).update({Signal.status: SignalStatus.TRIGGERED}, synchronize_session=False)
+        if claimed != 1:
+            return {"ok": False, "error": "Signal already claimed; reconcile the existing order before retrying"}
+        intent = Order(
+            ticker=ticker, exchange_key=exchange_key, asset_type=asset_type,
+            currency=currency, account_id=acct_id, organization_id=organization_id,
+            signal_id=signal_id, action=OrderAction.BUY, order_type=OrderType.BRACKET,
+            status=OrderStatus.PENDING, qty_ordered=qty, qty_filled=0,
+            limit_price=entry_price, stop_price=stop_price, is_paper=account_is_paper,
+            raw_ibkr_response={"order_ref": order_ref, "state": "intent_persisted"},
+        )
+        intent_db.add(intent)
+        intent_db.commit()
+        intent_id = intent.id
 
     # ── 4. Submit bracket order ──────────────────────────────────────────────
     is_crypto = asset_type == "CRYPTO" or (exchange_key and exchange_key.startswith("CRYPTO"))
@@ -260,21 +306,17 @@ def execute_signal_order(
                 sig.status = _SS.TRIGGERED
 
             is_simulated = result.get("status") == "simulated" or result.get("simulated") is True
-            db4.add(Order(
-                ticker=ticker, exchange_key=exchange_key, asset_type=asset_type,
-                currency=currency, account_id=acct_id, organization_id=organization_id,
-                signal_id=signal_id, action=OrderAction.BUY, order_type=OrderType.BRACKET,
-                status=OrderStatus.FILLED if is_simulated else OrderStatus.SUBMITTED,
-                qty_ordered=qty, qty_filled=qty if is_simulated else 0,
-                limit_price=result.get("limit_price", entry_price), stop_price=stop_price,
-                avg_fill_price=entry_price if is_simulated else None,
-                is_paper=account_is_paper,
-                ibkr_order_id=None if is_crypto else result.get("ibkr_parent_id"),
-                perm_id=None if is_crypto else result.get("ibkr_parent_perm_id"),
-                external_order_id=result.get("entry_order_id") if is_crypto else None,
-                raw_ibkr_response=result, submitted_at=datetime.utcnow(),
-                filled_at=datetime.utcnow() if is_simulated else None,
-            ))
+            order = db4.query(Order).filter(Order.id == intent_id, Order.organization_id == organization_id).one()
+            order.status = OrderStatus.FILLED if is_simulated else OrderStatus.SUBMITTED
+            order.qty_filled = qty if is_simulated else 0
+            order.limit_price = result.get("limit_price", entry_price)
+            order.avg_fill_price = entry_price if is_simulated else None
+            order.ibkr_order_id = None if is_crypto else result.get("ibkr_parent_id")
+            order.perm_id = None if is_crypto else result.get("ibkr_parent_perm_id")
+            order.external_order_id = result.get("entry_order_id") if is_crypto else None
+            order.raw_ibkr_response = {**result, "order_ref": order_ref}
+            order.submitted_at = datetime.utcnow()
+            order.filled_at = datetime.utcnow() if is_simulated else None
 
             # IBKR's acknowledgement is not a fill. Leave the signal in its
             # triggered state and let sync_order_status create the position from

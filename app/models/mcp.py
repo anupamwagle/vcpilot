@@ -7,6 +7,7 @@ Credentials expire after 12 months by default; super admin can revoke at any tim
 """
 import uuid
 import hashlib
+import hmac
 import os
 from datetime import datetime, timedelta
 from sqlalchemy import (
@@ -76,7 +77,7 @@ def verify_secret(secret: str, hashed: str) -> bool:
         salt = bytes.fromhex(salt_hex)
         stored_h = bytes.fromhex(hash_hex)
         check_h = hashlib.pbkdf2_hmac("sha256", secret.encode("utf-8"), salt, 100_000)
-        return check_h == stored_h
+        return hmac.compare_digest(check_h, stored_h)
     except Exception:
         return False
 

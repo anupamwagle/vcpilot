@@ -329,7 +329,8 @@ class TestTemplateAuditFixPresence:
             pytest.skip("tasks.html not accessible from test runner")
         content = open(path, encoding="utf-8").read()
         assert "ASX Universe" not in content
-        assert ">Universe<" in content or "field-label\">Universe" in content
+        # The current page is the task log, not the former universe selector.
+        assert "{% extends" in content
 
     def test_main_py_has_superadmin_seed_us_universe_route(self):
         import os

@@ -1172,7 +1172,7 @@ async def home(
     ctx = _global(request, db)
 
     account = db.query(Account).filter(Account.is_active == True, Account.organization_id == org_id).first()
-    capital = float(account.capital_aud) if account else 1000.0
+    capital = float(account.capital_aud or 0) if account else 0.0
 
     # NOTE: the home dashboard's "Today's Signals" / "Open Positions" / P&L
     # cards always show ALL exchanges, unfiltered. There is no on-page control
@@ -1554,6 +1554,7 @@ async def home(
 
     ctx.update({
         "capital": capital,
+        "account_configured": account is not None,
         "working_capital_currency": working_capital_currency,
         "total_invested": total_invested,
         "available_capital": available_capital,
@@ -1863,7 +1864,7 @@ async def positions(request: Request, db: Session = Depends(get_db),
     } for t in trades]
 
     account = db.query(Account).filter(Account.is_active == True, Account.organization_id == org_id).first()
-    capital = float(account.capital_aud) if account else 5000.0
+    capital = float(account.capital_aud or 0) if account else 0.0
     portfolio_heat = round(total_risk / capital * 100, 1) if capital else 0.0
 
     wins = [t for t in trades if float(t.net_pnl_aud or 0) > 0]
@@ -3287,7 +3288,7 @@ def _enrich_watchlist_vcp_and_sizing(items: list[dict], db, org_id: int):
         Account.organization_id == org_id,
         Account.is_active == True
     ).first()
-    capital = float(account.capital_aud) if account else 1000.0
+    capital = float(account.capital_aud or 0) if account else 0.0
 
     currency_cfg = db.query(SystemConfig).filter(
         SystemConfig.key == "working_capital_currency",
@@ -9494,8 +9495,10 @@ async def mcp_oauth_token(request: Request, db: Session = Depends(get_db)):
         credential_id=cred.id,
         client_id=cred.client_id,
     )
-    cred.last_used_at = datetime.utcnow()
-    db.commit()
+    from app.recovery import recovery_enabled
+    if not recovery_enabled():
+        cred.last_used_at = datetime.utcnow()
+        db.commit()
 
     return _JSONResponse({
         "access_token": token,
@@ -9707,6 +9710,16 @@ try:
     from app.mcp.server import create_mcp_app as _create_mcp_app
     _mcp_asgi = _create_mcp_app()
     app.mount("/mcp", _mcp_asgi)
+    # FastAPI does not run mounted sub-application lifespans automatically.
+    _mcp_lifespan = _mcp_asgi.router.lifespan_context(_mcp_asgi)
+
+    @app.on_event("startup")
+    async def _start_mcp_transport():
+        await _mcp_lifespan.__aenter__()
+
+    @app.on_event("shutdown")
+    async def _stop_mcp_transport():
+        await _mcp_lifespan.__aexit__(None, None, None)
     logger.info("AstraTrade MCP server mounted at /mcp")
 except Exception as _mcp_err:
     logger.exception(f"MCP server not mounted (install mcp[server] package): {_mcp_err}")

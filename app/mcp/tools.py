@@ -1074,4 +1074,6 @@ def get_config(keys: Optional[list] = None) -> dict:
             q = q.filter(SystemConfig.key.in_(keys))
 
         configs = q.all()
-        return {"config": {c.key: c.value for c in configs}}
+        sensitive = ("password", "secret", "token", "api_key", "ibkr_account", "username")
+        return {"config": {c.key: c.value for c in configs
+                           if not any(part in c.key.lower() for part in sensitive)}}

@@ -397,7 +397,7 @@ def test_action_recategorise_labels_reads_organization_id_from_session():
     # celery.chain, invoking each task's .si(); assert org_id flows through .si().
     with patch("app.tasks.screening.recategorise_watchlist_labels", mock_recat), \
          patch("app.tasks.screening.refresh_asx_sector_data", mock_refresh):
-        _run(m.action_recategorise_labels(request=req, force="0"))
+        _run(m.action_recategorise_labels(request=req, force="0", market="ALL"))
 
     assert captured.get("organization_id") == 77, (
         f"action_recategorise_labels must pass org_id=77 via chain .si(); got {captured!r}"

@@ -98,20 +98,21 @@ def test_ibkr_context_manager():
 
 # --- Simulation-mode methods (not connected) ---
 
-def test_submit_bracket_order_simulation():
+def test_submit_bracket_order_simulation(monkeypatch):
+    monkeypatch.setattr("app.config.settings.ibkr_simulate", True)
     from app.broker.ibkr import IBKRBroker
     b = IBKRBroker()
-    result = b.submit_bracket_order("BHP.AX", "BUY", 100, 25.50, 23.00, 28.00)
+    result = b.submit_bracket_order("BHP.AX", "BUY", 100, 25.50, 23.00, 28.00, simulate_on_disconnect=True)
     assert result["status"] == "simulated"
     assert result["ticker"] == "BHP.AX"
 
 
-def test_cancel_order_simulation_returns_true():
+def test_cancel_order_disconnected_returns_failure():
     from app.broker.ibkr import IBKRBroker
     b = IBKRBroker()
     ok, reason = b.cancel_order(12345)
-    assert ok is True
-    assert reason == ""
+    assert ok is False
+    assert "not connected" in reason
 
 
 def test_get_open_positions_not_connected():

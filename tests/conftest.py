@@ -22,6 +22,17 @@ import app.database as database_module
 from app.database import Base
 
 
+@pytest.fixture(autouse=True)
+def isolated_task_lock(monkeypatch, request):
+    """Task unit tests run without Redis and do not overlap workers.
+
+    Boundary tests explicitly exercise backend failure using the real lock.
+    Previously these tests accidentally depended on production failing open.
+    """
+    if request.node.path.name != "test_paper_execution_boundary.py":
+        monkeypatch.setattr("app.tasks.trading._acquire_org_lock", lambda *a, **kw: True)
+
+
 @pytest.fixture()
 def test_engine():
     engine = create_engine(

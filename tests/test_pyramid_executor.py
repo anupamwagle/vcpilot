@@ -27,7 +27,8 @@ def test_pyramid_requires_explicit_account_opt_in(db_session, org_and_account):
     assert "disabled" in result["error"].lower()
 
 
-def test_paper_pyramid_updates_qty_only_after_simulated_fill(db_session, org_and_account):
+def test_paper_pyramid_updates_qty_only_after_simulated_fill(db_session, org_and_account, monkeypatch):
+    monkeypatch.setattr("app.config.settings.ibkr_simulate", True)
     from app.trading.pyramid_executor import request_pyramid_add_on
     from app.models.trade import Order, OrderAction, OrderStatus, Position
     org, account = org_and_account

@@ -38,7 +38,8 @@ def test_live_manual_exit_submits_order_and_keeps_position_open(db_session, org_
     assert sell.raw_ibkr_response["position_id"] == pos.id
 
 
-def test_paper_manual_exit_is_immediately_recorded(db_session, org_and_account):
+def test_explicit_simulation_exit_is_immediately_recorded(db_session, org_and_account, monkeypatch):
+    monkeypatch.setattr("app.config.settings.ibkr_simulate", True)
     from app.trading.exit_executor import request_position_exit
     from app.models.trade import Position, Trade, TradeStatus
 

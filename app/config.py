@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     ibkr_host: str = "ibkr"
     ibkr_port: int = 4002
     ibkr_client_id: int = 1
+    # Deployment boundary: tenant configuration cannot enable live execution.
+    ibkr_paper_only: bool = True
     ibkr_account_env: str = Field(default="", validation_alias="ibkr_account")
     ibkr_username_env: str = Field(default="", validation_alias="ibkr_username")
     ibkr_password_env: str = Field(default="", validation_alias="ibkr_password")

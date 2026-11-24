@@ -106,7 +106,7 @@
       <div>
         <p class="field-label mb-0.5" style="font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;">Working Capital</p>
         <p class="text-base font-bold" style="color:var(--text)">
-          {{ "{:,.0f}".format(capital) if capital == capital|int else "{:,.4f}".format(capital) }} 
+          {% if account_configured %}{{ "{:,.0f}".format(capital) if capital == capital|int else "{:,.4f}".format(capital) }}{% else %}Not configured{% endif %}
           <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 500;">{{ working_capital_currency }}</span>
         </p>
       </div>
